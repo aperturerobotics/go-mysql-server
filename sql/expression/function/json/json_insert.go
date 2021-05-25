@@ -77,7 +77,7 @@ func (j JSONInsert) IsNullable(ctx *sql.Context) bool {
 	return j.doc.IsNullable(ctx)
 }
 
-func (j JSONInsert) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j JSONInsert) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	doc, err := getMutableJSONVal(ctx, row, j.doc)
 	if err != nil || doc == nil {
 		return nil, getJsonFunctionError("json_insert", 1, err)

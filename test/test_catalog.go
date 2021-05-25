@@ -117,7 +117,7 @@ func (c *Catalog) DatabaseTable(ctx *sql.Context, db sql.Database, tableName str
 	return tbl, db, nil
 }
 
-func (c *Catalog) TableAsOf(ctx *sql.Context, dbName, tableName string, asOf interface{}) (sql.Table, sql.Database, error) {
+func (c *Catalog) TableAsOf(ctx *sql.Context, dbName, tableName string, asOf any) (sql.Table, sql.Database, error) {
 	db, err := c.Database(ctx, dbName)
 	if err != nil {
 		return nil, nil, err
@@ -126,7 +126,7 @@ func (c *Catalog) TableAsOf(ctx *sql.Context, dbName, tableName string, asOf int
 	return c.DatabaseTableAsOf(ctx, db, tableName, asOf)
 }
 
-func (c *Catalog) DatabaseTableAsOf(ctx *sql.Context, db sql.Database, tableName string, asOf interface{}) (sql.Table, sql.Database, error) {
+func (c *Catalog) DatabaseTableAsOf(ctx *sql.Context, db sql.Database, tableName string, asOf any) (sql.Table, sql.Database, error) {
 	if _, ok := db.(sql.UnresolvedDatabase); ok {
 		return c.TableAsOf(ctx, db.Name(), tableName, tableName)
 	}

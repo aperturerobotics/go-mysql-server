@@ -183,10 +183,10 @@ type VersionedDatabase interface {
 	// GetTableInsensitiveAsOf retrieves a table by its case-insensitive name with the same semantics as
 	// Database.GetTableInsensitive, but at a particular revision of the database. Implementors must choose which types
 	// of expressions to accept as revision names.
-	GetTableInsensitiveAsOf(ctx *Context, tblName string, asOf interface{}) (Table, bool, error)
+	GetTableInsensitiveAsOf(ctx *Context, tblName string, asOf any) (Table, bool, error)
 	// GetTableNamesAsOf returns the table names of every table in the database as of the revision given. Implementors
 	// must choose which types of expressions to accept as revision names.
-	GetTableNamesAsOf(ctx *Context, asOf interface{}) ([]string, error)
+	GetTableNamesAsOf(ctx *Context, asOf any) ([]string, error)
 }
 
 // CollatedDatabase is a Database that can store and update its collation.
@@ -272,7 +272,7 @@ type EventDatabase interface {
 	// NeedsToReloadEvents so that integrators can examine it and signal if events need to be reloaded. If
 	// integrators do not need to implement out-of-band event reloading, then they can simply return nil for
 	// the token. All time values of EventDefinition needs to be converted into appropriate TZ.
-	GetEvents(ctx *Context) (events []EventDefinition, token interface{}, err error)
+	GetEvents(ctx *Context) (events []EventDefinition, token any, err error)
 	// SaveEvent stores the given EventDefinition to the database. The integrator should verify that
 	// the name of the new event is unique amongst existing events. The time values are converted
 	// into UTC TZ for storage. It returns whether the event status is enabled.
@@ -294,7 +294,7 @@ type EventDatabase interface {
 	// returned from the last call to GetEvents and integrators are free to use whatever underlying data they
 	// need to track whether an out-of-band event change has occurred. If integrators to do not support events
 	// changing out-of-band, then they can simply return false from this method.
-	NeedsToReloadEvents(ctx *Context, token interface{}) (bool, error)
+	NeedsToReloadEvents(ctx *Context, token any) (bool, error)
 }
 
 // QuiescableEventDatabase is an optional extension of EventDatabase that indicates events in this database

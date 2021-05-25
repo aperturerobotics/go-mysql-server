@@ -105,7 +105,7 @@ func TestRace(t *testing.T) {
 
 	ls := NewLockSubsystem()
 	wg := &sync.WaitGroup{}
-	for i := 0; i < numGoRoutines; i++ {
+	for range numGoRoutines {
 		wg.Add(1)
 		go func(ctx *Context) {
 			defer wg.Done()

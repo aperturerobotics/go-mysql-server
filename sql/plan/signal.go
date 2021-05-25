@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 
@@ -237,9 +238,7 @@ func (s Signal) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.
 	}
 
 	mapCopy := make(map[SignalConditionItemName]SignalInfo)
-	for k, v := range s.Info {
-		mapCopy[k] = v
-	}
+	maps.Copy(mapCopy, s.Info)
 
 	for i := range exprs {
 		// transfer the expression to the new info map

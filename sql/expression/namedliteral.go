@@ -29,7 +29,7 @@ var _ sql.ValueExpression = NamedLiteral{}
 var _ sql.CollationCoercible = NamedLiteral{}
 
 // NewNamedLiteral returns a new NamedLiteral.
-func NewNamedLiteral(name string, value interface{}, fieldType sql.Type) NamedLiteral {
+func NewNamedLiteral(name string, value any, fieldType sql.Type) NamedLiteral {
 	return NamedLiteral{
 		Literal: NewLiteral(value, fieldType),
 		Name:    name,

@@ -52,7 +52,7 @@ type HashLookup struct {
 	LeftProbeKey  sql.Expression
 	CompareType   sql.Type
 	Mutex         *sync.Mutex
-	Lookup        *map[interface{}][]sql.Row
+	Lookup        *map[any][]sql.Row
 	leftKeySch    sql.Schema
 	JoinType      JoinType
 }

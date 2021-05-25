@@ -74,7 +74,7 @@ func (p *MultiPolygon) WithChildren(ctx *sql.Context, children ...sql.Expression
 }
 
 // Eval implements the sql.Expression interface.
-func (p *MultiPolygon) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *MultiPolygon) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	var polys = make([]types.Polygon, len(p.ChildExpressions))
 	for i, arg := range p.ChildExpressions {
 		val, err := arg.Eval(ctx, row)

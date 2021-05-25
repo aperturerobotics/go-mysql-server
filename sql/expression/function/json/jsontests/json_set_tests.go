@@ -157,7 +157,7 @@ func JsonSetTestCases(t *testing.T, prepare prepareJsonValue) []testCase {
 		{
 			name:     "accumulates L->R",
 			f:        f2,
-			row:      sql.Row{jsonInput, "$.z", map[string]interface{}{"zz": 1.1}, "$.z.zz", 42.1},
+			row:      sql.Row{jsonInput, "$.z", map[string]any{"zz": 1.1}, "$.z.zz", 42.1},
 			expected: `{"a": 1, "b": [2, 3], "c": {"d": "foo"},"z":{"zz":42.1}}`,
 		},
 

@@ -23,9 +23,9 @@ import (
 )
 
 var (
-	boolType = reflect.TypeOf(bool(false))
-	intType  = reflect.TypeOf(int(0))
-	uintType = reflect.TypeOf(uint(0))
+	boolType = reflect.TypeFor[bool]()
+	intType  = reflect.TypeFor[int]()
+	uintType = reflect.TypeFor[uint]()
 )
 
 // ExternalProcedure is the sql.Node container for sql.ExternalStoredProcedureDetails.
@@ -155,9 +155,9 @@ func (n *ExternalProcedure) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter,
 	return sql.RowsToRowIter(), nil
 }
 
-func (n *ExternalProcedure) ProcessParam(ctx *sql.Context, funcParamType reflect.Type, exprParamVal interface{}) (reflect.Value, error) {
+func (n *ExternalProcedure) ProcessParam(ctx *sql.Context, funcParamType reflect.Type, exprParamVal any) (reflect.Value, error) {
 	funcParamCompType := funcParamType
-	if funcParamType.Kind() == reflect.Ptr {
+	if funcParamType.Kind() == reflect.Pointer {
 		funcParamCompType = funcParamType.Elem()
 	}
 	// Convert to bool, int, and uint as they differ from their sql.Type value
@@ -184,7 +184,7 @@ func (n *ExternalProcedure) ProcessParam(ctx *sql.Context, funcParamType reflect
 		}
 	}
 
-	if funcParamType.Kind() == reflect.Ptr { // Coincides with INOUT
+	if funcParamType.Kind() == reflect.Pointer { // Coincides with INOUT
 		funcParamVal := reflect.New(funcParamType.Elem())
 		if exprParamVal != nil {
 			funcParamVal.Elem().Set(reflect.ValueOf(exprParamVal))

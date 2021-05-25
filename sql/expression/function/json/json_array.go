@@ -98,12 +98,12 @@ func (j *JSONArray) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements the Expression interface.
-func (j *JSONArray) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j *JSONArray) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if len(j.vals) == 0 {
-		return types.JSONDocument{Val: make([]interface{}, 0)}, nil
+		return types.JSONDocument{Val: make([]any, 0)}, nil
 	}
 
-	var resultArray = make([]interface{}, len(j.vals))
+	var resultArray = make([]any, len(j.vals))
 
 	for i, vs := range j.vals {
 		val, err := vs.Eval(ctx, row)

@@ -28,7 +28,7 @@ import (
 
 var conditions = []struct {
 	evaluated bool
-	value     interface{}
+	value     any
 	t         sql.Type
 }{
 	{true, int16(1), types.Int16},

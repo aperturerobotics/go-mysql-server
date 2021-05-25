@@ -59,13 +59,13 @@ func (*IsTrue) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements the Expression interface.
-func (e *IsTrue) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (e *IsTrue) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	v, err := e.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
 	}
 
-	var boolVal interface{}
+	var boolVal any
 	if v == nil {
 		return false, nil
 	}

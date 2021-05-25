@@ -81,7 +81,7 @@ func (s *STX) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Ex
 }
 
 // Eval implements the sql.Expression interface.
-func (s *STX) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *STX) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate point
 	p, err := s.ChildExpressions[0].Eval(ctx, row)
 	if err != nil {
@@ -183,7 +183,7 @@ func (s *STY) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Ex
 }
 
 // Eval implements the sql.Expression interface.
-func (s *STY) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *STY) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate point
 	p, err := s.ChildExpressions[0].Eval(ctx, row)
 	if err != nil {
@@ -289,7 +289,7 @@ func (l *Longitude) WithChildren(ctx *sql.Context, children ...sql.Expression) (
 }
 
 // Eval implements the sql.Expression interface.
-func (l *Longitude) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (l *Longitude) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate point
 	p, err := l.ChildExpressions[0].Eval(ctx, row)
 	if err != nil {
@@ -402,7 +402,7 @@ func (l *Latitude) WithChildren(ctx *sql.Context, children ...sql.Expression) (s
 }
 
 // Eval implements the sql.Expression interface.
-func (l *Latitude) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (l *Latitude) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate point
 	p, err := l.ChildExpressions[0].Eval(ctx, row)
 	if err != nil {

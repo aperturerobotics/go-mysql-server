@@ -9,7 +9,7 @@ import (
 )
 
 // ConvertToValue converts the interface to a sql value.
-func ConvertToValue(v interface{}) (Value, error) {
+func ConvertToValue(v any) (Value, error) {
 	switch v := v.(type) {
 	case nil:
 		return Value{

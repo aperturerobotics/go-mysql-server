@@ -49,7 +49,7 @@ func (c *ddlNode) Children() []sql.Node { return nil }
 
 // TableSpec is a node describing the schema of a table.
 type TableSpec struct {
-	TableOpts map[string]interface{}
+	TableOpts map[string]any
 	Comment   string
 	Schema    sql.PrimaryKeySchema
 	FkDefs    sql.ForeignKeyConstraints
@@ -63,7 +63,7 @@ type CreateTable struct {
 	like sql.Node
 	ddlNode
 	selectNode   sql.Node
-	TableOpts    map[string]interface{}
+	TableOpts    map[string]any
 	name         string
 	pkSch        sql.PrimaryKeySchema
 	fkDefs       sql.ForeignKeyConstraints

@@ -232,7 +232,7 @@ func IsStringType(t Type) bool {
 // The type of the returned value is time.Time.
 type DatetimeType interface {
 	Type
-	ConvertWithoutRangeCheck(ctx context.Context, v interface{}) (time.Time, error)
+	ConvertWithoutRangeCheck(ctx context.Context, v any) (time.Time, error)
 	MaximumTime() time.Time
 	MinimumTime() time.Time
 	Precision() int
@@ -296,9 +296,9 @@ type DecimalType interface {
 	// ConvertToNullDecimal converts the given value to a decimal.NullDecimal if it has a compatible type. It is worth
 	// noting that Convert() returns a nil value for nil inputs, and also returns decimal.Decimal rather than
 	// decimal.NullDecimal.
-	ConvertToNullDecimal(v interface{}) (decimal.NullDecimal, error)
+	ConvertToNullDecimal(v any) (decimal.NullDecimal, error)
 	// ConvertNoBoundsCheck normalizes an interface{} to a decimal type without performing expensive bound checks
-	ConvertNoBoundsCheck(v interface{}) (decimal.Decimal, error)
+	ConvertNoBoundsCheck(v any) (decimal.Decimal, error)
 	// BoundsCheck rounds and validates a decimal, returning the decimal,
 	// whether the value was out of range, and an error.
 	BoundsCheck(v decimal.Decimal) (decimal.Decimal, ConvertInRange, error)
@@ -327,7 +327,7 @@ type SpatialColumnType interface {
 	// SetSRID sets SRID value for spatial types.
 	SetSRID(uint32) Type
 	// MatchSRID returns nil if column type SRID matches given value SRID otherwise returns error.
-	MatchSRID(interface{}) error
+	MatchSRID(any) error
 }
 
 // SystemVariableType represents a SQL type specifically (and only) used in system variables. Assigning any non-system
@@ -335,10 +335,10 @@ type SpatialColumnType interface {
 type SystemVariableType interface {
 	Type
 	// EncodeValue returns the given value as a string for storage.
-	EncodeValue(interface{}) (string, error)
+	EncodeValue(any) (string, error)
 	// DecodeValue returns the original value given to EncodeValue from the given string. This is different from `Convert`,
 	// as the encoded value may technically be an "illegal" value according to the type rules.
-	DecodeValue(string) (interface{}, error)
+	DecodeValue(string) (any, error)
 	// UnderlyingType returns the underlying type that this system variable type is based on.
 	UnderlyingType() Type
 }

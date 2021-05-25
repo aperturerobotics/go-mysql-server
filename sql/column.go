@@ -81,7 +81,7 @@ type Column struct {
 }
 
 // Check ensures the value is correct for this column.
-func (c *Column) Check(ctx *Context, v interface{}) bool {
+func (c *Column) Check(ctx *Context, v any) bool {
 	if v == nil {
 		return c.Nullable
 	}

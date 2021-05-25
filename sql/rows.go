@@ -21,10 +21,10 @@ import (
 )
 
 // Row is a tuple of values.
-type Row []interface{}
+type Row []any
 
 // NewRow creates a row from the given values.
-func NewRow(values ...interface{}) Row {
+func NewRow(values ...any) Row {
 	row := make(Row, len(values))
 	copy(row, values)
 	return row
@@ -150,7 +150,7 @@ func (i *sliceRowIter) Next(ctx *Context) (Row, error) {
 // unwrapRowIterAsReturnedResult unwraps the row if there is any RowIter in the given Row
 // creating multiple Rows from a single Row.
 func unwrapRowIterAsReturnedResult(ctx *Context, r Row) ([]any, bool, bool, error) {
-	vals := make([]interface{}, len(r))
+	vals := make([]any, len(r))
 	var hasActiveRowIter = false
 	var hasRowIter = false
 	for i, v := range r {

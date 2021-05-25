@@ -71,7 +71,7 @@ func (c *DefaultColumn) String() string {
 
 // Eval implements the sql.Expression interface.
 // The function always panics!
-func (*DefaultColumn) Eval(ctx *sql.Context, r sql.Row) (interface{}, error) {
+func (*DefaultColumn) Eval(ctx *sql.Context, r sql.Row) (any, error) {
 	panic("default column is a placeholder node, but Eval was called")
 }
 

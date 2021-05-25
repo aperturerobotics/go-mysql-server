@@ -78,7 +78,7 @@ func NewRowFrame(vals ...Value) (f *RowFrame) {
 
 var framePool = sync.Pool{New: makeRowFrame}
 
-func makeRowFrame() interface{} {
+func makeRowFrame() any {
 	return &RowFrame{}
 }
 

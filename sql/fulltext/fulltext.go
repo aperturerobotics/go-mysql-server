@@ -118,7 +118,7 @@ func HashRow(ctx context.Context, row sql.Row) (string, error) {
 }
 
 // writeHashedValue writes the given value into the hash.
-func writeHashedValue(ctx context.Context, h hash.Hash, val interface{}) (valIsNull bool, err error) {
+func writeHashedValue(ctx context.Context, h hash.Hash, val any) (valIsNull bool, err error) {
 	val, err = sql.UnwrapAny(ctx, val)
 	if err != nil {
 		return false, err

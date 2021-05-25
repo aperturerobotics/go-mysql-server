@@ -71,7 +71,7 @@ func (g *GeomColl) WithChildren(ctx *sql.Context, children ...sql.Expression) (s
 }
 
 // Eval implements the sql.Expression interface.
-func (g *GeomColl) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (g *GeomColl) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	var geoms = make([]types.GeometryValue, len(g.ChildExpressions))
 	for i, arg := range g.ChildExpressions {
 		val, err := arg.Eval(ctx, row)

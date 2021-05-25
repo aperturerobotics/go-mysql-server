@@ -36,7 +36,7 @@ func NewTreePrinter() *TreePrinter {
 }
 
 // WriteNode writes the main node.
-func (p *TreePrinter) WriteNode(format string, args ...interface{}) error {
+func (p *TreePrinter) WriteNode(format string, args ...any) error {
 	if p.nodeWritten {
 		return ErrNodeAlreadyWritten
 	}

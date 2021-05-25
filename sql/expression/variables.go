@@ -44,7 +44,7 @@ func NewSystemVar(name string, scope sql.SystemVariableScope, specifiedScope str
 func (v *SystemVar) Children() []sql.Expression { return nil }
 
 // Eval implements the sql.Expression interface.
-func (v *SystemVar) Eval(ctx *sql.Context, _ sql.Row) (interface{}, error) {
+func (v *SystemVar) Eval(ctx *sql.Context, _ sql.Row) (any, error) {
 	val, err := v.Scope.GetValue(ctx, v.Name, v.Collation)
 	return val, err
 }
@@ -118,7 +118,7 @@ func NewUserVarWithType(name string, t sql.Type) *UserVar {
 func (v *UserVar) Children() []sql.Expression { return nil }
 
 // Eval implements the sql.Expression interface.
-func (v *UserVar) Eval(ctx *sql.Context, _ sql.Row) (interface{}, error) {
+func (v *UserVar) Eval(ctx *sql.Context, _ sql.Row) (any, error) {
 	_, val, err := ctx.GetUserVariable(ctx, v.Name)
 	if err != nil {
 		return nil, err

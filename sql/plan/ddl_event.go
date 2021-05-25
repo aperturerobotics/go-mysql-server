@@ -516,7 +516,7 @@ func (ost *OnScheduleTimestamp) String() string {
 	return fmt.Sprintf("%s %s%s", ost.field, ost.timestamp.String(), intervals)
 }
 
-func (ost *OnScheduleTimestamp) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (ost *OnScheduleTimestamp) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	panic("OnScheduleTimestamp.Eval is just a placeholder method and should not be called directly")
 }
 

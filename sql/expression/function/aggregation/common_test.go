@@ -22,7 +22,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 )
 
-func eval(t *testing.T, e sql.Expression, row sql.Row) interface{} {
+func eval(t *testing.T, e sql.Expression, row sql.Row) any {
 	t.Helper()
 
 	ctx := sql.NewEmptyContext()
@@ -31,7 +31,7 @@ func eval(t *testing.T, e sql.Expression, row sql.Row) interface{} {
 	return v
 }
 
-func evalBuffer(t *testing.T, buf sql.AggregationBuffer) interface{} {
+func evalBuffer(t *testing.T, buf sql.AggregationBuffer) any {
 	t.Helper()
 
 	ctx := sql.NewEmptyContext()
@@ -40,7 +40,7 @@ func evalBuffer(t *testing.T, buf sql.AggregationBuffer) interface{} {
 	return v
 }
 
-func aggregate(t *testing.T, agg sql.Aggregation, rows ...sql.Row) interface{} {
+func aggregate(t *testing.T, agg sql.Aggregation, rows ...sql.Row) any {
 	t.Helper()
 
 	ctx := sql.NewEmptyContext()

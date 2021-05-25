@@ -106,10 +106,10 @@ func MPolyToSlice(p types.MultiPolygon) [][][][2]float64 {
 	return arr
 }
 
-func GeomCollToSlice(g types.GeomColl) interface{} {
-	arr := make([]interface{}, len(g.Geoms))
+func GeomCollToSlice(g types.GeomColl) any {
+	arr := make([]any, len(g.Geoms))
 	for i, geom := range g.Geoms {
-		obj := make(map[string]interface{})
+		obj := make(map[string]any)
 		switch v := geom.(type) {
 		case types.Point:
 			obj["type"] = "Point"
@@ -139,7 +139,7 @@ func GeomCollToSlice(g types.GeomColl) interface{} {
 	return arr
 }
 
-func FindBBox(v interface{}) [4]float64 {
+func FindBBox(v any) [4]float64 {
 	var res [4]float64
 	switch v := v.(type) {
 	case types.Point:
@@ -203,7 +203,7 @@ func FindBBox(v interface{}) [4]float64 {
 	return res
 }
 
-func RoundFloatSlices(v interface{}, p float64) interface{} {
+func RoundFloatSlices(v any, p float64) any {
 	switch v := v.(type) {
 	case [2]float64:
 		return [2]float64{math.Round(v[0]*p) / p, math.Round(v[1]*p) / p}
@@ -231,7 +231,7 @@ func RoundFloatSlices(v interface{}, p float64) interface{} {
 
 // getIntArg is a helper method that evaluates the given sql.Expression to an int type, errors on float32 and float64,
 // and returns nil
-func getIntArg(ctx *sql.Context, row sql.Row, expr sql.Expression) (interface{}, error) {
+func getIntArg(ctx *sql.Context, row sql.Row, expr sql.Expression) (any, error) {
 	x, err := expr.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -251,7 +251,7 @@ func getIntArg(ctx *sql.Context, row sql.Row, expr sql.Expression) (interface{},
 }
 
 // Eval implements the sql.Expression interface.
-func (g *AsGeoJSON) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (g *AsGeoJSON) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// convert spatial type to map, then place inside sql.JSONDocument
 	val, err := g.ChildExpressions[0].Eval(ctx, row)
 	if err != nil {
@@ -267,7 +267,7 @@ func (g *AsGeoJSON) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, sql.ErrInvalidArgumentType.New(g.FunctionName())
 	}
 
-	obj := make(map[string]interface{})
+	obj := make(map[string]any)
 	switch v := val.(type) {
 	case types.Point:
 		obj["type"] = "Point"
@@ -362,11 +362,11 @@ func (g *AsGeoJSON) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		srid := val.(types.GeometryValue).GetSRID()
 		if srid != 0 {
 			// Create CRS URN Object
-			crs := make(map[string]interface{})
+			crs := make(map[string]any)
 			crs["type"] = "name"
 
 			// Create properties
-			props := make(map[string]interface{})
+			props := make(map[string]any)
 			// Flag 2 is short format CRS URN, while 4 is long format
 			sridStr := strconv.Itoa(int(srid))
 			if flag == 2 {
@@ -434,8 +434,8 @@ func (g *GeomFromGeoJSON) WithChildren(ctx *sql.Context, children ...sql.Express
 	return NewGeomFromGeoJSON(ctx, children...)
 }
 
-func SliceToPoint(coords interface{}) (interface{}, error) {
-	c, ok := coords.([]interface{})
+func SliceToPoint(coords any) (any, error) {
+	c, ok := coords.([]any)
 	if !ok {
 		return nil, errors.New("member 'coordinates' must be of type 'array'")
 	}
@@ -453,8 +453,8 @@ func SliceToPoint(coords interface{}) (interface{}, error) {
 	return types.Point{SRID: types.GeoSpatialSRID, X: x, Y: y}, nil
 }
 
-func SliceToLine(coords interface{}) (interface{}, error) {
-	cs, ok := coords.([]interface{})
+func SliceToLine(coords any) (any, error) {
+	cs, ok := coords.([]any)
 	if !ok {
 		return nil, errors.New("member 'coordinates' must be of type 'array'")
 	}
@@ -472,9 +472,9 @@ func SliceToLine(coords interface{}) (interface{}, error) {
 	return types.LineString{SRID: types.GeoSpatialSRID, Points: points}, nil
 }
 
-func SliceToPoly(coords interface{}) (interface{}, error) {
+func SliceToPoly(coords any) (any, error) {
 	// coords must be a slice of slices of at least 2 slices of 2 float64
-	cs, ok := coords.([]interface{})
+	cs, ok := coords.([]any)
 	if !ok {
 		return nil, errors.New("member 'coordinates' must be of type 'array'")
 	}
@@ -495,8 +495,8 @@ func SliceToPoly(coords interface{}) (interface{}, error) {
 	return types.Polygon{SRID: types.GeoSpatialSRID, Lines: lines}, nil
 }
 
-func SliceToMPoint(coords interface{}) (interface{}, error) {
-	cs, ok := coords.([]interface{})
+func SliceToMPoint(coords any) (any, error) {
+	cs, ok := coords.([]any)
 	if !ok {
 		return nil, errors.New("member 'coordinates' must be of type 'array'")
 	}
@@ -514,9 +514,9 @@ func SliceToMPoint(coords interface{}) (interface{}, error) {
 	return types.MultiPoint{SRID: types.GeoSpatialSRID, Points: points}, nil
 }
 
-func SliceToMLine(coords interface{}) (interface{}, error) {
+func SliceToMLine(coords any) (any, error) {
 	// coords must be a slice of slices of at least 2 slices of 2 float64
-	cs, ok := coords.([]interface{})
+	cs, ok := coords.([]any)
 	if !ok {
 		return nil, errors.New("member 'coordinates' must be of type 'array'")
 	}
@@ -534,9 +534,9 @@ func SliceToMLine(coords interface{}) (interface{}, error) {
 	return types.MultiLineString{SRID: types.GeoSpatialSRID, Lines: lines}, nil
 }
 
-func SliceToMPoly(coords interface{}) (interface{}, error) {
+func SliceToMPoly(coords any) (any, error) {
 	// coords must be a slice of slices of slices at least 4 slices of 2 float64
-	cs, ok := coords.([]interface{})
+	cs, ok := coords.([]any)
 	if !ok {
 		return nil, errors.New("member 'coordinates' must be of type 'array'")
 	}
@@ -554,16 +554,16 @@ func SliceToMPoly(coords interface{}) (interface{}, error) {
 	return types.MultiPolygon{SRID: types.GeoSpatialSRID, Polygons: polys}, nil
 }
 
-func SliceToGeomColl(geometries interface{}) (interface{}, error) {
+func SliceToGeomColl(geometries any) (any, error) {
 	// geomObjs should be a slice of geojsons
-	geomObjs, ok := geometries.([]interface{})
+	geomObjs, ok := geometries.([]any)
 	if !ok {
 		return nil, errors.New("member 'geometries' must be of type 'array'")
 	}
 
 	geoms := make([]types.GeometryValue, len(geomObjs))
 	for i, o := range geomObjs {
-		obj, ok := o.(map[string]interface{})
+		obj, ok := o.(map[string]any)
 		if !ok {
 			return nil, errors.New("member 'geometries' must be of type 'object'")
 		}
@@ -576,7 +576,7 @@ func SliceToGeomColl(geometries interface{}) (interface{}, error) {
 	return types.GeomColl{SRID: types.GeoSpatialSRID, Geoms: geoms}, nil
 }
 
-func ParseGeoJsonData(obj map[string]interface{}) (interface{}, string, error) {
+func ParseGeoJsonData(obj map[string]any) (any, string, error) {
 	geomType, ok := obj["type"]
 	if !ok {
 		return nil, "", errors.New("missing required member 'type'")
@@ -587,7 +587,7 @@ func ParseGeoJsonData(obj map[string]interface{}) (interface{}, string, error) {
 		return nil, "", errors.New("member 'type' must be of type 'string'")
 	}
 
-	var res interface{}
+	var res any
 	var err error
 	switch gt {
 	case "Point":
@@ -637,7 +637,7 @@ func ParseGeoJsonData(obj map[string]interface{}) (interface{}, string, error) {
 		if !ok {
 			return nil, "", errors.New("missing required member 'geometry'")
 		}
-		geomObj, ok := geom.(map[string]interface{})
+		geomObj, ok := geom.(map[string]any)
 		if !ok {
 			return nil, "", errors.New("member 'geometry' must be of type 'object'")
 		}
@@ -646,7 +646,7 @@ func ParseGeoJsonData(obj map[string]interface{}) (interface{}, string, error) {
 		if !ok {
 			return nil, "", errors.New("missing required member 'properties'")
 		}
-		_, ok = props.(map[string]interface{})
+		_, ok = props.(map[string]any)
 		if !ok {
 			return nil, "", errors.New("member 'properties' must be of type 'object'")
 		}
@@ -664,7 +664,7 @@ func ParseGeoJsonData(obj map[string]interface{}) (interface{}, string, error) {
 }
 
 // Eval implements the sql.Expression interface.
-func (g *GeomFromGeoJSON) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (g *GeomFromGeoJSON) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := g.ChildExpressions[0].Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -689,7 +689,7 @@ func (g *GeomFromGeoJSON) Eval(ctx *sql.Context, row sql.Row) (interface{}, erro
 		val = s
 	}
 
-	var obj map[string]interface{}
+	var obj map[string]any
 	err = json.Unmarshal(val.([]byte), &obj)
 	if err != nil {
 		return nil, err
@@ -720,28 +720,28 @@ func (g *GeomFromGeoJSON) Eval(ctx *sql.Context, row sql.Row) (interface{}, erro
 	if flag == 1 {
 		switch geomType {
 		case "Point":
-			if len(obj["coordinates"].([]interface{})) > 2 {
+			if len(obj["coordinates"].([]any)) > 2 {
 				return nil, errors.New("unsupported number of coordinate dimensions")
 			}
 		case "LineString", "MultiPoint":
-			for _, a := range obj["coordinates"].([]interface{}) {
-				if len(a.([]interface{})) > 2 {
+			for _, a := range obj["coordinates"].([]any) {
+				if len(a.([]any)) > 2 {
 					return nil, errors.New("unsupported number of coordinate dimensions")
 				}
 			}
 		case "Polygon", "MultiLineString":
-			for _, a := range obj["coordinates"].([]interface{}) {
-				for _, b := range a.([]interface{}) {
-					if len(b.([]interface{})) > 2 {
+			for _, a := range obj["coordinates"].([]any) {
+				for _, b := range a.([]any) {
+					if len(b.([]any)) > 2 {
 						return nil, errors.New("unsupported number of coordinate dimensions")
 					}
 				}
 			}
 		case "MultiPolygon":
-			for _, a := range obj["coordinates"].([]interface{}) {
-				for _, b := range a.([]interface{}) {
-					for _, c := range b.([]interface{}) {
-						if len(c.([]interface{})) > 2 {
+			for _, a := range obj["coordinates"].([]any) {
+				for _, b := range a.([]any) {
+					for _, c := range b.([]any) {
+						if len(c.([]any)) > 2 {
 							return nil, errors.New("unsupported number of coordinate dimensions")
 						}
 					}

@@ -82,9 +82,9 @@ func (j *JSONOverlaps) IsNullable(ctx *sql.Context) bool {
 // jsonEquals compares two JSON values.
 // It returns true if the two values are exactly equal (type and order are important).
 // It will recursively unwrap arrays and objects to compare their contents.
-func jsonEquals(left, right interface{}) bool {
-	lArr, lIsArr := left.([]interface{})
-	rArr, rIsArr := right.([]interface{})
+func jsonEquals(left, right any) bool {
+	lArr, lIsArr := left.([]any)
+	rArr, rIsArr := right.([]any)
 	if lIsArr && rIsArr {
 		if len(lArr) != len(rArr) {
 			return false
@@ -97,8 +97,8 @@ func jsonEquals(left, right interface{}) bool {
 		return true
 	}
 
-	lMap, lIsMap := left.(map[string]interface{})
-	rMap, rIsMap := right.(map[string]interface{})
+	lMap, lIsMap := left.(map[string]any)
+	rMap, rIsMap := right.(map[string]any)
 	if lIsMap && rIsMap {
 		if len(lMap) != len(rMap) {
 			return false
@@ -121,13 +121,13 @@ func jsonEquals(left, right interface{}) bool {
 	return left == right
 }
 
-func overlaps(left, right interface{}) bool {
+func overlaps(left, right any) bool {
 	switch lVal := left.(type) {
 	case nil, bool, string, float64:
 		switch rVal := right.(type) {
-		case nil, bool, string, float64, map[string]interface{}:
+		case nil, bool, string, float64, map[string]any:
 			return jsonEquals(left, right)
-		case []interface{}:
+		case []any:
 			// scalar must be in array
 			for _, r := range rVal {
 				if jsonEquals(left, r) {
@@ -135,11 +135,11 @@ func overlaps(left, right interface{}) bool {
 				}
 			}
 		}
-	case map[string]interface{}:
+	case map[string]any:
 		switch rVal := right.(type) {
 		case nil, bool, string, float64:
 			return overlaps(right, left)
-		case map[string]interface{}:
+		case map[string]any:
 			// objects must have at least one key-value pair in common
 			for k := range lVal {
 				if _, ok := rVal[k]; !ok {
@@ -149,7 +149,7 @@ func overlaps(left, right interface{}) bool {
 					return true
 				}
 			}
-		case []interface{}:
+		case []any:
 			// object must be in array
 			for _, r := range rVal {
 				if jsonEquals(lVal, r) {
@@ -157,13 +157,13 @@ func overlaps(left, right interface{}) bool {
 				}
 			}
 		}
-	case []interface{}:
+	case []any:
 		switch rVal := right.(type) {
 		case nil, bool, string, float64:
 			return overlaps(right, left)
-		case map[string]interface{}:
+		case map[string]any:
 			return overlaps(right, left)
-		case []interface{}:
+		case []any:
 			// arrays must have at least one element in common
 			// TODO: use maps for improved runtime?
 			for _, l := range lVal {
@@ -179,7 +179,7 @@ func overlaps(left, right interface{}) bool {
 }
 
 // Eval implements sql.Expression
-func (j *JSONOverlaps) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j *JSONOverlaps) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	span, ctx := ctx.Span(fmt.Sprintf("function.%s", j.FunctionName()))
 	defer span.End()
 

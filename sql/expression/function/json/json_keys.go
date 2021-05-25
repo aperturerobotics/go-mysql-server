@@ -85,7 +85,7 @@ func (j *JSONKeys) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements sql.Expression
-func (j *JSONKeys) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j *JSONKeys) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	span, ctx := ctx.Span(fmt.Sprintf("function.%s", j.FunctionName()))
 	defer span.End()
 

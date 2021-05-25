@@ -64,7 +64,7 @@ func (AliasReference) CollationCoercibility(ctx *sql.Context) (collation sql.Col
 	return sql.Collation_binary, 7
 }
 
-func (a AliasReference) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (a AliasReference) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return nil, fmt.Errorf("tried to call eval on an unresolved AliasReference")
 }
 
@@ -127,7 +127,7 @@ func (e *Alias) CollationCoercibility(ctx *sql.Context) (collation sql.Collation
 }
 
 // Eval implements the Expression interface.
-func (e *Alias) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (e *Alias) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return e.Child.Eval(ctx, row)
 }
 

@@ -81,7 +81,7 @@ func (*JsonValue) CollationCoercibility(ctx *sql.Context) (collation sql.Collati
 }
 
 // Eval implements the sql.Expression interface.
-func (j *JsonValue) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j *JsonValue) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	span, ctx := ctx.Span("function.JsonValue")
 	defer span.End()
 
@@ -110,7 +110,7 @@ func (j *JsonValue) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	var res interface{}
+	var res any
 	res, err = types.LookupJSONValue(ctx, searchable, path.(string))
 	if err != nil || res == nil {
 		return nil, err
@@ -120,7 +120,7 @@ func (j *JsonValue) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	// bad lookups on arrays, instead of an error. Note that this will cause lookups that expect [] to return incorrect
 	// results.
 	// See https://github.com/dolthub/dolt/issues/7905 for more information.
-	cmp, err = types.CompareJSON(ctx, res, types.JSONDocument{Val: []interface{}{}})
+	cmp, err = types.CompareJSON(ctx, res, types.JSONDocument{Val: []any{}})
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +172,7 @@ func (j *JsonValue) String() string {
 // and unwraps the JSON, or coerces the string into JSON. The return value can return any type that can be stored in
 // a JSON column, not just maps. For a complete list, see
 // https://dev.mysql.com/doc/refman/8.3/en/json-attribute-functions.html#function_json-type
-func GetJSONFromWrapperOrCoercibleString(ctx *sql.Context, js interface{}, functionName string, argumentPosition int) (jsonData interface{}, err error) {
+func GetJSONFromWrapperOrCoercibleString(ctx *sql.Context, js any, functionName string, argumentPosition int) (jsonData any, err error) {
 	// The first parameter can be either JSON or a string.
 	switch jsType := js.(type) {
 	case string:

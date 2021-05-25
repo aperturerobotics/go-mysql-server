@@ -62,7 +62,7 @@ func UserAddTablesRow(ctx *sql.Context, row sql.Row, user *User) (*User, error) 
 	user = UserCopy(user)
 
 	var privs []sql.PrivilegeType
-	for _, val := range strings.Split(tablePrivStrs, ",") {
+	for val := range strings.SplitSeq(tablePrivStrs, ",") {
 		switch val {
 		case "Select":
 			privs = append(privs, sql.PrivilegeType_Select)

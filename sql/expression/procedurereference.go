@@ -37,7 +37,7 @@ type procedureScope struct {
 }
 
 type procedureVariableReferenceValue struct {
-	Value      interface{}
+	Value      any
 	SqlType    sql.Type
 	Name       string
 	HasBeenSet bool
@@ -63,7 +63,7 @@ type ProcedureReferencable interface {
 }
 
 // InitializeVariable sets the initial value for the variable.
-func (ppr *ProcedureReference) InitializeVariable(ctx *sql.Context, name string, sqlType sql.Type, val interface{}) error {
+func (ppr *ProcedureReference) InitializeVariable(ctx *sql.Context, name string, sqlType sql.Type, val any) error {
 	if ppr == nil || ppr.InnermostScope == nil {
 		return fmt.Errorf("cannot initialize variable `%s` in an empty procedure reference", name)
 	}
@@ -113,7 +113,7 @@ func (ppr *ProcedureReference) InitializeHandler(stmt sql.Node, action DeclareHa
 }
 
 // GetVariableValue returns the value of the given parameter.
-func (ppr *ProcedureReference) GetVariableValue(name string) (interface{}, error) {
+func (ppr *ProcedureReference) GetVariableValue(name string) (any, error) {
 	if ppr == nil {
 		return nil, fmt.Errorf("cannot find value for parameter `%s`", name)
 	}
@@ -145,7 +145,7 @@ func (ppr *ProcedureReference) GetVariableType(name string) sql.Type {
 }
 
 // SetVariable updates the value of the given parameter.
-func (ppr *ProcedureReference) SetVariable(ctx *sql.Context, name string, val interface{}, valType sql.Type) error {
+func (ppr *ProcedureReference) SetVariable(ctx *sql.Context, name string, val any, valType sql.Type) error {
 	if ppr == nil {
 		return fmt.Errorf("cannot find value for parameter `%s`", name)
 	}
@@ -356,7 +356,7 @@ func (pp *ProcedureParam) String() string {
 }
 
 // Eval implements the sql.Expression interface.
-func (pp *ProcedureParam) Eval(ctx *sql.Context, r sql.Row) (interface{}, error) {
+func (pp *ProcedureParam) Eval(ctx *sql.Context, r sql.Row) (any, error) {
 	return pp.pRef.GetVariableValue(pp.name)
 }
 
@@ -376,7 +376,7 @@ func (pp *ProcedureParam) WithParamReference(pRef *ProcedureReference) *Procedur
 }
 
 // Set sets the value of this procedure parameter to the given value.
-func (pp *ProcedureParam) Set(ctx *sql.Context, val interface{}, valType sql.Type) error {
+func (pp *ProcedureParam) Set(ctx *sql.Context, val any, valType sql.Type) error {
 	return pp.pRef.SetVariable(ctx, pp.name, val, valType)
 }
 
@@ -429,7 +429,7 @@ func (upp *UnresolvedProcedureParam) String() string {
 }
 
 // Eval implements the sql.Expression interface.
-func (upp *UnresolvedProcedureParam) Eval(ctx *sql.Context, r sql.Row) (interface{}, error) {
+func (upp *UnresolvedProcedureParam) Eval(ctx *sql.Context, r sql.Row) (any, error) {
 	return nil, fmt.Errorf("attempted to use unresolved procedure param '%s'", upp.name)
 }
 

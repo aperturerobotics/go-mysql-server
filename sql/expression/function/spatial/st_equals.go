@@ -73,7 +73,7 @@ func isEqual(g1 types.GeometryValue, g2 types.GeometryValue) bool {
 }
 
 // Eval implements the sql.Expression interface.
-func (s *STEquals) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *STEquals) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	geom1, err := s.LeftChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err

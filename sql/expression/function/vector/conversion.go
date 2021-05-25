@@ -62,7 +62,7 @@ func (s *StringToVector) WithChildren(ctx *sql.Context, children ...sql.Expressi
 	return NewStringToVector(ctx, children[0]), nil
 }
 
-func (s *StringToVector) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *StringToVector) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := s.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -120,7 +120,7 @@ func (v *VectorToString) WithChildren(ctx *sql.Context, children ...sql.Expressi
 	return NewVectorToString(ctx, children[0]), nil
 }
 
-func (v *VectorToString) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (v *VectorToString) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := v.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

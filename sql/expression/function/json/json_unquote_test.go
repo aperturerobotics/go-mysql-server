@@ -28,7 +28,7 @@ import (
 func TestJSONUnquote(t *testing.T) {
 	testCases := []struct {
 		arg sql.Expression
-		exp interface{}
+		exp any
 		err bool
 	}{
 		{

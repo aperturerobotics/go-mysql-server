@@ -86,7 +86,7 @@ func calculateArea(l types.LineString) float64 {
 }
 
 // Eval implements the sql.Expression interface.
-func (a *Area) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (a *Area) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate argument
 	v, err := a.Child.Eval(ctx, row)
 	if err != nil {

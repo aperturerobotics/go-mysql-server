@@ -140,7 +140,7 @@ func isLinearRing(line types.LineString) bool {
 }
 
 // Eval implements the sql.Expression interface.
-func (p *Polygon) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *Polygon) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Allocate array of lines
 	var lines = make([]types.LineString, len(p.ChildExpressions))
 

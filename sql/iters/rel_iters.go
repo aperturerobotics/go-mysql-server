@@ -205,8 +205,8 @@ func GetInt64Value(ctx *sql.Context, expr sql.Expression) (int64, error) {
 
 type JsonTableColOpts struct {
 	Typ       sql.Type
-	DefErrVal interface{}
-	DefEmpVal interface{}
+	DefErrVal any
+	DefEmpVal any
 	Name      string
 	ForOrd    bool
 	Exists    bool
@@ -220,7 +220,7 @@ type JsonTableCol struct {
 	Opts     *JsonTableColOpts
 	Path     string          // if there are nested columns, this is a schema Path, otherwise it is a col Path
 	Cols     []*JsonTableCol // nested columns
-	data     []interface{}
+	data     []any
 	pos      int
 	currSib  int
 	finished bool // exhausted all rows in data
@@ -254,13 +254,13 @@ func (c *JsonTableCol) NextSibling() bool {
 // LoadData loads the data for this column from the given object and c.path
 // LoadData will always wrap the data in a slice to ensure it is iterable
 // Additionally, this function will set the c.currSib to the first sibling
-func (c *JsonTableCol) LoadData(obj interface{}) {
-	var data interface{}
+func (c *JsonTableCol) LoadData(obj any) {
+	var data any
 	data, c.err = jsonpath.JsonPathLookup(obj, c.Path)
-	if d, ok := data.([]interface{}); ok {
+	if d, ok := data.([]any); ok {
 		c.data = d
 	} else {
-		c.data = []interface{}{data}
+		c.data = []any{data}
 	}
 	c.pos = 0
 
@@ -277,14 +277,14 @@ func (c *JsonTableCol) Reset() {
 }
 
 // Next returns the next row for this column.
-func (c *JsonTableCol) Next(ctx *sql.Context, obj interface{}, pass bool, ord int) (sql.Row, error) {
+func (c *JsonTableCol) Next(ctx *sql.Context, obj any, pass bool, ord int) (sql.Row, error) {
 	// nested column should recurse
 	if len(c.Cols) != 0 {
 		if c.data == nil {
 			c.LoadData(obj)
 		}
 
-		var innerObj interface{}
+		var innerObj any
 		if !c.finished {
 			innerObj = c.data[c.pos]
 		}
@@ -368,7 +368,7 @@ func (c *JsonTableCol) Next(ctx *sql.Context, obj interface{}, pass bool, ord in
 }
 
 type JsonTableRowIter struct {
-	Data    []interface{}
+	Data    []any
 	Cols    []*JsonTableCol
 	pos     int
 	currSib int

@@ -75,7 +75,7 @@ func (e *Envelope) WithChildren(ctx *sql.Context, children ...sql.Expression) (s
 }
 
 // Eval implements the sql.Expression interface.
-func (e *Envelope) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (e *Envelope) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := e.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

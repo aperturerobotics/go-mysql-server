@@ -36,7 +36,7 @@ func (m mockStringWrapper) Unwrap(ctx context.Context) (string, error) {
 	return m.val, nil
 }
 
-func (m mockStringWrapper) UnwrapAny(ctx context.Context) (interface{}, error) {
+func (m mockStringWrapper) UnwrapAny(ctx context.Context) (any, error) {
 	return m.val, nil
 }
 
@@ -48,22 +48,22 @@ func (m mockStringWrapper) MaxByteLength() int64 {
 	return int64(len(m.val))
 }
 
-func (m mockStringWrapper) Compare(ctx context.Context, other interface{}) (int, bool, error) {
+func (m mockStringWrapper) Compare(ctx context.Context, other any) (int, bool, error) {
 	return 0, false, nil
 }
 
-func (m mockStringWrapper) Hash() interface{} {
+func (m mockStringWrapper) Hash() any {
 	return m.val
 }
 
 func TestJsonCompare(t *testing.T) {
-	RunJsonCompareTests(t, JsonCompareTests, func(t *testing.T, left, right interface{}) (interface{}, interface{}) {
+	RunJsonCompareTests(t, JsonCompareTests, func(t *testing.T, left, right any) (any, any) {
 		return ConvertToJson(t, left), ConvertToJson(t, right)
 	})
 }
 
 func TestJsonCompareNulls(t *testing.T) {
-	RunJsonCompareTests(t, JsonCompareNullsTests, func(t *testing.T, left, right interface{}) (interface{}, interface{}) {
+	RunJsonCompareTests(t, JsonCompareNullsTests, func(t *testing.T, left, right any) (any, any) {
 		return ConvertToJson(t, left), ConvertToJson(t, right)
 	})
 }
@@ -74,8 +74,8 @@ func TestJsonConvert(t *testing.T) {
 		Field string `json:"field"`
 	}
 	tests := []struct {
-		val         interface{}
-		expectedVal interface{}
+		val         any
+		expectedVal any
 		expectedErr bool
 	}{
 		{`""`, types.MustJSON(`""`), false},
@@ -111,7 +111,7 @@ func TestJsonString(t *testing.T) {
 
 func TestJsonSQL(t *testing.T) {
 	tests := []struct {
-		val         interface{}
+		val         any
 		expectedErr bool
 	}{
 		{`""`, false},
@@ -165,7 +165,7 @@ func TestValuer(t *testing.T) {
 func TestLazyJsonDocument(t *testing.T) {
 	testCases := []struct {
 		s    string
-		json interface{}
+		json any
 	}{
 		{`"1"`, "1"},
 		{`{"a": [1.0, null]}`, map[string]any{"a": []any{1.0, nil}}},
@@ -264,7 +264,7 @@ func TestJsonRoundTripping(t *testing.T) {
 	}
 }
 
-func convertStringsToJsonDocuments(t *testing.T, doc, val, result interface{}) (types.MutableJSON, sql.JSONWrapper, types.MutableJSON) {
+func convertStringsToJsonDocuments(t *testing.T, doc, val, result any) (types.MutableJSON, sql.JSONWrapper, types.MutableJSON) {
 	if val == "" {
 		val = nil
 	}
@@ -417,7 +417,7 @@ func TestRemoveRoot(t *testing.T) {
 
 type jsonIterKV struct {
 	key   string
-	value interface{}
+	value any
 }
 
 type jsonIterTest struct {

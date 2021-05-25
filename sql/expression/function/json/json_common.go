@@ -61,7 +61,7 @@ func getJSONDocumentFromRow(ctx *sql.Context, row sql.Row, json sql.Expression) 
 		return nil, err
 	}
 
-	var jsonData interface{}
+	var jsonData any
 
 	switch jsType := js.(type) {
 	case string:

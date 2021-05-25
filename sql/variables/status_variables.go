@@ -65,7 +65,7 @@ func (g *globalStatusVariables) NewGlobalMap() map[string]sql.StatusVarValue {
 }
 
 // GetGlobal implements sql.StatusVariableRegistry
-func (g *globalStatusVariables) GetGlobal(name string) (sql.StatusVariable, interface{}, bool) {
+func (g *globalStatusVariables) GetGlobal(name string) (sql.StatusVariable, any, bool) {
 	v, ok := g.varVals[name]
 	if !ok || v.Variable().GetScope() == sql.StatusVariableScope_Session {
 		return nil, nil, false
@@ -74,7 +74,7 @@ func (g *globalStatusVariables) GetGlobal(name string) (sql.StatusVariable, inte
 }
 
 // SetGlobal implements sql.StatusVariableRegistry
-func (g *globalStatusVariables) SetGlobal(name string, val interface{}) error {
+func (g *globalStatusVariables) SetGlobal(name string, val any) error {
 	v, ok := g.varVals[name]
 	if !ok || v.Variable().GetScope() == sql.StatusVariableScope_Session {
 		return sql.ErrUnknownStatusVariable.New(name)

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
@@ -152,34 +153,34 @@ func (c *Call) WithParamReference(pRef *expression.ProcedureReference) *Call {
 
 // String implements the sql.Node interface.
 func (c *Call) String() string {
-	paramStr := ""
+	var paramStr strings.Builder
 	for i, param := range c.Params {
 		if i > 0 {
-			paramStr += ", "
+			paramStr.WriteString(", ")
 		}
-		paramStr += param.String()
+		paramStr.WriteString(param.String())
 	}
 	if c.db == nil {
-		return fmt.Sprintf("CALL %s(%s)", c.Name, paramStr)
+		return fmt.Sprintf("CALL %s(%s)", c.Name, paramStr.String())
 	} else {
-		return fmt.Sprintf("CALL %s.%s(%s)", c.db.Name(), c.Name, paramStr)
+		return fmt.Sprintf("CALL %s.%s(%s)", c.db.Name(), c.Name, paramStr.String())
 	}
 }
 
 // DebugString implements sql.DebugStringer
 func (c *Call) DebugString(ctx *sql.Context) string {
-	paramStr := ""
+	var paramStr strings.Builder
 	for i, param := range c.Params {
 		if i > 0 {
-			paramStr += ", "
+			paramStr.WriteString(", ")
 		}
-		paramStr += sql.DebugString(ctx, param)
+		paramStr.WriteString(sql.DebugString(ctx, param))
 	}
 	tp := sql.NewTreePrinter()
 	if c.db == nil {
-		tp.WriteNode("CALL %s(%s)", c.Name, paramStr)
+		tp.WriteNode("CALL %s(%s)", c.Name, paramStr.String())
 	} else {
-		tp.WriteNode("CALL %s.%s(%s)", c.db.Name(), c.Name, paramStr)
+		tp.WriteNode("CALL %s.%s(%s)", c.db.Name(), c.Name, paramStr.String())
 	}
 
 	return tp.String()

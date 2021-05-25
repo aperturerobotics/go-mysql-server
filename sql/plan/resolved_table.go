@@ -28,7 +28,7 @@ import (
 type ResolvedTable struct {
 	sql.Table
 	SqlDatabase sql.Database
-	AsOf        interface{}
+	AsOf        any
 	cols        sql.ColSet
 	comment     string
 	id          sql.TableId
@@ -44,7 +44,7 @@ var _ sql.MutableTableNode = (*ResolvedTable)(nil)
 var _ TableIdNode = (*ResolvedTable)(nil)
 
 // NewResolvedTable creates a new instance of ResolvedTable.
-func NewResolvedTable(table sql.Table, db sql.Database, asOf interface{}) *ResolvedTable {
+func NewResolvedTable(table sql.Table, db sql.Database, asOf any) *ResolvedTable {
 	return &ResolvedTable{Table: table, SqlDatabase: db, AsOf: asOf}
 }
 

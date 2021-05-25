@@ -73,7 +73,7 @@ func (s *Star) String() string {
 }
 
 // Eval implements the Expression interface.
-func (*Star) Eval(ctx *sql.Context, r sql.Row) (interface{}, error) {
+func (*Star) Eval(ctx *sql.Context, r sql.Row) (any, error) {
 	panic("star is just a placeholder node, but Eval was called")
 }
 

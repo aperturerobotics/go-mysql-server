@@ -59,7 +59,7 @@ func (au *AutoUuid) CollationCoercibility(ctx *sql.Context) (collation sql.Colla
 }
 
 // Eval implements the Expression interface.
-func (au *AutoUuid) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (au *AutoUuid) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	childResult, err := au.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

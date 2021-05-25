@@ -37,7 +37,7 @@ func NewExistsSubquery(sq *Subquery) *ExistsSubquery {
 }
 
 // Eval implements the Expression interface.
-func (e *ExistsSubquery) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (e *ExistsSubquery) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	hasResultRow, err := e.Query.HasResultRow(ctx, row)
 	if err != nil {
 		return nil, err

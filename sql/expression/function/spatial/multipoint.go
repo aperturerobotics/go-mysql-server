@@ -74,7 +74,7 @@ func (l *MultiPoint) WithChildren(ctx *sql.Context, children ...sql.Expression) 
 }
 
 // Eval implements the sql.Expression interface.
-func (l *MultiPoint) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (l *MultiPoint) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	var points = make([]types.Point, len(l.ChildExpressions))
 	for i, arg := range l.ChildExpressions {
 		val, err := arg.Eval(ctx, row)

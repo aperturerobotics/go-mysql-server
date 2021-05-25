@@ -48,7 +48,7 @@ func (*Not) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, 
 }
 
 // Eval implements the Expression interface.
-func (e *Not) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (e *Not) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	v, err := e.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

@@ -27,7 +27,7 @@ import (
 func TestJSONPretty(t *testing.T) {
 	testCases := []struct {
 		arg sql.Expression
-		exp interface{}
+		exp any
 		err error
 	}{
 		{

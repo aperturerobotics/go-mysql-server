@@ -25,7 +25,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/types/jsontests"
 )
 
-func jsonExpression(t *testing.T, val interface{}) sql.Expression {
+func jsonExpression(t *testing.T, val any) sql.Expression {
 	return expression.NewLiteral(jsontests.ConvertToJson(t, val), types.JSON)
 }
 

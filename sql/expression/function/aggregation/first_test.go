@@ -28,7 +28,7 @@ func TestFirst(t *testing.T) {
 	testCases := []struct {
 		name     string
 		rows     []sql.Row
-		expected interface{}
+		expected any
 	}{
 		{"no rows", nil, nil},
 		{"one row", []sql.Row{{"first"}}, "first"},

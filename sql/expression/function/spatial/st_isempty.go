@@ -73,7 +73,7 @@ func (i *IsEmpty) WithChildren(ctx *sql.Context, children ...sql.Expression) (sq
 }
 
 // Eval implements the sql.Expression interface.
-func (i *IsEmpty) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *IsEmpty) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := i.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

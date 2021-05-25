@@ -33,7 +33,7 @@ func TestValid(t *testing.T) {
 	testCases := []struct {
 		f        sql.Expression
 		row      sql.Row
-		expected interface{}
+		expected any
 	}{
 		{f1, sql.Row{`null`}, true},
 		{f1, sql.Row{`1`}, true},

@@ -15,7 +15,7 @@ func TestParseDate(t *testing.T) {
 		name     string
 		date     string
 		format   string
-		expected interface{}
+		expected any
 	}{
 		{"simple", "Jan 3, 2000", "%b %e, %Y", time.Date(2000, time.January, 3, 0, 0, 0, 0, time.UTC)},
 		{"simple_with_spaces", "Nov  03 ,   2000", "%b %e, %Y", time.Date(2000, time.November, 3, 0, 0, 0, 0, time.UTC)},
@@ -83,7 +83,7 @@ func TestConversionFailure(t *testing.T) {
 		name          string
 		date          string
 		format        string
-		result        interface{}
+		result        any
 		expectedError string
 	}{
 		// with strict mode with NO_ZERO_IN_DATE,NO_ZERO_DATE enabled, these tests result NULL
@@ -116,7 +116,7 @@ func TestParseErr(t *testing.T) {
 		name          string
 		date          string
 		format        string
-		expectedError interface{}
+		expectedError any
 	}{
 		{"simple", "a", "b", ParseLiteralErr{
 			Literal: 'b', Tokens: "a", err: fmt.Errorf(`expected literal "b", got "a"`)},

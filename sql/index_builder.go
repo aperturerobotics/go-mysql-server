@@ -63,7 +63,7 @@ func NewMySQLIndexBuilder(ctx *Context, idx Index) *MySQLIndexBuilder {
 	}
 }
 
-func ceil(val interface{}) interface{} {
+func ceil(val any) any {
 	switch v := val.(type) {
 	case float32:
 		return float32(math.Ceil(float64(v)))
@@ -84,7 +84,7 @@ func ceil(val interface{}) interface{} {
 	}
 }
 
-func floor(val interface{}) interface{} {
+func floor(val any) any {
 	switch v := val.(type) {
 	case float32:
 		return float32(math.Floor(float64(v)))
@@ -108,7 +108,7 @@ func floor(val interface{}) interface{} {
 }
 
 // Equals represents colExpr = key
-func (b *MySQLIndexBuilder) Equals(ctx *Context, colExpr string, keyType Type, keys ...interface{}) *MySQLIndexBuilder {
+func (b *MySQLIndexBuilder) Equals(ctx *Context, colExpr string, keyType Type, keys ...any) *MySQLIndexBuilder {
 	if b.isInvalid {
 		return b
 	}
@@ -162,7 +162,7 @@ func (b *MySQLIndexBuilder) Equals(ctx *Context, colExpr string, keyType Type, k
 }
 
 // NotIn represents colExpr NOT IN (keys...)
-func (b *MySQLIndexBuilder) NotIn(ctx *Context, colExpr string, keyTypes []Type, keys []interface{}) *MySQLIndexBuilder {
+func (b *MySQLIndexBuilder) NotIn(ctx *Context, colExpr string, keyTypes []Type, keys []any) *MySQLIndexBuilder {
 	if b.isInvalid {
 		return b
 	}
@@ -180,7 +180,7 @@ func (b *MySQLIndexBuilder) NotIn(ctx *Context, colExpr string, keyTypes []Type,
 }
 
 // In represents colExpr IN (keys...)
-func (b *MySQLIndexBuilder) In(ctx *Context, colExpr string, keyTypes []Type, keys []interface{}) *MySQLIndexBuilder {
+func (b *MySQLIndexBuilder) In(ctx *Context, colExpr string, keyTypes []Type, keys []any) *MySQLIndexBuilder {
 	if b.isInvalid {
 		return b
 	}
@@ -239,7 +239,7 @@ func (b *MySQLIndexBuilder) In(ctx *Context, colExpr string, keyTypes []Type, ke
 }
 
 // NotEquals represents colExpr <> key.
-func (b *MySQLIndexBuilder) NotEquals(ctx *Context, colExpr string, keyType Type, key interface{}) *MySQLIndexBuilder {
+func (b *MySQLIndexBuilder) NotEquals(ctx *Context, colExpr string, keyType Type, key any) *MySQLIndexBuilder {
 	if b.isInvalid {
 		return b
 	}
@@ -296,7 +296,7 @@ func (b *MySQLIndexBuilder) NotEquals(ctx *Context, colExpr string, keyType Type
 }
 
 // GreaterThan represents colExpr > key.
-func (b *MySQLIndexBuilder) GreaterThan(ctx *Context, colExpr string, keyType Type, key interface{}) *MySQLIndexBuilder {
+func (b *MySQLIndexBuilder) GreaterThan(ctx *Context, colExpr string, keyType Type, key any) *MySQLIndexBuilder {
 	if b.isInvalid {
 		return b
 	}
@@ -344,7 +344,7 @@ func IsConvertibleKeyType(colType Type, keyType Type) bool {
 }
 
 // convertKey converts the given key from keyType to colType, returning an error if the conversion fails.
-func (b *MySQLIndexBuilder) convertKey(ctx *Context, colType Type, keyType Type, key interface{}) (interface{}, ConvertInRange, error) {
+func (b *MySQLIndexBuilder) convertKey(ctx *Context, colType Type, keyType Type, key any) (any, ConvertInRange, error) {
 	if et, ok := colType.(ExtendedType); ok {
 		return et.ConvertToType(ctx, keyType.(ExtendedType), key)
 	} else {
@@ -361,7 +361,7 @@ func (b *MySQLIndexBuilder) convertKey(ctx *Context, colType Type, keyType Type,
 }
 
 // GreaterOrEqual represents colExpr >= key.
-func (b *MySQLIndexBuilder) GreaterOrEqual(ctx *Context, colExpr string, keyType Type, key interface{}) *MySQLIndexBuilder {
+func (b *MySQLIndexBuilder) GreaterOrEqual(ctx *Context, colExpr string, keyType Type, key any) *MySQLIndexBuilder {
 	if b.isInvalid {
 		return b
 	}
@@ -407,7 +407,7 @@ func (b *MySQLIndexBuilder) GreaterOrEqual(ctx *Context, colExpr string, keyType
 }
 
 // LessThan represents colExpr < key.
-func (b *MySQLIndexBuilder) LessThan(ctx *Context, colExpr string, keyType Type, key interface{}) *MySQLIndexBuilder {
+func (b *MySQLIndexBuilder) LessThan(ctx *Context, colExpr string, keyType Type, key any) *MySQLIndexBuilder {
 	if b.isInvalid {
 		return b
 	}
@@ -441,7 +441,7 @@ func (b *MySQLIndexBuilder) LessThan(ctx *Context, colExpr string, keyType Type,
 }
 
 // LessOrEqual represents colExpr <= key.
-func (b *MySQLIndexBuilder) LessOrEqual(ctx *Context, colExpr string, keyType Type, key interface{}) *MySQLIndexBuilder {
+func (b *MySQLIndexBuilder) LessOrEqual(ctx *Context, colExpr string, keyType Type, key any) *MySQLIndexBuilder {
 	if b.isInvalid {
 		return b
 	}
@@ -660,7 +660,7 @@ func NewSpatialIndexBuilder(ctx *Context, idx Index) *SpatialIndexBuilder {
 	return &SpatialIndexBuilder{idx: idx, typ: idx.ColumnExpressionTypes(ctx)[0].Type}
 }
 
-func (b *SpatialIndexBuilder) AddRange(lower, upper interface{}) *SpatialIndexBuilder {
+func (b *SpatialIndexBuilder) AddRange(lower, upper any) *SpatialIndexBuilder {
 	b.rng = MySQLRangeColumnExpr{
 		LowerBound: Below{
 			Key: lower,
@@ -697,7 +697,7 @@ func NewEqualityIndexBuilder(idx Index) *EqualityIndexBuilder {
 
 // AddEquality represents colExpr = key.
 // TODO: For IN expressions, we should pass all of them in the same AddEquality call.
-func (b *EqualityIndexBuilder) AddEquality(ctx *Context, colIdx int, k interface{}) error {
+func (b *EqualityIndexBuilder) AddEquality(ctx *Context, colIdx int, k any) error {
 	if b.empty {
 		return nil
 	}

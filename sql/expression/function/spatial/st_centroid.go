@@ -98,7 +98,7 @@ func ringCentroidAndArea(ring types.LineString) (cx, cy, area float64) {
 }
 
 // Eval implements the sql.Expression interface.
-func (c *Centroid) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (c *Centroid) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := c.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -264,7 +264,7 @@ func (c *Centroid) evalGeomCentroid(ctx *sql.Context, gv types.GeometryValue) (*
 }
 
 // evalRaw computes the centroid for an already-unwrapped geometry value.
-func (c *Centroid) evalRaw(ctx *sql.Context, gv types.GeometryValue) (interface{}, error) {
+func (c *Centroid) evalRaw(ctx *sql.Context, gv types.GeometryValue) (any, error) {
 	srid := gv.GetSRID()
 	switch v := gv.(type) {
 	case types.Point:
