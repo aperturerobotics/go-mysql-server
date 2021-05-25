@@ -434,7 +434,7 @@ func (i *trackedIndexKeyValueIter) Close(ctx *sql.Context) (err error) {
 	return err
 }
 
-func (i *trackedIndexKeyValueIter) Next(ctx *sql.Context) ([]interface{}, []byte, error) {
+func (i *trackedIndexKeyValueIter) Next(ctx *sql.Context) ([]any, []byte, error) {
 	v, k, err := i.iter.Next(ctx)
 	if err != nil {
 		return nil, nil, err

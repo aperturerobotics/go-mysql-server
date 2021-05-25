@@ -55,7 +55,7 @@ func (w *Wrapper) Children() []sql.Expression {
 }
 
 // Eval implements sql.Expression
-func (w *Wrapper) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (w *Wrapper) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if w.inner == nil {
 		return nil, nil
 	}

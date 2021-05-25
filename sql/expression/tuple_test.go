@@ -40,7 +40,7 @@ func TestTuple(t *testing.T) {
 
 	result, err := tup.Eval(ctx, nil)
 	require.NoError(err)
-	require.Equal([]interface{}{int64(1), float64(3.14), "foo"}, result)
+	require.Equal([]any{int64(1), float64(3.14), "foo"}, result)
 
 	tup = NewTuple(
 		NewGetField(0, types.LongText, "text", true),
@@ -65,7 +65,7 @@ func TestTuple(t *testing.T) {
 
 	result, err = tup.Eval(ctx, sql.NewRow("foo"))
 	require.NoError(err)
-	require.Equal([]interface{}{"foo", "bar"}, result)
+	require.Equal([]any{"foo", "bar"}, result)
 
 	tup = NewTuple(
 		NewUnresolvedColumn("bar"),

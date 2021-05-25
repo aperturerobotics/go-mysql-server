@@ -330,7 +330,7 @@ func isIntersects(g1, g2 types.GeometryValue) bool {
 // 2. Not a types.GeometryValue, return error
 // 3. SRIDs don't match, return error
 // 4. Empty GeometryCollection, return nil
-func validateGeomComp(ctx context.Context, geom1, geom2 interface{}, funcName string) (types.GeometryValue, types.GeometryValue, error) {
+func validateGeomComp(ctx context.Context, geom1, geom2 any, funcName string) (types.GeometryValue, types.GeometryValue, error) {
 	if geom1 == nil || geom2 == nil {
 		return nil, nil, nil
 	}
@@ -355,7 +355,7 @@ func validateGeomComp(ctx context.Context, geom1, geom2 interface{}, funcName st
 }
 
 // Eval implements the sql.Expression interface.
-func (i *Intersects) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *Intersects) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	geom1, err := i.LeftChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err

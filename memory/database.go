@@ -199,13 +199,13 @@ func (d *BaseDatabase) GetForeignKeyCollection() *ForeignKeyCollection {
 // of the named table each time, with ascending version identifiers, for this to work.
 type HistoryDatabase struct {
 	*Database
-	Revisions    map[string]map[interface{}]sql.Table
-	currRevision interface{}
+	Revisions    map[string]map[any]sql.Table
+	currRevision any
 }
 
 var _ sql.VersionedDatabase = (*HistoryDatabase)(nil)
 
-func (db *HistoryDatabase) GetTableInsensitiveAsOf(ctx *sql.Context, tblName string, time interface{}) (sql.Table, bool, error) {
+func (db *HistoryDatabase) GetTableInsensitiveAsOf(ctx *sql.Context, tblName string, time any) (sql.Table, bool, error) {
 	table, ok := db.Revisions[strings.ToLower(tblName)][time]
 	if ok {
 		return table, true, nil
@@ -220,7 +220,7 @@ func (db *HistoryDatabase) GetTableInsensitiveAsOf(ctx *sql.Context, tblName str
 	return db.GetTableInsensitive(ctx, tblName)
 }
 
-func (db *HistoryDatabase) GetTableNamesAsOf(ctx *sql.Context, time interface{}) ([]string, error) {
+func (db *HistoryDatabase) GetTableNamesAsOf(ctx *sql.Context, time any) ([]string, error) {
 	// TODO: this can't make any queries fail (only used for error messages on table lookup failure), but would be nice
 	//  to support better.
 	return db.GetTableNames(ctx)
@@ -229,15 +229,15 @@ func (db *HistoryDatabase) GetTableNamesAsOf(ctx *sql.Context, time interface{})
 func NewHistoryDatabase(name string) *HistoryDatabase {
 	return &HistoryDatabase{
 		Database:  NewDatabase(name),
-		Revisions: make(map[string]map[interface{}]sql.Table),
+		Revisions: make(map[string]map[any]sql.Table),
 	}
 }
 
 // Adds a table with an asOf revision key. The table given becomes the current version for the name given.
-func (db *HistoryDatabase) AddTableAsOf(name string, t sql.Table, asOf interface{}) {
+func (db *HistoryDatabase) AddTableAsOf(name string, t sql.Table, asOf any) {
 	// TODO: this won't handle table names that vary only in case
 	if _, ok := db.Revisions[strings.ToLower(name)]; !ok {
-		db.Revisions[strings.ToLower(name)] = make(map[interface{}]sql.Table)
+		db.Revisions[strings.ToLower(name)] = make(map[any]sql.Table)
 	}
 
 	db.Revisions[strings.ToLower(name)][asOf] = t
@@ -452,7 +452,7 @@ func (d *BaseDatabase) GetEvent(ctx *sql.Context, name string) (sql.EventDefinit
 }
 
 // GetEvents implements sql.EventDatabase
-func (d *BaseDatabase) GetEvents(ctx *sql.Context) ([]sql.EventDefinition, interface{}, error) {
+func (d *BaseDatabase) GetEvents(ctx *sql.Context) ([]sql.EventDefinition, any, error) {
 	var eds []sql.EventDefinition
 	eds = append(eds, d.events...)
 	// memory DB doesn't support event reloading, so token is always nil
@@ -526,7 +526,7 @@ func (d *BaseDatabase) UpdateLastExecuted(ctx *sql.Context, eventName string, la
 }
 
 // NeedsToReloadEvents implements sql.EventDatabase
-func (d *Database) NeedsToReloadEvents(_ *sql.Context, token interface{}) (bool, error) {
+func (d *Database) NeedsToReloadEvents(_ *sql.Context, token any) (bool, error) {
 	// Event reloading not supported for in-memory database
 	return false, nil
 }

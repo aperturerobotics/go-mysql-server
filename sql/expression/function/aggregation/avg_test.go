@@ -114,7 +114,7 @@ func TestAvg_NUMS_AND_NULLS(t *testing.T) {
 	testCases := []struct {
 		name     string
 		rows     []sql.Row
-		expected interface{}
+		expected any
 	}{
 		{
 			"float values with nil",
@@ -163,7 +163,7 @@ func TestAvg_Distinct(t *testing.T) {
 	testCases := []struct {
 		name     string
 		rows     []sql.Row
-		expected interface{}
+		expected any
 	}{
 		{
 			"string int values",

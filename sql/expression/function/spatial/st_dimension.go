@@ -72,7 +72,7 @@ func (p *Dimension) WithChildren(ctx *sql.Context, children ...sql.Expression) (
 	return NewDimension(ctx, children[0]), nil
 }
 
-func FindDimension(g types.GeometryValue) interface{} {
+func FindDimension(g types.GeometryValue) any {
 	switch v := g.(type) {
 	case types.Point, types.MultiPoint:
 		return 0
@@ -101,7 +101,7 @@ func FindDimension(g types.GeometryValue) interface{} {
 }
 
 // Eval implements the sql.Expression interface.
-func (p *Dimension) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *Dimension) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate child
 	val, err := p.Child.Eval(ctx, row)
 	if err != nil {

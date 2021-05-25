@@ -263,7 +263,7 @@ func (c *Convert) WithChildren(ctx *sql.Context, children ...sql.Expression) (sq
 }
 
 // Eval implements the Expression interface.
-func (c *Convert) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (c *Convert) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := c.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -455,7 +455,7 @@ func convertValue(ctx *sql.Context, val any, castTo string, originType sql.Type,
 // is a string or byte slice. If the typeLength is 0, or if it is greater than
 // the length of |val|, then |val| is simply returned as is. If |val| is not a
 // string or []byte, then an error is returned.
-func truncateConvertedValue(val interface{}, typeLength int) (interface{}, error) {
+func truncateConvertedValue(val any, typeLength int) (any, error) {
 	if typeLength <= 0 {
 		return val, nil
 	}

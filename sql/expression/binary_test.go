@@ -33,7 +33,7 @@ func TestBinary(t *testing.T) {
 
 	// Go through assorted test cases
 	testCases := []struct {
-		val      interface{}
+		val      any
 		valType  sql.Type
 		expected []byte
 	}{

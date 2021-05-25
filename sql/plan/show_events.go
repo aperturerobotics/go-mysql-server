@@ -98,7 +98,7 @@ func (s *ShowEvents) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error)
 
 	for _, event := range s.Events {
 		eventType := "RECURRING"
-		var executeAt, intervalVal, intervalField, starts, ends, status interface{}
+		var executeAt, intervalVal, intervalField, starts, ends, status any
 		e := event.ConvertTimesFromUTCToTz(sql.SystemTimezoneOffset())
 		if e.HasExecuteAt {
 			eventType = "ONE TIME"

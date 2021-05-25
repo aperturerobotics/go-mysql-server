@@ -72,7 +72,7 @@ func (*JSONExtract) CollationCoercibility(ctx *sql.Context) (collation sql.Colla
 }
 
 // Eval implements the sql.Expression interface.
-func (j *JSONExtract) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j *JSONExtract) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	span, ctx := ctx.Span("function.JSONExtract")
 	defer span.End()
 

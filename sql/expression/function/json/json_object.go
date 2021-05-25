@@ -92,8 +92,8 @@ func (j JSONObject) IsNullable(ctx *sql.Context) bool {
 	return false
 }
 
-func (j JSONObject) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
-	obj := make(map[string]interface{}, len(j.keyValPairs)/2)
+func (j JSONObject) Eval(ctx *sql.Context, row sql.Row) (any, error) {
+	obj := make(map[string]any, len(j.keyValPairs)/2)
 
 	var key string
 	for i, expr := range j.keyValPairs {

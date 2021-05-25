@@ -226,7 +226,7 @@ func (t *tableEditor) Update(ctx *sql.Context, oldRow sql.Row, newRow sql.Row) e
 
 		if added {
 			pkColIdxes := t.pkColumnIndexes()
-			vals := make([]interface{}, len(pkColIdxes))
+			vals := make([]any, len(pkColIdxes))
 			for i := range pkColIdxes {
 				vals[i] = newRow[pkColIdxes[i]]
 			}

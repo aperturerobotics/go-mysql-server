@@ -49,7 +49,7 @@ type Subquery struct {
 	QueryString string
 
 	// Cached results, if any
-	cache []interface{}
+	cache []any
 	// Mutex to guard the caches
 	cacheMu sync.Mutex
 	// Whether results have been cached
@@ -112,7 +112,7 @@ func (p *PrependNode) CollationCoercibility(ctx *sql.Context) (collation sql.Col
 }
 
 // Eval implements the Expression interface.
-func (s *Subquery) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *Subquery) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	s.cacheMu.Lock()
 	cached := s.resultsCached
 	s.cacheMu.Unlock()
@@ -336,7 +336,7 @@ func (s *Subquery) evalMultiple(ctx *sql.Context, row sql.Row) ([]any, error) {
 		}
 
 		if returnsTuple {
-			result = append(result, append([]interface{}{}, row[col:]...))
+			result = append(result, append([]any{}, row[col:]...))
 		} else {
 			result = append(result, row[col])
 		}
@@ -432,7 +432,7 @@ func (s *Subquery) HasResultRow(ctx *sql.Context, row sql.Row) (bool, error) {
 
 // normalizeValue returns a canonical version of a value for use in a sql.KeyValueCache.
 // Two values that compare equal should have the same canonical version.
-func normalizeForKeyValueCache(ctx *sql.Context, val interface{}) (interface{}, error) {
+func normalizeForKeyValueCache(ctx *sql.Context, val any) (any, error) {
 	val, err := sql.UnwrapAny(ctx, val)
 	if err != nil {
 		return nil, err
@@ -440,7 +440,7 @@ func normalizeForKeyValueCache(ctx *sql.Context, val interface{}) (interface{}, 
 	return val, nil
 }
 
-func putAllRows(ctx *sql.Context, cache sql.KeyValueCache, sch sql.Schema, vals []interface{}) error {
+func putAllRows(ctx *sql.Context, cache sql.KeyValueCache, sch sql.Schema, vals []any) error {
 	for _, val := range vals {
 		normVal, err := normalizeForKeyValueCache(ctx, val)
 		if err != nil {

@@ -45,14 +45,14 @@ func newLRUCache(memory Freeable, r Reporter, size uint) *lruCache {
 	}
 }
 
-func (l *lruCache) Put(k uint64, v interface{}) error {
+func (l *lruCache) Put(k uint64, v any) error {
 	if releaseMemoryIfNeeded(l.reporter, l.Free, l.memory.Free) {
 		l.cache.Add(k, v)
 	}
 	return nil
 }
 
-func (l *lruCache) Get(k uint64) (interface{}, error) {
+func (l *lruCache) Get(k uint64) (any, error) {
 	v, ok := l.cache.Get(k)
 	if !ok {
 		return nil, ErrKeyNotFound
@@ -112,15 +112,15 @@ func (c *rowsCache) Dispose(ctx *Context) {
 
 // mapCache is a simple in-memory implementation of a cache
 type mapCache struct {
-	cache map[uint64]interface{}
+	cache map[uint64]any
 }
 
-func (m mapCache) Put(u uint64, i interface{}) error {
+func (m mapCache) Put(u uint64, i any) error {
 	m.cache[u] = i
 	return nil
 }
 
-func (m mapCache) Get(u uint64) (interface{}, error) {
+func (m mapCache) Get(u uint64) (any, error) {
 	v, ok := m.cache[u]
 	if !ok {
 		return nil, ErrKeyNotFound
@@ -134,14 +134,14 @@ func (m mapCache) Size() int {
 
 func NewMapCache() mapCache {
 	return mapCache{
-		cache: make(map[uint64]interface{}),
+		cache: make(map[uint64]any),
 	}
 }
 
 type historyCache struct {
 	memory   Freeable
 	reporter Reporter
-	cache    map[uint64]interface{}
+	cache    map[uint64]any
 }
 
 func (h *historyCache) Size() int {
@@ -149,10 +149,10 @@ func (h *historyCache) Size() int {
 }
 
 func newHistoryCache(memory Freeable, r Reporter) *historyCache {
-	return &historyCache{memory, r, make(map[uint64]interface{})}
+	return &historyCache{memory, r, make(map[uint64]any)}
 }
 
-func (h *historyCache) Put(k uint64, v interface{}) error {
+func (h *historyCache) Put(k uint64, v any) error {
 	if !releaseMemoryIfNeeded(h.reporter, h.memory.Free) {
 		return ErrNoMemoryAvailable.New()
 	}
@@ -160,7 +160,7 @@ func (h *historyCache) Put(k uint64, v interface{}) error {
 	return nil
 }
 
-func (h *historyCache) Get(k uint64) (interface{}, error) {
+func (h *historyCache) Get(k uint64) (any, error) {
 	v, ok := h.cache[k]
 	if !ok {
 		return nil, ErrKeyNotFound

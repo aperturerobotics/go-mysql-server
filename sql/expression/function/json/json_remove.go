@@ -101,7 +101,7 @@ func (j JSONRemove) Description() string {
 	return "removes data from JSON document."
 }
 
-func (j JSONRemove) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j JSONRemove) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	doc, err := getMutableJSONVal(ctx, row, j.doc)
 	if err != nil || doc == nil {
 		return nil, getJsonFunctionError("json_remove", 1, err)

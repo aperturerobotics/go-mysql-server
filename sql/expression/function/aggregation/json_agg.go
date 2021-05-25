@@ -121,7 +121,7 @@ func (j *JSONObjectAgg) Window() *sql.WindowDefinition {
 
 // NewBuffer implements the Aggregation interface.
 func (j *JSONObjectAgg) NewBuffer(ctx *sql.Context) (sql.AggregationBuffer, error) {
-	row := make(map[string]interface{})
+	row := make(map[string]any)
 	return &jsonObjectBuffer{row, j}, nil
 }
 
@@ -131,12 +131,12 @@ func (j *JSONObjectAgg) NewWindowFunction(ctx *sql.Context) (sql.WindowFunction,
 }
 
 // Eval implements the Expression interface.
-func (j *JSONObjectAgg) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j *JSONObjectAgg) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return nil, ErrEvalUnsupportedOnAggregation.New("JSONObjectAgg")
 }
 
 type jsonObjectBuffer struct {
-	vals map[string]interface{}
+	vals map[string]any
 	joa  *JSONObjectAgg
 }
 
@@ -181,7 +181,7 @@ func (j *jsonObjectBuffer) Update(ctx *sql.Context, row sql.Row) error {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (j *jsonObjectBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (j *jsonObjectBuffer) Eval(ctx *sql.Context) (any, error) {
 	// When no rows are present return NULL
 	if len(j.vals) == 0 {
 		return nil, nil

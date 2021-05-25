@@ -303,7 +303,7 @@ func (a *AddColumn) ValidateDefaultPosition(ctx *sql.Context, tblSch sql.Schema)
 	colsAfterThis := map[string]*sql.Column{a.column.Name: a.column}
 	if a.order != nil {
 		if a.order.First {
-			for i := 0; i < len(tblSch); i++ {
+			for i := range tblSch {
 				colsAfterThis[tblSch[i].Name] = tblSch[i]
 			}
 		} else {
@@ -390,7 +390,7 @@ func (c ColDefaultExpression) WithChildren(ctx *sql.Context, children ...sql.Exp
 	panic("ColDefaultExpression is only meant for immediate evaluation and should never be modified")
 }
 
-func (c ColDefaultExpression) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (c ColDefaultExpression) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	columnDefaultExpr := c.Column.Default
 	if columnDefaultExpr == nil {
 		columnDefaultExpr = c.Column.Generated
@@ -867,7 +867,7 @@ func (m *ModifyColumn) ValidateDefaultPosition(ctx *sql.Context, tblSch sql.Sche
 			colsAfterThis[tblSch[i].Name] = tblSch[i]
 		}
 	} else if m.order.First {
-		for i := 0; i < len(tblSch); i++ {
+		for i := range tblSch {
 			colsAfterThis[tblSch[i].Name] = tblSch[i]
 		}
 	} else {

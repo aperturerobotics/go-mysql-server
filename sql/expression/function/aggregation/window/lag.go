@@ -149,7 +149,7 @@ func (l *Lag) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements sql.Expression
-func (l *Lag) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (l *Lag) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return nil, sql.ErrWindowUnsupported.New(l.FunctionName())
 }
 

@@ -134,7 +134,7 @@ func isValidGeometry(gv types.GeometryValue) bool {
 }
 
 // Eval implements the sql.Expression interface.
-func (v *Validate) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (v *Validate) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := v.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

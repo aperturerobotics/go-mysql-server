@@ -745,7 +745,7 @@ func normalizeRowForRead(row sql.Row, numColumns int, virtualCols []int) sql.Row
 	// indexes are in ascending order, which is true for the time being.
 	var j int
 	virtualRow = make(sql.Row, numColumns)
-	for i := 0; i < numColumns; i++ {
+	for i := range numColumns {
 		if j < len(virtualCols) && i == virtualCols[j] {
 			j++
 		} else {
@@ -783,7 +783,7 @@ func projectOnRow(columns []int, row sql.Row) sql.Row {
 		return row
 	}
 
-	projected := make([]interface{}, len(columns))
+	projected := make([]any, len(columns))
 	for i, selected := range columns {
 		projected[i] = row[selected]
 	}
@@ -1187,7 +1187,7 @@ func (t *Table) getAutoIncrementColumn(ctx *sql.Context) *sql.Column {
 }
 
 // GetNextAutoIncrementValue gets the next auto increment value for the memory table the increment.
-func (t *Table) GetNextAutoIncrementValue(ctx *sql.Context, insertVal interface{}) (uint64, error) {
+func (t *Table) GetNextAutoIncrementValue(ctx *sql.Context, insertVal any) (uint64, error) {
 	data := t.sessionTableData(ctx)
 
 	cmp, err := types.Uint64.Compare(ctx, insertVal, data.autoIncVal)
@@ -1282,7 +1282,7 @@ func addColumnToSchema(ctx *sql.Context, data *TableData, newCol *sql.Column, or
 					}
 
 					if cmp > 0 {
-						var val interface{}
+						var val any
 						val, _, err = types.Uint64.Convert(ctx, row[newColIdx])
 						if err != nil {
 							panic(err)
@@ -1299,7 +1299,7 @@ func addColumnToSchema(ctx *sql.Context, data *TableData, newCol *sql.Column, or
 	}
 
 	newPkOrds := data.schema.PkOrdinals
-	for i := 0; i < len(newPkOrds); i++ {
+	for i := range newPkOrds {
 		// added column shifts the index of every column after
 		// all ordinals above addIdx will be bumped
 		if newColIdx <= newPkOrds[i] {
@@ -1392,7 +1392,7 @@ func dropColumnFromSchema(ctx *sql.Context, data *TableData, columnName string) 
 	}
 
 	newPkOrds := data.schema.PkOrdinals
-	for i := 0; i < len(newPkOrds); i++ {
+	for i := range newPkOrds {
 		// deleting a column will shift subsequent column indices left
 		// PK ordinals after dropIdx bumped down
 		if droppedCol <= newPkOrds[i] {
@@ -1528,14 +1528,14 @@ var debugDataPrint = false
 func (t *Table) DebugString(ctx *sql.Context) string {
 	if debugDataPrint {
 		p := t.data.partitions["0"]
-		s := ""
+		var s strings.Builder
 		for i, row := range p {
 			if i > 0 {
-				s += ", "
+				s.WriteString(", ")
 			}
-			s += fmt.Sprintf("%v", row)
+			s.WriteString(fmt.Sprintf("%v", row))
 		}
-		return s
+		return s.String()
 	}
 
 	p := sql.NewTreePrinter()

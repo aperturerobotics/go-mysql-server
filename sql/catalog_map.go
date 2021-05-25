@@ -80,7 +80,7 @@ func (t MapCatalog) Table(ctx *Context, dbName, tableName string) (Table, Databa
 	return nil, nil, fmt.Errorf("table not found")
 }
 
-func (t MapCatalog) TableAsOf(ctx *Context, dbName, tableName string, asOf interface{}) (Table, Database, error) {
+func (t MapCatalog) TableAsOf(ctx *Context, dbName, tableName string, asOf any) (Table, Database, error) {
 	return t.Table(ctx, dbName, tableName)
 }
 
@@ -92,7 +92,7 @@ func (t MapCatalog) DatabaseTable(ctx *Context, db Database, tableName string) (
 	}
 }
 
-func (t MapCatalog) DatabaseTableAsOf(ctx *Context, db Database, tableName string, asOf interface{}) (Table, Database, error) {
+func (t MapCatalog) DatabaseTableAsOf(ctx *Context, db Database, tableName string, asOf any) (Table, Database, error) {
 	return t.DatabaseTable(ctx, db, tableName)
 }
 

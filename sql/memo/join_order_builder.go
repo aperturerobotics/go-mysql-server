@@ -1566,17 +1566,17 @@ func (s bitSet) len() int {
 }
 
 func (s bitSet) String() string {
-	var str string
+	var str strings.Builder
 	var i vertexSet = 1
 	cnt := 0
 	for cnt < s.len() {
 		if (i & s) != 0 {
-			str += "1"
+			str.WriteString("1")
 			cnt++
 		} else {
-			str += "0"
+			str.WriteString("0")
 		}
 		i = i << 1
 	}
-	return str
+	return str.String()
 }

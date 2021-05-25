@@ -39,7 +39,7 @@ func TestArrayInsert(t *testing.T) {
 	testCases := []struct {
 		f        sql.Expression
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      error
 	}{
 		// Manual testing on MySQL verifies these behaviors are consistent. It seems a little chaotic, but json_array_insert
@@ -96,7 +96,7 @@ func TestArrayInsert(t *testing.T) {
 			if tstC.err == nil {
 				req.NoError(err)
 
-				var expect interface{}
+				var expect any
 				if tstC.expected != nil {
 					expect, _, err = types.JSON.Convert(sqlCtx, tstC.expected)
 					if err != nil {

@@ -133,15 +133,12 @@ func (s *StatsProv) estimateStats(ctx *sql.Context, table sql.Table, keys map[st
 		})
 
 		// quick and dirty histogram buckets
-		bucketCnt := 20
-		if len(keyVals) < bucketCnt {
-			bucketCnt = len(keyVals)
-		}
+		bucketCnt := min(len(keyVals), 20)
 		offset := len(keyVals) / bucketCnt
 		perBucket := int(rowCount) / bucketCnt
 		buckets := make([]sql.HistogramBucket, bucketCnt)
 		for i := range buckets {
-			var upperBound []interface{}
+			var upperBound []any
 			for _, v := range keyVals[i*offset] {
 				upperBound = append(upperBound, v)
 			}

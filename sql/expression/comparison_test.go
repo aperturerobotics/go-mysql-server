@@ -34,7 +34,7 @@ const (
 	testNil
 )
 
-var comparisonCases = map[sql.Type]map[int][][]interface{}{
+var comparisonCases = map[sql.Type]map[int][][]any{
 	types.LongText: {
 		testEqual: {
 			{"foo", "foo"},
@@ -75,7 +75,7 @@ var comparisonCases = map[sql.Type]map[int][][]interface{}{
 	},
 }
 
-var likeComparisonCases = map[sql.Type]map[int][][]interface{}{
+var likeComparisonCases = map[sql.Type]map[int][][]any{
 	types.LongText: {
 		testRegexp: {
 			{"foobar", ".*bar"},

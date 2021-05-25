@@ -225,7 +225,7 @@ func isWithin(g1, g2 types.GeometryValue) bool {
 }
 
 // Eval implements the sql.Expression interface.
-func (w *Within) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (w *Within) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	geom1, err := w.LeftChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err

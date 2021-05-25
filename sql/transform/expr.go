@@ -37,7 +37,7 @@ func Expr(ctx *sql.Context, e sql.Expression, f ExprFunc) (sql.Expression, TreeI
 		err         error
 	)
 
-	for i := 0; i < len(children); i++ {
+	for i := range children {
 		c := children[i]
 		c, same, err := Expr(ctx, c, f)
 		if err != nil {
@@ -74,7 +74,7 @@ func Exprs(ctx *sql.Context, e []sql.Expression, f ExprFunc) ([]sql.Expression, 
 		newExprs []sql.Expression
 	)
 
-	for i := 0; i < len(e); i++ {
+	for i := range e {
 		c := e[i]
 		c, same, err := Expr(ctx, c, f)
 		if err != nil {
@@ -165,7 +165,7 @@ func ExprWithNode(ctx *sql.Context, n sql.Node, e sql.Expression, f ExprWithNode
 		err         error
 	)
 
-	for i := 0; i < len(children); i++ {
+	for i := range children {
 		c := children[i]
 		c, sameC, err := ExprWithNode(ctx, n, c, f)
 		if err != nil {

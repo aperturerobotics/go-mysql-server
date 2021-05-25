@@ -44,7 +44,7 @@ type JSONContainsPath struct {
 	paths []sql.Expression
 }
 
-func (j JSONContainsPath) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j JSONContainsPath) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	target, err := getSearchableJSONVal(ctx, row, j.doc)
 	if err != nil || target == nil {
 		return nil, getJsonFunctionError("json_contains_path", 1, err)

@@ -75,7 +75,7 @@ func (l *Like) CollationCoercibility(ctx *sql.Context) (collation sql.CollationI
 }
 
 // Eval implements the sql.Expression interface.
-func (l *Like) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (l *Like) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	span, ctx := ctx.Span("expression.Like")
 	defer span.End()
 
@@ -112,7 +112,7 @@ func (l *Like) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	} else {
 		l.once.Do(func() {
 			l.pool = &sync.Pool{
-				New: func() interface{} {
+				New: func() any {
 					collation, _ := l.CollationCoercibility(ctx)
 					m, e := ConstructLikeMatcher(collation, *right, escape)
 					return likeMatcherErrTuple{matcher: m, err: e}
@@ -159,7 +159,7 @@ func (l *Like) evalRight(ctx *sql.Context, row sql.Row) (right *string, escape r
 		rightVal = rightStr
 	}
 
-	var escapeVal interface{}
+	var escapeVal any
 	if l.Escape != nil {
 		escapeVal, err = l.Escape.Eval(ctx, row)
 		if err != nil {

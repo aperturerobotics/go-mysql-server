@@ -38,7 +38,7 @@ func Join(ctx *sql.Context, s1, s2 sql.Statistic, prefixCnt int, debug bool) (sq
 	cmp := func(row1, row2 sql.Row) (int, error) {
 		var cmp int
 		var err error
-		for i := 0; i < prefixCnt; i++ {
+		for i := range prefixCnt {
 			if s1.Types()[i].Equals(s2.Types()[i]) {
 				cmp, err = s1.Types()[i].Compare(ctx, row1[i], row2[i])
 			} else {
@@ -501,7 +501,7 @@ type BucketConstructor func(rows, distinct, nulls, boundCnt uint64, bound sql.Ro
 // bucket when the bound keys match.
 func MergeOverlappingBuckets(ctx *sql.Context, h []sql.HistogramBucket, types []sql.Type, newB BucketConstructor) ([]sql.HistogramBucket, error) {
 	cmp := func(l, r sql.Row) (int, error) {
-		for i := 0; i < len(types); i++ {
+		for i := range types {
 			cmp, err := types[i].Compare(ctx, l[i], r[i])
 			if err != nil {
 				return 0, err
@@ -572,7 +572,7 @@ func euclideanDistance(row1, row2 sql.Row, prefixLen int) (float64, error) {
 	// TODO: Add context parameter
 	ctx := context.Background()
 	var distSq float64
-	for i := 0; i < prefixLen; i++ {
+	for i := range prefixLen {
 		v1, _, err := types.Float64.Convert(ctx, row1[i])
 		if err != nil {
 			return 0, err

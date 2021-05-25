@@ -33,7 +33,7 @@ func TestDiv(t *testing.T) {
 		name  string
 		left  sql.Expression
 		right sql.Expression
-		exp   interface{}
+		exp   any
 		err   *errors.Kind
 		skip  bool
 	}{
@@ -343,7 +343,7 @@ func TestDivUsesFloatsInternally(t *testing.T) {
 func TestIntDiv(t *testing.T) {
 	var testCases = []struct {
 		name                string
-		left, right         interface{}
+		left, right         any
 		leftType, rightType sql.Type
 		expected            int64
 		null                bool
@@ -385,7 +385,7 @@ func BenchmarkDivInt(b *testing.B) {
 		NewLiteral(1, types.Int64),
 		NewLiteral(3, types.Int64),
 	)
-	var res interface{}
+	var res any
 	var err error
 	for i := 0; i < b.N; i++ {
 		res, err = div.Eval(ctx, nil)
@@ -409,7 +409,7 @@ func BenchmarkDivFloat(b *testing.B) {
 		NewLiteral(1.0, types.Float64),
 		NewLiteral(3.0, types.Float64),
 	)
-	var res interface{}
+	var res any
 	var err error
 	for i := 0; i < b.N; i++ {
 		res, err = div.Eval(ctx, nil)
@@ -430,7 +430,7 @@ func BenchmarkDivHighScaleDecimals(b *testing.B) {
 		NewLiteral(types.DecimalFromFloat64(0.123456789), types.MustCreateDecimalType(types.DecimalTypeMaxPrecision, types.DecimalTypeMaxScale)),
 		NewLiteral(types.DecimalFromFloat64(0.987654321), types.MustCreateDecimalType(types.DecimalTypeMaxPrecision, types.DecimalTypeMaxScale)),
 	)
-	var res interface{}
+	var res any
 	var err error
 	for i := 0; i < b.N; i++ {
 		res, err = div.Eval(ctx, nil)
@@ -454,7 +454,7 @@ func BenchmarkDivManyInts(b *testing.B) {
 		div = NewDiv(div, NewLiteral(int64(i), types.Int64))
 	}
 	ctx := sql.NewEmptyContext()
-	var res interface{}
+	var res any
 	var err error
 	for i := 0; i < b.N; i++ {
 		res, err = div.Eval(ctx, nil)
@@ -478,7 +478,7 @@ func BenchmarkManyFloats(b *testing.B) {
 	for i := 2; i < 10; i++ {
 		div = NewDiv(div, NewLiteral(float64(i), types.Float64))
 	}
-	var res interface{}
+	var res any
 	var err error
 	for i := 0; i < b.N; i++ {
 		res, err = div.Eval(ctx, nil)
@@ -499,7 +499,7 @@ func BenchmarkDivManyDecimals(b *testing.B) {
 		div = NewDiv(div, NewLiteral(types.DecimalFromInt64(int64(i)), types.DecimalType_{}))
 	}
 	ctx := sql.NewEmptyContext()
-	var res interface{}
+	var res any
 	var err error
 	for i := 0; i < b.N; i++ {
 		res, err = div.Eval(ctx, nil)

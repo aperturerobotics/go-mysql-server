@@ -16,6 +16,7 @@ package variables
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"strings"
@@ -67,7 +68,7 @@ func (sv *globalSystemVariables) AddSystemVariables(sysVars []sql.SystemVariable
 // AssignValues sets all of the values in the given map to their respective variables. If a variable cannot be found, or
 // the value is invalid, then an error is returned. If the values contain any custom system variables, then make sure
 // that they've been added using AddSystemVariables first.
-func (sv *globalSystemVariables) AssignValues(vals map[string]interface{}) error {
+func (sv *globalSystemVariables) AssignValues(vals map[string]any) error {
 	// TODO: Add context parameter
 	ctx := sql.NewEmptyContext()
 	sv.mutex.Lock()
@@ -92,15 +93,13 @@ func (sv *globalSystemVariables) NewSessionMap() map[string]sql.SystemVarValue {
 	sv.mutex.RLock()
 	defer sv.mutex.RUnlock()
 	sessionVals := make(map[string]sql.SystemVarValue, len(sv.sysVarVals))
-	for key, val := range sv.sysVarVals {
-		sessionVals[key] = val
-	}
+	maps.Copy(sessionVals, sv.sysVarVals)
 	return sessionVals
 }
 
 // GetGlobal returns the system variable definition and value for the given name. If the variable does not exist, returns
 // false. Case-insensitive.
-func (sv *globalSystemVariables) GetGlobal(name string) (sql.SystemVariable, interface{}, bool) {
+func (sv *globalSystemVariables) GetGlobal(name string) (sql.SystemVariable, any, bool) {
 	sv.mutex.RLock()
 	defer sv.mutex.RUnlock()
 	name = strings.ToLower(name)
@@ -137,7 +136,7 @@ func (sv *globalSystemVariables) GetGlobal(name string) (sql.SystemVariable, int
 // Only global dynamic variables may be set through this function, as it is intended for use through the SET GLOBAL
 // statement. To set session system variables, use the appropriate function on the session context. To set values
 // directly (such as when loading persisted values), use AssignValues. Case-insensitive.
-func (sv *globalSystemVariables) SetGlobal(ctx *sql.Context, name string, val interface{}) error {
+func (sv *globalSystemVariables) SetGlobal(ctx *sql.Context, name string, val any) error {
 	sv.mutex.Lock()
 	defer sv.mutex.Unlock()
 	name = strings.ToLower(name)
@@ -154,11 +153,11 @@ func (sv *globalSystemVariables) SetGlobal(ctx *sql.Context, name string, val in
 }
 
 // GetAllGlobalVariables returns map of global system variables with their values.
-func (sv *globalSystemVariables) GetAllGlobalVariables() map[string]interface{} {
+func (sv *globalSystemVariables) GetAllGlobalVariables() map[string]any {
 	sv.mutex.RLock()
 	defer sv.mutex.RUnlock()
 
-	m := make(map[string]interface{})
+	m := make(map[string]any)
 	for k, varVal := range sv.sysVarVals {
 		m[k] = varVal.Val
 	}
@@ -2953,7 +2952,7 @@ var systemVars = map[string]sql.SystemVariable{
 		SetVarHintApplies: true,
 		Type:              types.NewSystemBoolType("updatable_views_with_limit"),
 		Default:           int8(1),
-		ValueFunction: func() (interface{}, error) {
+		ValueFunction: func() (any, error) {
 			return int(time.Now().Sub(ServerStartUpTime).Seconds()), nil
 		},
 	},

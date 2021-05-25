@@ -34,7 +34,7 @@ func TestStd(t *testing.T) {
 	testCases := []struct {
 		name     string
 		rows     []sql.Row
-		expected interface{}
+		expected any
 	}{
 		{
 			"string int values",
@@ -110,7 +110,7 @@ func TestStdSamp(t *testing.T) {
 	testCases := []struct {
 		name     string
 		rows     []sql.Row
-		expected interface{}
+		expected any
 	}{
 		{
 			"string int values",
@@ -186,7 +186,7 @@ func TestVariance(t *testing.T) {
 	testCases := []struct {
 		name     string
 		rows     []sql.Row
-		expected interface{}
+		expected any
 	}{
 		{
 			"string int values",
@@ -262,7 +262,7 @@ func TestVarSamp(t *testing.T) {
 	testCases := []struct {
 		name     string
 		rows     []sql.Row
-		expected interface{}
+		expected any
 	}{
 		{
 			"string int values",

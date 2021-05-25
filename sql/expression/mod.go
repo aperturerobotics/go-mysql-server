@@ -109,7 +109,7 @@ func (m *Mod) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Ex
 }
 
 // Eval implements the Expression interface.
-func (m *Mod) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (m *Mod) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	lval, rval, err := m.evalLeftRight(ctx, row)
 	if err != nil {
 		return nil, err
@@ -124,8 +124,8 @@ func (m *Mod) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	return mod(ctx, lval, rval)
 }
 
-func (m *Mod) evalLeftRight(ctx *sql.Context, row sql.Row) (interface{}, interface{}, error) {
-	var lval, rval interface{}
+func (m *Mod) evalLeftRight(ctx *sql.Context, row sql.Row) (any, any, error) {
+	var lval, rval any
 	var err error
 
 	// mod used with Interval error is caught at parsing the query
@@ -142,7 +142,7 @@ func (m *Mod) evalLeftRight(ctx *sql.Context, row sql.Row) (interface{}, interfa
 	return lval, rval, nil
 }
 
-func (m *Mod) convertLeftRight(ctx *sql.Context, left interface{}, right interface{}) (interface{}, interface{}) {
+func (m *Mod) convertLeftRight(ctx *sql.Context, left any, right any) (any, any) {
 	typ := m.Type(ctx)
 	lIsTimeType := types.IsTime(m.LeftChild.Type(ctx))
 	rIsTimeType := types.IsTime(m.RightChild.Type(ctx))
@@ -158,7 +158,7 @@ func (m *Mod) convertLeftRight(ctx *sql.Context, left interface{}, right interfa
 	return left, right
 }
 
-func mod(ctx *sql.Context, lval, rval interface{}) (interface{}, error) {
+func mod(ctx *sql.Context, lval, rval any) (any, error) {
 	switch l := lval.(type) {
 	case float32:
 		switch r := rval.(type) {

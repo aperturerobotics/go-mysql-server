@@ -52,7 +52,7 @@ func NewInSubquery(ctx *sql.Context, left sql.Expression, right sql.Expression) 
 var nilKey, _ = hash.HashOf(nil, nil, sql.NewRow(nil))
 
 // Eval implements the Expression interface.
-func (in *InSubquery) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (in *InSubquery) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	typ := in.LeftChild.Type(ctx).Promote()
 	left, err := in.LeftChild.Eval(ctx, row)
 	if err != nil {

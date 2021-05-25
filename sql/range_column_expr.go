@@ -48,7 +48,7 @@ type MySQLRangeColumnExpr struct {
 }
 
 // OpenRangeColumnExpr returns a MySQLRangeColumnExpr representing {l < x < u}.
-func OpenRangeColumnExpr(lower, upper interface{}, typ Type) MySQLRangeColumnExpr {
+func OpenRangeColumnExpr(lower, upper any, typ Type) MySQLRangeColumnExpr {
 	if lower == nil || upper == nil {
 		return EmptyRangeColumnExpr(typ)
 	}
@@ -66,7 +66,7 @@ func OpenRangeColumnExpr(lower, upper interface{}, typ Type) MySQLRangeColumnExp
 }
 
 // ClosedRangeColumnExpr returns a MySQLRangeColumnExpr representing {l <= x <= u}.
-func ClosedRangeColumnExpr(lower, upper interface{}, typ Type) MySQLRangeColumnExpr {
+func ClosedRangeColumnExpr(lower, upper any, typ Type) MySQLRangeColumnExpr {
 	if lower == nil || upper == nil {
 		return EmptyRangeColumnExpr(typ)
 	}
@@ -84,7 +84,7 @@ func ClosedRangeColumnExpr(lower, upper interface{}, typ Type) MySQLRangeColumnE
 }
 
 // LessThanRangeColumnExpr returns a MySQLRangeColumnExpr representing {x < u}.
-func LessThanRangeColumnExpr(upper interface{}, typ Type) MySQLRangeColumnExpr {
+func LessThanRangeColumnExpr(upper any, typ Type) MySQLRangeColumnExpr {
 	if upper == nil {
 		return EmptyRangeColumnExpr(typ)
 	}
@@ -99,7 +99,7 @@ func LessThanRangeColumnExpr(upper interface{}, typ Type) MySQLRangeColumnExpr {
 }
 
 // LessOrEqualRangeColumnExpr returns a MySQLRangeColumnExpr representing  {x <= u}.
-func LessOrEqualRangeColumnExpr(upper interface{}, typ Type) MySQLRangeColumnExpr {
+func LessOrEqualRangeColumnExpr(upper any, typ Type) MySQLRangeColumnExpr {
 	if upper == nil {
 		return EmptyRangeColumnExpr(typ)
 	}
@@ -114,7 +114,7 @@ func LessOrEqualRangeColumnExpr(upper interface{}, typ Type) MySQLRangeColumnExp
 }
 
 // GreaterThanRangeColumnExpr returns a MySQLRangeColumnExpr representing {x > l}.
-func GreaterThanRangeColumnExpr(lower interface{}, typ Type) MySQLRangeColumnExpr {
+func GreaterThanRangeColumnExpr(lower any, typ Type) MySQLRangeColumnExpr {
 	if lower == nil {
 		return EmptyRangeColumnExpr(typ)
 	}
@@ -129,7 +129,7 @@ func GreaterThanRangeColumnExpr(lower interface{}, typ Type) MySQLRangeColumnExp
 }
 
 // GreaterOrEqualRangeColumnExpr returns a MySQLRangeColumnExpr representing {x >= l}.
-func GreaterOrEqualRangeColumnExpr(lower interface{}, typ Type) MySQLRangeColumnExpr {
+func GreaterOrEqualRangeColumnExpr(lower any, typ Type) MySQLRangeColumnExpr {
 	if lower == nil {
 		return EmptyRangeColumnExpr(typ)
 	}
@@ -336,11 +336,11 @@ func (r MySQLRangeColumnExpr) String() string {
 
 // DebugString returns this MySQLRangeColumnExpr as a string for debugging purposes.
 func (r MySQLRangeColumnExpr) DebugString(ctx *Context) string {
-	var lowerB interface{} = "-∞"
+	var lowerB any = "-∞"
 	if MySQLRangeCutIsBinding(r.LowerBound) {
 		lowerB = GetMySQLRangeCutKey(r.LowerBound)
 	}
-	var upperB interface{} = "∞"
+	var upperB any = "∞"
 	if MySQLRangeCutIsBinding(r.UpperBound) {
 		upperB = GetMySQLRangeCutKey(r.UpperBound)
 	}

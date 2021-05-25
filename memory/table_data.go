@@ -152,7 +152,7 @@ func (td *TableData) truncate(ctx *sql.Context, schema sql.PrimaryKeySchema) *Ta
 	var partitions = map[string][]sql.Row{}
 	numParts := len(td.partitionKeys)
 
-	for i := 0; i < numParts; i++ {
+	for i := range numParts {
 		key := strconv.Itoa(i)
 		keys = append(keys, []byte(key))
 		partitions[key] = []sql.Row{}
@@ -390,7 +390,7 @@ func (td *TableData) sortRows(ctx *sql.Context) {
 	var flattenedRows []partitionRow
 	for _, k := range td.partitionKeys {
 		p := td.partitions[string(k)]
-		for i := 0; i < len(p); i++ {
+		for i := range p {
 			flattenedRows = append(flattenedRows, partitionRow{string(k), i})
 		}
 	}

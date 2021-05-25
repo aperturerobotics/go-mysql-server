@@ -148,7 +148,7 @@ func (rm *RangeMap) DecodeRune(r []byte) ([]byte, bool) {
 			for i := len(entry.inputRange) - 1; i >= 0; i-- {
 				increase += int(r[i]-entry.inputRange[i][0]) * entry.inputMults[i]
 			}
-			for i := 0; i < len(outputData); i++ {
+			for i := range outputData {
 				diff := increase / entry.outputMults[i]
 				outputData[i] = entry.outputRange[i][0] + byte(diff)
 				increase -= diff * entry.outputMults[i]
@@ -171,7 +171,7 @@ func (rm *RangeMap) EncodeRune(r []byte) ([]byte, bool) {
 			for i := len(entry.outputRange) - 1; i >= 0; i-- {
 				increase += int(r[i]-entry.outputRange[i][0]) * entry.outputMults[i]
 			}
-			for i := 0; i < len(inputData); i++ {
+			for i := range inputData {
 				diff := increase / entry.inputMults[i]
 				inputData[i] = entry.inputRange[i][0] + byte(diff)
 				increase -= diff * entry.inputMults[i]
@@ -236,7 +236,7 @@ func (rm *RangeMap) IsReturnSafe() bool {
 // contains returns whether the data falls within the range bounds. Assumes that the length of the data matches the
 // length of the range bounds.
 func (r rangeBounds) contains(data []byte) bool {
-	for i := 0; i < len(r); i++ {
+	for i := range r {
 		if r[i][0] > data[i] || r[i][1] < data[i] {
 			return false
 		}

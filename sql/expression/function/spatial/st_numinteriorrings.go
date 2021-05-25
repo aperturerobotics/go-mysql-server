@@ -73,7 +73,7 @@ func (n *NumInteriorRings) WithChildren(ctx *sql.Context, children ...sql.Expres
 }
 
 // Eval implements the sql.Expression interface.
-func (n *NumInteriorRings) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (n *NumInteriorRings) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := n.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

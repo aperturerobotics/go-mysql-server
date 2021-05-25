@@ -99,7 +99,7 @@ type IndexKeyValueIter interface {
 	// Next returns the next tuple of index key values. The length of the
 	// returned slice will be the same as the number of columns used to
 	// create this iterator. The second returned parameter is a repo's location.
-	Next(*Context) ([]interface{}, []byte, error)
+	Next(*Context) ([]any, []byte, error)
 	Closer
 }
 

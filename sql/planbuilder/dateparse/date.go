@@ -44,7 +44,7 @@ func HasDateOrTime(format string) (hasDate bool, hasTime bool, err error) {
 // More info: https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_date-format
 //
 // Even more info: https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_str-to-date
-func ParseDateWithFormat(date, format string) (interface{}, error) {
+func ParseDateWithFormat(date, format string) (any, error) {
 	parsers, specifiers, err := parsersFromFormatString(format)
 	if err != nil {
 		return nil, err

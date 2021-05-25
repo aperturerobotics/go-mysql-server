@@ -32,12 +32,12 @@ func NewTuple(exprs ...sql.Expression) Tuple {
 }
 
 // Eval implements the Expression interface.
-func (t Tuple) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (t Tuple) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if len(t) == 1 {
 		return t[0].Eval(ctx, row)
 	}
 
-	var result = make([]interface{}, len(t))
+	var result = make([]any, len(t))
 	for i, e := range t {
 		v, err := e.Eval(ctx, row)
 		if err != nil {

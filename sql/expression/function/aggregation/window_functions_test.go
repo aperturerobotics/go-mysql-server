@@ -157,27 +157,27 @@ func TestGroupedAggFuncs(t *testing.T) {
 			Name: "json array null",
 			Agg:  NewJsonArrayAgg(expression.NewGetField(0, types.LongText, "x", true)),
 			Expected: sql.Row{
-				types.JSONDocument{Val: []interface{}{1, nil, 3, 4}},
-				types.JSONDocument{Val: []interface{}{1, nil, 3, 4}},
-				types.JSONDocument{Val: []interface{}{1, 2, nil, nil, 5, 6}},
+				types.JSONDocument{Val: []any{1, nil, 3, 4}},
+				types.JSONDocument{Val: []any{1, nil, 3, 4}},
+				types.JSONDocument{Val: []any{1, 2, nil, nil, 5, 6}},
 			},
 		},
 		{
 			Name: "json array int",
 			Agg:  NewJsonArrayAgg(expression.NewGetField(1, types.LongText, "x", true)),
 			Expected: sql.Row{
-				types.JSONDocument{Val: []interface{}{1, 2, 3, 4}},
-				types.JSONDocument{Val: []interface{}{1, 2, 3, 4}},
-				types.JSONDocument{Val: []interface{}{1, 2, 3, 4, 5, 6}},
+				types.JSONDocument{Val: []any{1, 2, 3, 4}},
+				types.JSONDocument{Val: []any{1, 2, 3, 4}},
+				types.JSONDocument{Val: []any{1, 2, 3, 4, 5, 6}},
 			},
 		},
 		{
 			Name: "json array float",
 			Agg:  NewJsonArrayAgg(expression.NewGetField(3, types.LongText, "x", true)),
 			Expected: sql.Row{
-				types.JSONDocument{Val: []interface{}{float64(1), float64(2), float64(3), float64(4)}},
-				types.JSONDocument{Val: []interface{}{float64(1), float64(2), float64(3), float64(4)}},
-				types.JSONDocument{Val: []interface{}{float64(1), float64(2), float64(3), float64(4), float64(5), float64(6)}},
+				types.JSONDocument{Val: []any{float64(1), float64(2), float64(3), float64(4)}},
+				types.JSONDocument{Val: []any{float64(1), float64(2), float64(3), float64(4)}},
+				types.JSONDocument{Val: []any{float64(1), float64(2), float64(3), float64(4), float64(5), float64(6)}},
 			},
 		},
 		{
@@ -190,9 +190,9 @@ func TestGroupedAggFuncs(t *testing.T) {
 				).(*JSONObjectAgg),
 			),
 			Expected: sql.Row{
-				types.JSONDocument{Val: map[string]interface{}{"1": 1, "2": nil, "3": 3, "4": 4}},
-				types.JSONDocument{Val: map[string]interface{}{"1": 1, "2": nil, "3": 3, "4": 4}},
-				types.JSONDocument{Val: map[string]interface{}{"1": 1, "2": 2, "3": nil, "4": nil, "5": 5, "6": 6}},
+				types.JSONDocument{Val: map[string]any{"1": 1, "2": nil, "3": 3, "4": 4}},
+				types.JSONDocument{Val: map[string]any{"1": 1, "2": nil, "3": 3, "4": 4}},
+				types.JSONDocument{Val: map[string]any{"1": 1, "2": 2, "3": nil, "4": nil, "5": 5, "6": 6}},
 			},
 		},
 		{
@@ -205,9 +205,9 @@ func TestGroupedAggFuncs(t *testing.T) {
 				).(*JSONObjectAgg),
 			),
 			Expected: sql.Row{
-				types.JSONDocument{Val: map[string]interface{}{"1": 1, "2": nil, "3": 3, "4": 4}},
-				types.JSONDocument{Val: map[string]interface{}{"1": 1, "2": nil, "3": 3, "4": 4}},
-				types.JSONDocument{Val: map[string]interface{}{"1": 1, "2": 2, "3": nil, "4": nil, "5": 5, "6": 6}},
+				types.JSONDocument{Val: map[string]any{"1": 1, "2": nil, "3": 3, "4": 4}},
+				types.JSONDocument{Val: map[string]any{"1": 1, "2": nil, "3": 3, "4": 4}},
+				types.JSONDocument{Val: map[string]any{"1": 1, "2": 2, "3": nil, "4": nil, "5": 5, "6": 6}},
 			},
 		},
 		{
@@ -220,9 +220,9 @@ func TestGroupedAggFuncs(t *testing.T) {
 				).(*JSONObjectAgg),
 			),
 			Expected: sql.Row{
-				types.JSONDocument{Val: map[string]interface{}{"1": float64(1), "2": float64(2), "3": float64(3), "4": float64(4)}},
-				types.JSONDocument{Val: map[string]interface{}{"1": float64(1), "2": float64(2), "3": float64(3), "4": float64(4)}},
-				types.JSONDocument{Val: map[string]interface{}{"1": float64(1), "2": float64(2), "3": float64(3), "4": float64(4), "5": float64(5), "6": float64(6)}},
+				types.JSONDocument{Val: map[string]any{"1": float64(1), "2": float64(2), "3": float64(3), "4": float64(4)}},
+				types.JSONDocument{Val: map[string]any{"1": float64(1), "2": float64(2), "3": float64(3), "4": float64(4)}},
+				types.JSONDocument{Val: map[string]any{"1": float64(1), "2": float64(2), "3": float64(3), "4": float64(4), "5": float64(5), "6": float64(6)}},
 			},
 		},
 		{
@@ -235,9 +235,9 @@ func TestGroupedAggFuncs(t *testing.T) {
 				).(*JSONObjectAgg),
 			),
 			Expected: sql.Row{
-				types.JSONDocument{Val: map[string]interface{}{"1": float64(1), "2": float64(2), "3": float64(3), "4": float64(4)}},
-				types.JSONDocument{Val: map[string]interface{}{"1": float64(1), "2": float64(2), "3": float64(3), "4": float64(4)}},
-				types.JSONDocument{Val: map[string]interface{}{"1": float64(1), "2": float64(2), "3": float64(3), "4": float64(4), "5": float64(5), "6": float64(6)}},
+				types.JSONDocument{Val: map[string]any{"1": float64(1), "2": float64(2), "3": float64(3), "4": float64(4)}},
+				types.JSONDocument{Val: map[string]any{"1": float64(1), "2": float64(2), "3": float64(3), "4": float64(4)}},
+				types.JSONDocument{Val: map[string]any{"1": float64(1), "2": float64(2), "3": float64(3), "4": float64(4), "5": float64(5), "6": float64(6)}},
 			},
 		},
 	}

@@ -141,7 +141,7 @@ func isLineStringSimple(l types.LineString) bool {
 }
 
 // Eval implements the sql.Expression interface.
-func (s *IsSimple) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *IsSimple) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := s.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -209,7 +209,7 @@ func (s *IsSimple) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 }
 
 // evalRaw checks simplicity for an already-unwrapped geometry value.
-func (s *IsSimple) evalRaw(ctx *sql.Context, gv types.GeometryValue) (interface{}, error) {
+func (s *IsSimple) evalRaw(ctx *sql.Context, gv types.GeometryValue) (any, error) {
 	switch v := gv.(type) {
 	case types.Point:
 		return true, nil

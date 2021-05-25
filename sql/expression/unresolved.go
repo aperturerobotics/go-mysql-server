@@ -95,7 +95,7 @@ func (uc *UnresolvedColumn) String() string {
 }
 
 // Eval implements the Expression interface.
-func (*UnresolvedColumn) Eval(ctx *sql.Context, r sql.Row) (interface{}, error) {
+func (*UnresolvedColumn) Eval(ctx *sql.Context, r sql.Row) (any, error) {
 	panic("unresolved column is a placeholder node, but Eval was called")
 }
 
@@ -317,7 +317,7 @@ func (uf *UnresolvedFunction) DebugString(ctx *sql.Context) string {
 }
 
 // Eval implements the Expression interface.
-func (*UnresolvedFunction) Eval(ctx *sql.Context, r sql.Row) (interface{}, error) {
+func (*UnresolvedFunction) Eval(ctx *sql.Context, r sql.Row) (any, error) {
 	panic("unresolved function is a placeholder node, but Eval was called")
 }
 

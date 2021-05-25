@@ -62,18 +62,18 @@ func TestJSONArray(t *testing.T) {
 	testCases := []struct {
 		f        sql.Expression
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      error
 	}{
-		{f0, sql.Row{}, types.JSONDocument{Val: []interface{}{}}, nil},
-		{f1, sql.Row{[]interface{}{1, 2}}, types.JSONDocument{Val: []interface{}{[]interface{}{1, 2}}}, nil},
-		{f2, sql.Row{[]interface{}{1, 2}, "second item"}, types.JSONDocument{Val: []interface{}{[]interface{}{1, 2}, "second item"}}, nil},
-		{f2, sql.Row{[]interface{}{1, 2}, map[string]interface{}{"name": "x"}}, types.JSONDocument{Val: []interface{}{[]interface{}{1, 2}, map[string]interface{}{"name": "x"}}}, nil},
-		{f2, sql.Row{map[string]interface{}{"name": "x"}, map[string]interface{}{"id": 47}}, types.JSONDocument{Val: []interface{}{map[string]interface{}{"name": "x"}, map[string]interface{}{"id": 47}}}, nil},
-		{f3, sql.Row{"foo", -44, "b"}, types.JSONDocument{Val: []interface{}{"foo", -44, "b"}}, nil},
-		{f4, sql.Row{100, true, nil, "four"}, types.JSONDocument{Val: []interface{}{100, true, nil, "four"}}, nil},
+		{f0, sql.Row{}, types.JSONDocument{Val: []any{}}, nil},
+		{f1, sql.Row{[]any{1, 2}}, types.JSONDocument{Val: []any{[]any{1, 2}}}, nil},
+		{f2, sql.Row{[]any{1, 2}, "second item"}, types.JSONDocument{Val: []any{[]any{1, 2}, "second item"}}, nil},
+		{f2, sql.Row{[]any{1, 2}, map[string]any{"name": "x"}}, types.JSONDocument{Val: []any{[]any{1, 2}, map[string]any{"name": "x"}}}, nil},
+		{f2, sql.Row{map[string]any{"name": "x"}, map[string]any{"id": 47}}, types.JSONDocument{Val: []any{map[string]any{"name": "x"}, map[string]any{"id": 47}}}, nil},
+		{f3, sql.Row{"foo", -44, "b"}, types.JSONDocument{Val: []any{"foo", -44, "b"}}, nil},
+		{f4, sql.Row{100, true, nil, "four"}, types.JSONDocument{Val: []any{100, true, nil, "four"}}, nil},
 		{f4, sql.Row{100.44, `{"name":null,"id":{"number":998,"type":"A"}}`, nil, `four`},
-			types.JSONDocument{Val: []interface{}{100.44, "{\"name\":null,\"id\":{\"number\":998,\"type\":\"A\"}}", nil, "four"}}, nil},
+			types.JSONDocument{Val: []any{100.44, "{\"name\":null,\"id\":{\"number\":998,\"type\":\"A\"}}", nil, "four"}}, nil},
 	}
 
 	for _, tt := range testCases {

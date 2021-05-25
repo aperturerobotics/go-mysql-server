@@ -74,10 +74,10 @@ func (j *JSONDepth) IsNullable(ctx *sql.Context) bool {
 }
 
 // depth returns the maximum depth of a JSON document.
-func depth(obj interface{}) (int, error) {
+func depth(obj any) (int, error) {
 	var maxDepth int
 	switch o := obj.(type) {
-	case []interface{}:
+	case []any:
 		for _, v := range o {
 			d, err := depth(v)
 			if err != nil {
@@ -87,7 +87,7 @@ func depth(obj interface{}) (int, error) {
 				maxDepth = d
 			}
 		}
-	case map[string]interface{}:
+	case map[string]any:
 		for _, v := range o {
 			d, err := depth(v)
 			if err != nil {
@@ -102,7 +102,7 @@ func depth(obj interface{}) (int, error) {
 }
 
 // Eval implements sql.Expression interface.
-func (j *JSONDepth) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j *JSONDepth) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	span, ctx := ctx.Span(fmt.Sprintf("function.%s", j.FunctionName()))
 	defer span.End()
 

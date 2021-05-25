@@ -52,7 +52,7 @@ func (bv *BindVar) IsNullable(ctx *sql.Context) bool {
 	return true
 }
 
-func (bv *BindVar) Eval(*sql.Context, sql.Row) (interface{}, error) {
+func (bv *BindVar) Eval(*sql.Context, sql.Row) (any, error) {
 	return nil, sql.ErrUnboundPreparedStatementVariable.New(bv.Name)
 }
 

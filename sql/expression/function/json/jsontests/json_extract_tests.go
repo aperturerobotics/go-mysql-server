@@ -52,17 +52,17 @@ func JsonExtractTestCases(t *testing.T, prepare prepareJsonValue) []testCase {
 	)
 	require.NoError(t, err)
 
-	var jsonDocument sql.JSONWrapper = types.JSONDocument{Val: map[string]interface{}{
-		"a": []interface{}{float64(1), float64(2), float64(3), float64(4)},
-		"b": map[string]interface{}{
+	var jsonDocument sql.JSONWrapper = types.JSONDocument{Val: map[string]any{
+		"a": []any{float64(1), float64(2), float64(3), float64(4)},
+		"b": map[string]any{
 			"c": "foo",
 			"d": true,
 		},
-		"e": []interface{}{
-			[]interface{}{float64(1), float64(2)},
-			[]interface{}{float64(3), float64(4)},
+		"e": []any{
+			[]any{float64(1), float64(2)},
+			[]any{float64(3), float64(4)},
 		},
-		"f": map[string]interface{}{
+		"f": map[string]any{
 			`key.with.dots`:        float64(0),
 			`key with spaces`:      float64(1),
 			`key"with"dquotes`:     float64(2),
@@ -88,13 +88,13 @@ func JsonExtractTestCases(t *testing.T, prepare prepareJsonValue) []testCase {
 		{
 			f:        f2,
 			row:      sql.Row{prepare(t, `[{"a": 1, "b": 2}, {"a": 3, "b": 4}]`), "$[*].a"},
-			expected: types.JSONDocument{Val: []interface{}{1, 3}},
+			expected: types.JSONDocument{Val: []any{1, 3}},
 		},
-		{f: f3, row: sql.Row{jsonInput, "$.b.c", "$.b.d"}, expected: types.JSONDocument{Val: []interface{}{"foo", true}}},
-		{f: f4, row: sql.Row{jsonInput, "$.b.c", "$.b.d", "$.e[0][*]"}, expected: types.JSONDocument{Val: []interface{}{
+		{f: f3, row: sql.Row{jsonInput, "$.b.c", "$.b.d"}, expected: types.JSONDocument{Val: []any{"foo", true}}},
+		{f: f4, row: sql.Row{jsonInput, "$.b.c", "$.b.d", "$.e[0][*]"}, expected: types.JSONDocument{Val: []any{
 			"foo",
 			true,
-			[]interface{}{1., 2.},
+			[]any{1., 2.},
 		}}},
 
 		{f: f2, row: sql.Row{jsonInput, `$.f."key.with.dots"`}, expected: types.JSONDocument{Val: float64(0)}},
@@ -139,17 +139,17 @@ func testJSONExtractAsterisk(t *testing.T, prepare prepareJsonValue) {
 		result, err := f.Eval(sql.NewEmptyContext(), nil)
 		require.NoError(err)
 		// order of results is not guaranteed
-		for _, v := range result.(types.JSONDocument).Val.([]interface{}) {
+		for _, v := range result.(types.JSONDocument).Val.([]any) {
 			if vStr, ok := v.(string); ok && vStr == "abc" {
 				continue
 			}
 			if vInt, ok := v.(float64); ok && vInt == 123 {
 				continue
 			}
-			if vArr, ok := v.([]interface{}); ok && len(vArr) == 3 && vArr[0].(float64) == 1 && vArr[1].(float64) == 2 && vArr[2].(float64) == 3 {
+			if vArr, ok := v.([]any); ok && len(vArr) == 3 && vArr[0].(float64) == 1 && vArr[1].(float64) == 2 && vArr[2].(float64) == 3 {
 				continue
 			}
-			if vMap, ok := v.(map[string]interface{}); ok && len(vMap) == 3 && vMap["a"].(float64) == 1 && vMap["b"].(float64) == 2 && vMap["c"].(float64) == 3 {
+			if vMap, ok := v.(map[string]any); ok && len(vMap) == 3 && vMap["a"].(float64) == 1 && vMap["b"].(float64) == 2 && vMap["c"].(float64) == 3 {
 				continue
 			}
 			t.Errorf("got unexpected value: %v", v)

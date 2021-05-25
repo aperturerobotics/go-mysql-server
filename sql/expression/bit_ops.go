@@ -109,7 +109,7 @@ func (b *BitOp) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.
 }
 
 // Eval implements the Expression interface.
-func (b *BitOp) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (b *BitOp) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	lval, rval, err := b.evalLeftRight(ctx, row)
 	if err != nil {
 		return nil, err
@@ -140,8 +140,8 @@ func (b *BitOp) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	return nil, errUnableToEval.New(lval, b.Op, rval)
 }
 
-func (b *BitOp) evalLeftRight(ctx *sql.Context, row sql.Row) (interface{}, interface{}, error) {
-	var lval, rval interface{}
+func (b *BitOp) evalLeftRight(ctx *sql.Context, row sql.Row) (any, any, error) {
+	var lval, rval any
 	var err error
 
 	// bit ops used with Interval error is caught at parsing the query
@@ -158,7 +158,7 @@ func (b *BitOp) evalLeftRight(ctx *sql.Context, row sql.Row) (interface{}, inter
 	return lval, rval, nil
 }
 
-func (b *BitOp) convertLeftRight(ctx *sql.Context, left interface{}, right interface{}) (interface{}, interface{}, error) {
+func (b *BitOp) convertLeftRight(ctx *sql.Context, left any, right any) (any, any, error) {
 	// Determine the appropriate conversion type based on operand types
 	var typ sql.Type
 	lTyp := b.LeftChild.Type(ctx)
@@ -192,7 +192,7 @@ func convertUintFromInt(n int64) uint64 {
 	return uintVal
 }
 
-func bitAnd(lval, rval interface{}) (interface{}, error) {
+func bitAnd(lval, rval any) (any, error) {
 	if lval == nil || rval == nil {
 		return 0, nil
 	}
@@ -222,7 +222,7 @@ func bitAnd(lval, rval interface{}) (interface{}, error) {
 	return nil, errUnableToCast.New(lval, rval)
 }
 
-func bitOr(lval, rval interface{}) (interface{}, error) {
+func bitOr(lval, rval any) (any, error) {
 	if lval == nil && rval == nil {
 		return 0, nil
 	} else if lval == nil {
@@ -270,7 +270,7 @@ func bitOr(lval, rval interface{}) (interface{}, error) {
 	return nil, errUnableToCast.New(lval, rval)
 }
 
-func bitXor(lval, rval interface{}) (interface{}, error) {
+func bitXor(lval, rval any) (any, error) {
 	if lval == nil && rval == nil {
 		return 0, nil
 	} else if lval == nil {
@@ -318,7 +318,7 @@ func bitXor(lval, rval interface{}) (interface{}, error) {
 	return nil, errUnableToCast.New(lval, rval)
 }
 
-func shiftLeft(lval, rval interface{}) (interface{}, error) {
+func shiftLeft(lval, rval any) (any, error) {
 	if lval == nil {
 		return 0, nil
 	}
@@ -357,7 +357,7 @@ func shiftLeft(lval, rval interface{}) (interface{}, error) {
 	return nil, errUnableToCast.New(lval, rval)
 }
 
-func shiftRight(lval, rval interface{}) (interface{}, error) {
+func shiftRight(lval, rval any) (any, error) {
 	if lval == nil {
 		return 0, nil
 	}

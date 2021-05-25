@@ -20,13 +20,6 @@ import (
 	"strings"
 )
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // DistanceForStrings returns the edit distance between source and target.
 // It has a runtime proportional to len(source) * len(target) and memory use
 // proportional to len(target).
@@ -37,7 +30,7 @@ func distanceForStrings(source, target string) int {
 	width := len(target) + 1
 	matrix := make([][]int, 2)
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		matrix[i] = make([]int, width)
 		matrix[i][0] = i
 	}
@@ -99,7 +92,7 @@ func Find(names []string, src string) string {
 
 // FindFromMap does the same as Find but taking a map instead
 // of a string array as first argument.
-func FindFromMap(names interface{}, src string) string {
+func FindFromMap(names any, src string) string {
 	rnames := reflect.ValueOf(names)
 	if rnames.Kind() != reflect.Map {
 		panic("Implementation error: non map used as first argument " +

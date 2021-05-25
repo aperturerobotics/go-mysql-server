@@ -58,7 +58,7 @@ func (s *SetField) CollationCoercibility(ctx *sql.Context) (collation sql.Collat
 
 // Eval implements the Expression interface.
 // Returns a copy of the given row with an updated value.
-func (s *SetField) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *SetField) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	getField, ok := s.LeftChild.(*GetField)
 	if !ok {
 		return nil, errCannotSetField.New(s.LeftChild)

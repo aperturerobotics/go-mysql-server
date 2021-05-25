@@ -203,7 +203,7 @@ func (pdb PrivilegedDatabase) GetTableNames(ctx *sql.Context) ([]string, error) 
 }
 
 // GetTableInsensitiveAsOf returns a new sql.VersionedDatabase.
-func (pdb PrivilegedDatabase) GetTableInsensitiveAsOf(ctx *sql.Context, tblName string, asOf interface{}) (sql.Table, bool, error) {
+func (pdb PrivilegedDatabase) GetTableInsensitiveAsOf(ctx *sql.Context, tblName string, asOf any) (sql.Table, bool, error) {
 	db, ok := pdb.db.(sql.VersionedDatabase)
 	if !ok {
 		return nil, false, sql.ErrAsOfNotSupported.New(pdb.db.Name())
@@ -219,7 +219,7 @@ func (pdb PrivilegedDatabase) GetTableInsensitiveAsOf(ctx *sql.Context, tblName 
 }
 
 // GetTableNamesAsOf returns a new sql.VersionedDatabase.
-func (pdb PrivilegedDatabase) GetTableNamesAsOf(ctx *sql.Context, asOf interface{}) ([]string, error) {
+func (pdb PrivilegedDatabase) GetTableNamesAsOf(ctx *sql.Context, asOf any) ([]string, error) {
 	db, ok := pdb.db.(sql.VersionedDatabase)
 	if !ok {
 		return nil, nil
@@ -338,7 +338,7 @@ func (pdb PrivilegedDatabase) GetEvent(ctx *sql.Context, name string) (sql.Event
 }
 
 // GetEvents implements sql.EventDatabase
-func (pdb PrivilegedDatabase) GetEvents(ctx *sql.Context) ([]sql.EventDefinition, interface{}, error) {
+func (pdb PrivilegedDatabase) GetEvents(ctx *sql.Context) ([]sql.EventDefinition, any, error) {
 	if db, ok := pdb.db.(sql.EventDatabase); ok {
 		return db.GetEvents(ctx)
 	}
@@ -370,7 +370,7 @@ func (pdb PrivilegedDatabase) UpdateEvent(ctx *sql.Context, originalName string,
 }
 
 // NeedsToReloadEvents implements sql.EventDatabase
-func (pdb PrivilegedDatabase) NeedsToReloadEvents(ctx *sql.Context, token interface{}) (bool, error) {
+func (pdb PrivilegedDatabase) NeedsToReloadEvents(ctx *sql.Context, token any) (bool, error) {
 	if db, ok := pdb.db.(sql.EventDatabase); ok {
 		return db.NeedsToReloadEvents(ctx, token)
 	}

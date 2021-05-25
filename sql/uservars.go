@@ -22,9 +22,9 @@ import (
 // SessionUserVariables is a simple dictionary to set and retrieve user variables within a session.
 type SessionUserVariables interface {
 	// SetUserVariable sets the user variable name to the given value and type
-	SetUserVariable(ctx *Context, varName string, value interface{}, typ Type) error
+	SetUserVariable(ctx *Context, varName string, value any, typ Type) error
 	// GetUserVariable returns the value and type of the user variable named
-	GetUserVariable(ctx *Context, varName string) (Type, interface{}, error)
+	GetUserVariable(ctx *Context, varName string) (Type, any, error)
 }
 
 type UserVars struct {
@@ -41,7 +41,7 @@ func NewUserVars() SessionUserVariables {
 	}
 }
 
-func (u *UserVars) SetUserVariable(ctx *Context, varName string, value interface{}, typ Type) error {
+func (u *UserVars) SetUserVariable(ctx *Context, varName string, value any, typ Type) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.userVars[strings.ToLower(varName)] = TypedValue{Value: value, Typ: typ}
@@ -49,7 +49,7 @@ func (u *UserVars) SetUserVariable(ctx *Context, varName string, value interface
 }
 
 // GetUserVariable implements the Session interface.
-func (u *UserVars) GetUserVariable(ctx *Context, varName string) (Type, interface{}, error) {
+func (u *UserVars) GetUserVariable(ctx *Context, varName string) (Type, any, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	val, ok := u.userVars[strings.ToLower(varName)]

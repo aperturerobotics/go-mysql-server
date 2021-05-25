@@ -85,7 +85,7 @@ func calculateLength(l types.LineString) float64 {
 }
 
 // Eval implements the sql.Expression interface.
-func (s *STLength) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *STLength) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate first argument
 	v1, err := s.ChildExpressions[0].Eval(ctx, row)
 	if err != nil {

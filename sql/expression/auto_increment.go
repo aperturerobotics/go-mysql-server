@@ -94,7 +94,7 @@ func (i *AutoIncrement) CollationCoercibility(ctx *sql.Context) (collation sql.C
 }
 
 // Eval implements the Expression interface.
-func (i *AutoIncrement) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *AutoIncrement) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// get value provided by INSERT
 	given, err := i.Child.Eval(ctx, row)
 	if err != nil {

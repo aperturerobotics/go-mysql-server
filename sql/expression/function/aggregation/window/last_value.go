@@ -108,7 +108,7 @@ func (f *LastValue) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements sql.Expression
-func (f *LastValue) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (f *LastValue) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return nil, sql.ErrWindowUnsupported.New(f.FunctionName())
 }
 

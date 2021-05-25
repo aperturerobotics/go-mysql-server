@@ -40,7 +40,7 @@ func TestArrayAppend(t *testing.T) {
 	testCases := []struct {
 		f        sql.Expression
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      error
 	}{
 
@@ -95,7 +95,7 @@ func TestArrayAppend(t *testing.T) {
 			if tstC.err == nil {
 				req.NoError(err)
 
-				var expect interface{}
+				var expect any
 				if tstC.expected != nil {
 					expect, _, err = types.JSON.Convert(sqlCtx, tstC.expected)
 					if err != nil {

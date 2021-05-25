@@ -148,7 +148,7 @@ func (l *Lead) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements sql.Expression
-func (l *Lead) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (l *Lead) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return nil, sql.ErrWindowUnsupported.New(l.FunctionName())
 }
 

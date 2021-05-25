@@ -72,7 +72,7 @@ func (j *JSONPretty) Type(ctx *sql.Context) sql.Type {
 }
 
 // Eval implements sql.Expression
-func (j *JSONPretty) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j *JSONPretty) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	span, ctx := ctx.Span(fmt.Sprintf("function.%s", j.FunctionName()))
 	defer span.End()
 

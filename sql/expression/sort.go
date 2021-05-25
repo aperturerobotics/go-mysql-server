@@ -120,11 +120,11 @@ func (h *TopRowsHeap) Less(i, j int) bool {
 	return !h.Sorter.Less(i, j)
 }
 
-func (h *TopRowsHeap) Push(x interface{}) {
+func (h *TopRowsHeap) Push(x any) {
 	h.Sorter.Rows = append(h.Sorter.Rows, x.(sql.Row))
 }
 
-func (h *TopRowsHeap) Pop() interface{} {
+func (h *TopRowsHeap) Pop() any {
 	n := len(h.Sorter.Rows)
 	res := h.Sorter.Rows[n-1]
 	h.Sorter.Rows = h.Sorter.Rows[:n-1]

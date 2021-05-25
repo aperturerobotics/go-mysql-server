@@ -63,7 +63,7 @@ func ResolveCoercibility(leftCollation CollationID, leftCoercibility byte, right
 }
 
 // GetCoercibility returns the coercibility of the given node or expression.
-func GetCoercibility(ctx *Context, nodeOrExpr interface{}) (collation CollationID, coercibility byte) {
+func GetCoercibility(ctx *Context, nodeOrExpr any) (collation CollationID, coercibility byte) {
 	if nodeOrExpr == nil {
 		return Collation_binary, 6
 	}

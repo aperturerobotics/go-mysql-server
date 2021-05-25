@@ -26,7 +26,7 @@ import (
 func TestBitAnd(t *testing.T) {
 	var testCases = []struct {
 		name                string
-		left, right         interface{}
+		left, right         any
 		leftType, rightType sql.Type
 		expected            uint64
 	}{
@@ -57,7 +57,7 @@ func TestBitAnd(t *testing.T) {
 func TestBitOr(t *testing.T) {
 	var testCases = []struct {
 		name                string
-		left, right         interface{}
+		left, right         any
 		leftType, rightType sql.Type
 		expected            uint64
 	}{
@@ -88,7 +88,7 @@ func TestBitOr(t *testing.T) {
 func TestBitXor(t *testing.T) {
 	var testCases = []struct {
 		name                string
-		left, right         interface{}
+		left, right         any
 		leftType, rightType sql.Type
 		expected            uint64
 	}{
@@ -170,7 +170,7 @@ func TestShiftRight(t *testing.T) {
 func TestAllUint64(t *testing.T) {
 	var testCases = []struct {
 		op        string
-		value     interface{}
+		value     any
 		valueType sql.Type
 		expected  uint64
 	}{

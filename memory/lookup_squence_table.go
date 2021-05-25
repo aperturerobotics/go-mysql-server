@@ -101,10 +101,7 @@ func (s LookupSequenceTable) PartitionRows(ctx *sql.Context, partition sql.Parti
 	if !ok {
 		return &SequenceTableFnRowIter{i: 0, n: s.length}, nil
 	}
-	min := int64(0)
-	if sp.min > min {
-		min = sp.min
-	}
+	min := max(sp.min, int64(0))
 	max := int64(s.length) - 1
 	if sp.max < max {
 		max = sp.max

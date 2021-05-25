@@ -173,8 +173,8 @@ func (h Histogram) Clone(context.Context) JSONWrapper {
 	return h
 }
 
-func (h Histogram) ToInterface(context.Context) (interface{}, error) {
-	ret := make([]interface{}, len(h))
+func (h Histogram) ToInterface(context.Context) (any, error) {
+	ret := make([]any, len(h))
 	for i, b := range h {
 		var upperBound Row
 		for _, v := range b.UpperBound() {
@@ -188,7 +188,7 @@ func (h Histogram) ToInterface(context.Context) (interface{}, error) {
 			}
 			mcvs[i] = row
 		}
-		ret[i] = map[string]interface{}{
+		ret[i] = map[string]any{
 			"row_count":      b.RowCount(),
 			"null_count":     b.NullCount(),
 			"distinct_count": b.DistinctCount(),

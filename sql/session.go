@@ -70,31 +70,31 @@ type Session interface {
 	// SetClient returns a new session with the given client.
 	SetClient(Client)
 	// InitSessionVariableDefault sets this session's default value of the system variable with the given name.
-	InitSessionVariableDefault(ctx *Context, sysVarName string, value interface{}) error
+	InitSessionVariableDefault(ctx *Context, sysVarName string, value any) error
 	// SetSessionVariable sets the given system variable to the value given for this session.
-	SetSessionVariable(ctx *Context, sysVarName string, value interface{}) error
+	SetSessionVariable(ctx *Context, sysVarName string, value any) error
 	// InitSessionVariable sets the given system variable to the value given for this session and will allow for
 	// initialization of readonly variables.
-	InitSessionVariable(ctx *Context, sysVarName string, value interface{}) error
+	InitSessionVariable(ctx *Context, sysVarName string, value any) error
 	// SetUserVariable sets the given user variable to the value given for this session, or creates it for this session.
-	SetUserVariable(ctx *Context, varName string, value interface{}, typ Type) error
+	SetUserVariable(ctx *Context, varName string, value any, typ Type) error
 	// GetSessionVariable returns this session's value of the system variable with the given name.
 	// To access global scope, use sql.SystemVariables.GetGlobal instead.
-	GetSessionVariable(ctx *Context, sysVarName string) (interface{}, error)
+	GetSessionVariable(ctx *Context, sysVarName string) (any, error)
 	// GetSessionVariableDefault returns this session's default value of the system variable with the given name.
 	// To access global scope, use sql.SystemVariables.GetGlobal instead.
-	GetSessionVariableDefault(ctx *Context, sysVarName string) (interface{}, error)
+	GetSessionVariableDefault(ctx *Context, sysVarName string) (any, error)
 	// GetUserVariable returns this session's value of the user variable with the given name, along with its most
 	// appropriate type.
-	GetUserVariable(ctx *Context, varName string) (Type, interface{}, error)
+	GetUserVariable(ctx *Context, varName string) (Type, any, error)
 	// GetAllSessionVariables returns a copy of all session variable values.
-	GetAllSessionVariables() map[string]interface{}
+	GetAllSessionVariables() map[string]any
 	// GetStatusVariable returns the value of the status variable with session scope with the given name.
 	// To access global scope, use sql.StatusVariables instead.
-	GetStatusVariable(ctx *Context, statVarName string) (interface{}, error)
+	GetStatusVariable(ctx *Context, statVarName string) (any, error)
 	// SetStatusVariable sets the value of the status variable with session scope with the given name.
 	// To access global scope, use sql.StatusVariables.GetGlobal instead.
-	SetStatusVariable(ctx *Context, statVarName string, val interface{}) error
+	SetStatusVariable(ctx *Context, statVarName string, val any) error
 	// GetAllStatusVariables returns a map of all status variables with session scope and their values.
 	// To access global scope, use sql.StatusVariables instead.
 	GetAllStatusVariables(ctx *Context) map[string]StatusVarValue
@@ -195,13 +195,13 @@ type Session interface {
 type PersistableSession interface {
 	Session
 	// PersistGlobal writes to the persisted global system variables file
-	PersistGlobal(ctx *Context, sysVarName string, value interface{}) error
+	PersistGlobal(ctx *Context, sysVarName string, value any) error
 	// RemovePersistedGlobal deletes a variable from the persisted globals file
 	RemovePersistedGlobal(sysVarName string) error
 	// RemoveAllPersistedGlobals clears the contents of the persisted globals file
 	RemoveAllPersistedGlobals() error
 	// GetPersistedValue returns persisted value for a global system variable
-	GetPersistedValue(k string) (interface{}, error)
+	GetPersistedValue(k string) (any, error)
 }
 
 // TransactionSession can BEGIN, ROLLBACK and COMMIT transactions, as well as create SAVEPOINTS and restore to them.
@@ -249,7 +249,7 @@ type (
 	// TypedValue is a value along with its type.
 	TypedValue struct {
 		Typ   Type
-		Value interface{}
+		Value any
 	}
 
 	// Warning stands for mySQL warning record.
@@ -664,7 +664,7 @@ func (c *Context) RootSpan() trace.Span {
 }
 
 // Error adds an error as warning to the session.
-func (c *Context) Error(code int, msg string, args ...interface{}) {
+func (c *Context) Error(code int, msg string, args ...any) {
 	if c == nil || c.Session == nil {
 		return
 	}
@@ -677,7 +677,7 @@ func (c *Context) Error(code int, msg string, args ...interface{}) {
 }
 
 // Warn adds a warning to the session.
-func (c *Context) Warn(code int, msg string, args ...interface{}) {
+func (c *Context) Warn(code int, msg string, args ...any) {
 	if c == nil || c.Session == nil {
 		return
 	}
@@ -856,7 +856,7 @@ func GetTmpdirSessionVar() string {
 }
 
 // HasDefaultValue checks if session variable value is the default one.
-func HasDefaultValue(ctx *Context, s Session, key string) (bool, interface{}) {
+func HasDefaultValue(ctx *Context, s Session, key string) (bool, any) {
 	val, err := s.GetSessionVariable(ctx, key)
 	if err == nil {
 		sysVar, _, ok := SystemVariables.GetGlobal(key)

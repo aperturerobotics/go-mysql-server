@@ -207,7 +207,7 @@ type ReplicationOptionValue interface {
 	// GetValue returns the raw, untyped option value. This method should generally not be used; callers should instead
 	// find the specific type implementing the ReplicationOptionValue interface and use its functions in order to get
 	// typed values.
-	GetValue() interface{}
+	GetValue() any
 }
 
 // StringReplicationOptionValue is a ReplicationOptionValue implementation that holds a string value.
@@ -217,7 +217,7 @@ type StringReplicationOptionValue struct {
 
 var _ ReplicationOptionValue = (*StringReplicationOptionValue)(nil)
 
-func (ov StringReplicationOptionValue) GetValue() interface{} {
+func (ov StringReplicationOptionValue) GetValue() any {
 	return ov.GetValueAsString()
 }
 
@@ -238,7 +238,7 @@ type TableNamesReplicationOptionValue struct {
 
 var _ ReplicationOptionValue = (*TableNamesReplicationOptionValue)(nil)
 
-func (ov TableNamesReplicationOptionValue) GetValue() interface{} {
+func (ov TableNamesReplicationOptionValue) GetValue() any {
 	return ov.GetValueAsTableList()
 }
 
@@ -269,7 +269,7 @@ type IntegerReplicationOptionValue struct {
 
 var _ ReplicationOptionValue = (*IntegerReplicationOptionValue)(nil)
 
-func (ov IntegerReplicationOptionValue) GetValue() interface{} {
+func (ov IntegerReplicationOptionValue) GetValue() any {
 	return ov.GetValueAsInt()
 }
 

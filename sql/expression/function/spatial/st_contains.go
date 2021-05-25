@@ -80,7 +80,7 @@ func (c *Contains) WithChildren(ctx *sql.Context, children ...sql.Expression) (s
 
 // Eval implements the sql.Expression interface.
 // ST_Contains(g1, g2) is equivalent to ST_Within(g2, g1).
-func (c *Contains) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (c *Contains) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	geom1, err := c.LeftChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err

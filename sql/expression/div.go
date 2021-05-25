@@ -107,7 +107,7 @@ func (d *Div) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Ex
 }
 
 // Eval implements the Expression interface.
-func (d *Div) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (d *Div) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	lval, rval, err := d.evalLeftRight(ctx, row)
 	if err != nil {
 		return nil, err
@@ -135,8 +135,8 @@ func (d *Div) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	return result, nil
 }
 
-func (d *Div) evalLeftRight(ctx *sql.Context, row sql.Row) (interface{}, interface{}, error) {
-	var lval, rval interface{}
+func (d *Div) evalLeftRight(ctx *sql.Context, row sql.Row) (any, any, error) {
+	var lval, rval any
 	var err error
 
 	// division used with Interval error is caught at parsing the query
@@ -175,7 +175,7 @@ func (d *Div) evalLeftRight(ctx *sql.Context, row sql.Row) (interface{}, interfa
 // from the expression tree is converted to a Decimal in order to match MySQL's behavior.
 // The decimal types of left and right value does NOT need to be the same. Both the types
 // should be preserved.
-func (d *Div) convertLeftRight(ctx *sql.Context, left interface{}, right interface{}) (interface{}, interface{}) {
+func (d *Div) convertLeftRight(ctx *sql.Context, left any, right any) (any, any) {
 	typ := d.internalType(ctx)
 	lIsTimeType := types.IsTime(d.LeftChild.Type(ctx))
 	rIsTimeType := types.IsTime(d.RightChild.Type(ctx))
@@ -195,7 +195,7 @@ func (d *Div) convertLeftRight(ctx *sql.Context, left interface{}, right interfa
 	return left, right
 }
 
-func (d *Div) div(ctx *sql.Context, lval, rval interface{}) (interface{}, error) {
+func (d *Div) div(ctx *sql.Context, lval, rval any) (any, error) {
 	switch l := lval.(type) {
 	case float32:
 		switch r := rval.(type) {
@@ -277,10 +277,7 @@ func (d *Div) determineResultType(ctx *sql.Context, outermostResult bool) sql.Ty
 
 	if types.IsDatetimeType(lTyp) {
 		if dtType, ok := lTyp.(sql.DatetimeType); ok {
-			scale := uint8(dtType.Precision() + divPrecInc)
-			if scale > types.DecimalTypeMaxScale {
-				scale = types.DecimalTypeMaxScale
-			}
+			scale := min(uint8(dtType.Precision()+divPrecInc), types.DecimalTypeMaxScale)
 			// TODO: determine actual precision
 			return types.MustCreateDecimalType(types.DecimalTypeMaxPrecision, scale)
 		}
@@ -389,7 +386,7 @@ func getFloatOrMaxDecimalType(ctx *sql.Context, e sql.Expression, treatIntsAsFlo
 // If the value is invalid, it returns decimal 0. This function
 // is used for 'div' or 'mod' arithmetic operation, which requires
 // the result value to have precise precision and scale.
-func convertToDecimalValue(ctx *sql.Context, val interface{}, isTimeType bool) interface{} {
+func convertToDecimalValue(ctx *sql.Context, val any, isTimeType bool) any {
 	if isTimeType {
 		val = convertTimeTypeToString(val)
 	}
@@ -543,11 +540,7 @@ func getFinalScale(ctx *sql.Context, row sql.Row, expr sql.Expression, divOpCnt 
 		var fScale int32
 		switch a.Operator() {
 		case sqlparser.PlusStr, sqlparser.MinusStr:
-			if lScale > rScale {
-				fScale = lScale
-			} else {
-				fScale = rScale
-			}
+			fScale = max(lScale, rScale)
 		case sqlparser.MultStr:
 			fScale = lScale + rScale
 		}
@@ -599,7 +592,7 @@ func GetDecimalPrecisionAndScale(val string) (uint8, uint8) {
 }
 
 // GetPrecisionAndScale converts the value to string format and parses it to get the precision and scale.
-func GetPrecisionAndScale(val interface{}) (uint8, uint8) {
+func GetPrecisionAndScale(val any) (uint8, uint8) {
 	var str string
 	switch v := val.(type) {
 	case time.Time:
@@ -682,7 +675,7 @@ func (i *IntDiv) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql
 }
 
 // Eval implements the Expression interface.
-func (i *IntDiv) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *IntDiv) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	lval, rval, err := i.evalLeftRight(ctx, row)
 	if err != nil {
 		return nil, err
@@ -697,8 +690,8 @@ func (i *IntDiv) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	return intDiv(ctx, lval, rval)
 }
 
-func (i *IntDiv) evalLeftRight(ctx *sql.Context, row sql.Row) (interface{}, interface{}, error) {
-	var lval, rval interface{}
+func (i *IntDiv) evalLeftRight(ctx *sql.Context, row sql.Row) (any, any, error) {
+	var lval, rval any
 	var err error
 
 	// int division used with Interval error is caught at parsing the query
@@ -721,7 +714,7 @@ func (i *IntDiv) evalLeftRight(ctx *sql.Context, row sql.Row) (interface{}, inte
 // If there is no float type column reference, both values should be handled as decimal type
 // The decimal types of left and right value does NOT need to be the same. Both the types
 // should be preserved.
-func (i *IntDiv) convertLeftRight(ctx *sql.Context, left interface{}, right interface{}) (interface{}, interface{}) {
+func (i *IntDiv) convertLeftRight(ctx *sql.Context, left any, right any) (any, any) {
 	var typ sql.Type
 	lTyp, rTyp := i.LeftChild.Type(ctx), i.RightChild.Type(ctx)
 	lIsTimeType := types.IsTime(lTyp)
@@ -748,7 +741,7 @@ func (i *IntDiv) convertLeftRight(ctx *sql.Context, left interface{}, right inte
 	return left, right
 }
 
-func intDiv(ctx *sql.Context, lval, rval interface{}) (interface{}, error) {
+func intDiv(ctx *sql.Context, lval, rval any) (any, error) {
 	switch l := lval.(type) {
 	case uint64:
 		switch r := rval.(type) {

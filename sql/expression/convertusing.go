@@ -53,7 +53,7 @@ func (c *ConvertUsing) Type(ctx *sql.Context) sql.Type {
 }
 
 // Eval implements the interface sql.Expression.
-func (c *ConvertUsing) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (c *ConvertUsing) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := c.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

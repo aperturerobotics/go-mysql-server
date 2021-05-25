@@ -107,7 +107,7 @@ func (j *JSONMergePatch) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements the Expression interface.
-func (j *JSONMergePatch) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j *JSONMergePatch) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	initDoc, err := getJSONDocumentFromRow(ctx, row, j.JSONs[0])
 	if err != nil {
 		return nil, getJsonFunctionError("json_merge_patch", 1, err)

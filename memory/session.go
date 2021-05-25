@@ -24,7 +24,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 )
 
-type GlobalsMap = map[string]interface{}
+type GlobalsMap = map[string]any
 type Session struct {
 	*sql.BaseSession
 	dbProvider       sql.DatabaseProvider
@@ -191,7 +191,7 @@ func (s *Session) ReleaseSavepoint(ctx *sql.Context, transaction sql.Transaction
 }
 
 // PersistGlobal implements sql.PersistableSession
-func (s *Session) PersistGlobal(ctx *sql.Context, sysVarName string, value interface{}) error {
+func (s *Session) PersistGlobal(ctx *sql.Context, sysVarName string, value any) error {
 	sysVar, _, ok := sql.SystemVariables.GetGlobal(sysVarName)
 	if !ok {
 		return sql.ErrUnknownSystemVariable.New(sysVarName)
@@ -204,7 +204,7 @@ func (s *Session) PersistGlobal(ctx *sql.Context, sysVarName string, value inter
 	return nil
 }
 
-func (s *Session) SetGlobals(globals map[string]interface{}) *Session {
+func (s *Session) SetGlobals(globals map[string]any) *Session {
 	s.persistedGlobals = globals
 	return s
 }
@@ -230,7 +230,7 @@ func (s *Session) RemoveAllPersistedGlobals() error {
 }
 
 // GetPersistedValue implements sql.PersistableSession
-func (s *Session) GetPersistedValue(k string) (interface{}, error) {
+func (s *Session) GetPersistedValue(k string) (any, error) {
 	return s.persistedGlobals[k], nil
 }
 

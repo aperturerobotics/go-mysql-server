@@ -34,10 +34,10 @@ type Catalog interface {
 	DatabaseTable(ctx *Context, db Database, tableName string) (Table, Database, error)
 
 	// TableAsOf returns the table with the name given in the db with the name given, as of the given marker
-	TableAsOf(ctx *Context, dbName, tableName string, asOf interface{}) (Table, Database, error)
+	TableAsOf(ctx *Context, dbName, tableName string, asOf any) (Table, Database, error)
 
 	// DatabaseTableAsOf returns the table with the name given in the db given, as of the given marker
-	DatabaseTableAsOf(ctx *Context, db Database, tableName string, asOf interface{}) (Table, Database, error)
+	DatabaseTableAsOf(ctx *Context, db Database, tableName string, asOf any) (Table, Database, error)
 
 	// LockTable locks the table named
 	LockTable(ctx *Context, table string)

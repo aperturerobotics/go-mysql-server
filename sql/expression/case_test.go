@@ -76,7 +76,7 @@ func TestCase(t *testing.T) {
 		name     string
 		f        *Case
 		row      sql.Row
-		expected interface{}
+		expected any
 	}{
 		{
 			"with expr and else branch 1",

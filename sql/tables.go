@@ -361,7 +361,7 @@ type AutoIncrementTable interface {
 	// column is passed in a row with the autoinc column failed, the next auto increment value must
 	// update its internal state accordingly and use the insert val at runtime.
 	// Implementations are responsible for updating their state to provide the correct values.
-	GetNextAutoIncrementValue(ctx *Context, insertVal interface{}) (uint64, error)
+	GetNextAutoIncrementValue(ctx *Context, insertVal any) (uint64, error)
 	// AutoIncrementSetter returns an AutoIncrementSetter.
 	AutoIncrementSetter(*Context) AutoIncrementSetter
 }

@@ -226,7 +226,7 @@ func (s *Statistic) Clone(context.Context) sql.JSONWrapper {
 	return s
 }
 
-func (s *Statistic) ToInterface(ctx context.Context) (interface{}, error) {
+func (s *Statistic) ToInterface(ctx context.Context) (any, error) {
 	typs := make([]string, len(s.Typs))
 	for i, t := range s.Typs {
 		typs[i] = t.String()
@@ -237,8 +237,8 @@ func (s *Statistic) ToInterface(ctx context.Context) (interface{}, error) {
 		return nil, err
 	}
 
-	return map[string]interface{}{
-		"statistic": map[string]interface{}{
+	return map[string]any{
+		"statistic": map[string]any{
 			"row_count":      s.RowCount(),
 			"null_count":     s.RowCount(),
 			"distinct_count": s.DistinctCount(),

@@ -76,7 +76,7 @@ func (j JSONType) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements sql.Expression
-func (j JSONType) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j JSONType) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	span, ctx := ctx.Span(fmt.Sprintf("function.%s", j.FunctionName()))
 	defer span.End()
 
@@ -117,7 +117,7 @@ func (j JSONType) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	return TypeOfJsonValue(val), nil
 }
 
-func TypeOfJsonValue(val interface{}) string {
+func TypeOfJsonValue(val any) string {
 	switch v := val.(type) {
 	case nil:
 		return "NULL"
@@ -137,9 +137,9 @@ func TypeOfJsonValue(val interface{}) string {
 		return "DOUBLE"
 	case string:
 		return "STRING"
-	case []interface{}:
+	case []any:
 		return "ARRAY"
-	case map[string]interface{}:
+	case map[string]any:
 		return "OBJECT"
 	case *apd.Decimal:
 		return "DECIMAL"

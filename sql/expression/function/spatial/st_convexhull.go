@@ -171,7 +171,7 @@ func convexHull(points []types.Point) []types.Point {
 }
 
 // Eval implements the sql.Expression interface.
-func (c *ConvexHull) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (c *ConvexHull) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := c.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

@@ -70,7 +70,7 @@ func (j JSONArrayAppend) IsNullable(ctx *sql.Context) bool {
 	return j.doc.IsNullable(ctx)
 }
 
-func (j JSONArrayAppend) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j JSONArrayAppend) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	doc, err := getMutableJSONVal(ctx, row, j.doc)
 	if err != nil || doc == nil {
 		return nil, getJsonFunctionError("json_array_append", 1, err)

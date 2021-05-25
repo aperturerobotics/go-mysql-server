@@ -34,7 +34,7 @@ func RunJsonValueTests(t *testing.T, prepare prepareJsonValue) {
 		row      sql.Row
 		typ      sql.Type
 		path     string
-		expected interface{}
+		expected any
 		err      error
 	}{
 		{row: sql.Row{prepare(t, `null`)}, expected: nil},

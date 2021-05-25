@@ -55,7 +55,7 @@ func TestInitSystemVars(t *testing.T) {
 
 	tests := []struct {
 		varName string
-		varVal  interface{}
+		varVal  any
 		err     *errors.Kind
 	}{
 		{
@@ -80,7 +80,7 @@ func TestInitSystemVars(t *testing.T) {
 	for _, test := range tests {
 		t.Run(fmt.Sprintf("set %v = %v", test.varName, test.varVal), func(t *testing.T) {
 			InitSystemVariables()
-			err := sql.SystemVariables.AssignValues(map[string]interface{}{test.varName: test.varVal})
+			err := sql.SystemVariables.AssignValues(map[string]any{test.varName: test.varVal})
 			if test.err != nil {
 				require.Error(t, err)
 				require.True(t, test.err.Is(err))

@@ -69,7 +69,7 @@ func (*JsonLength) CollationCoercibility(ctx *sql.Context) (collation sql.Collat
 }
 
 // Eval implements the sql.Expression interface.
-func (j *JsonLength) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j *JsonLength) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	span, ctx := ctx.Span("function.JsonLength")
 	defer span.End()
 
@@ -112,12 +112,12 @@ func (j *JsonLength) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	switch v := val.(type) {
 	case nil:
 		return nil, nil
-	case []interface{}:
+	case []any:
 		if len(v) == 0 {
 			return nil, nil
 		}
 		return len(v), nil
-	case map[string]interface{}:
+	case map[string]any:
 		return len(v), nil
 	default:
 		return 1, nil

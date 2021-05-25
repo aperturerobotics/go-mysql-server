@@ -115,7 +115,7 @@ func (j *JSONMergePreserve) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements the Expression interface.
-func (j *JSONMergePreserve) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j *JSONMergePreserve) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	initDoc, err := getJSONDocumentFromRow(ctx, row, j.JSONs[0])
 	if err != nil {
 		return nil, getJsonFunctionError("json_merge_preserve", 1, err)
@@ -164,9 +164,9 @@ func (j *JSONMergePreserve) WithChildren(ctx *sql.Context, children ...sql.Expre
 // merge returns merged json document as interface{} type
 // if patch is true, it will replace the value of the first object with the value of the second object
 // otherwise, it will append the second value to the first value, creating an array if necessary
-func merge(base, add interface{}, patch bool) interface{} {
-	baseObj, baseOk := base.(map[string]interface{})
-	addObj, addOk := add.(map[string]interface{})
+func merge(base, add any, patch bool) any {
+	baseObj, baseOk := base.(map[string]any)
+	addObj, addOk := add.(map[string]any)
 	if !baseOk || !addOk {
 		if patch {
 			return add
@@ -192,16 +192,16 @@ func merge(base, add interface{}, patch bool) interface{} {
 }
 
 // mergeIntoArrays returns array of interface{} that takes JSON object OR JSON array OR JSON value
-func mergeIntoArrays(base, add interface{}) interface{} {
-	var baseArray []interface{}
+func mergeIntoArrays(base, add any) any {
+	var baseArray []any
 
-	if baseArr, ok := base.([]interface{}); ok {
+	if baseArr, ok := base.([]any); ok {
 		baseArray = baseArr
 	} else {
 		baseArray = append(baseArray, base)
 	}
 
-	if addArr, ok := add.([]interface{}); ok {
+	if addArr, ok := add.([]any); ok {
 		return append(baseArray, addArr...)
 	}
 

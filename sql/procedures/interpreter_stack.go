@@ -134,13 +134,13 @@ func (iv *InterpreterVariable) ToAST() ast.Expr {
 				return ast.NewIntVal([]byte("0"))
 			}
 		default:
-			return ast.NewIntVal([]byte(fmt.Sprintf("%d", val)))
+			return ast.NewIntVal(fmt.Appendf(nil, "%d", val))
 		}
 	}
 	if types.IsFloat(iv.Type) {
 		return ast.NewFloatVal([]byte(strconv.FormatFloat(iv.Value.(float64), 'f', -1, 64)))
 	}
-	return ast.NewStrVal([]byte(fmt.Sprintf("%s", iv.Value)))
+	return ast.NewStrVal(fmt.Appendf(nil, "%s", iv.Value))
 }
 
 // InterpreterScopeDetails contains all the details that are relevant to a particular scope.

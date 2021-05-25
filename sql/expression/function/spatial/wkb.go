@@ -74,7 +74,7 @@ func (a *AsWKB) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.
 }
 
 // Eval implements the sql.Expression interface.
-func (a *AsWKB) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (a *AsWKB) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := a.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -164,7 +164,7 @@ func ParseAxisOrder(s string) (bool, error) {
 }
 
 // EvalGeomFromWKB takes in arguments for the ST_FROMWKB functions, and parses them to their corresponding geometry type
-func EvalGeomFromWKB(ctx *sql.Context, row sql.Row, exprs []sql.Expression, expectedGeomType int) (interface{}, error) {
+func EvalGeomFromWKB(ctx *sql.Context, row sql.Row, exprs []sql.Expression, expectedGeomType int) (any, error) {
 	val, err := exprs[0].Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -253,7 +253,7 @@ func EvalGeomFromWKB(ctx *sql.Context, row sql.Row, exprs []sql.Expression, expe
 }
 
 // Eval implements the sql.Expression interface.
-func (g *GeomFromWKB) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (g *GeomFromWKB) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	geom, err := EvalGeomFromWKB(ctx, row, g.ChildExpressions, types.WKBUnknown)
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(g.FunctionName())
@@ -311,7 +311,7 @@ func (p *PointFromWKB) WithChildren(ctx *sql.Context, children ...sql.Expression
 }
 
 // Eval implements the sql.Expression interface.
-func (p *PointFromWKB) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *PointFromWKB) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	point, err := EvalGeomFromWKB(ctx, row, p.ChildExpressions, types.WKBPointID)
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(p.FunctionName())
@@ -369,7 +369,7 @@ func (l *LineFromWKB) WithChildren(ctx *sql.Context, children ...sql.Expression)
 }
 
 // Eval implements the sql.Expression interface.
-func (l *LineFromWKB) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (l *LineFromWKB) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	line, err := EvalGeomFromWKB(ctx, row, l.ChildExpressions, types.WKBLineID)
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(l.FunctionName())
@@ -427,7 +427,7 @@ func (p *PolyFromWKB) WithChildren(ctx *sql.Context, children ...sql.Expression)
 }
 
 // Eval implements the sql.Expression interface.
-func (p *PolyFromWKB) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *PolyFromWKB) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	poly, err := EvalGeomFromWKB(ctx, row, p.ChildExpressions, types.WKBPolyID)
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(p.FunctionName())
@@ -485,7 +485,7 @@ func (p *MPointFromWKB) WithChildren(ctx *sql.Context, children ...sql.Expressio
 }
 
 // Eval implements the sql.Expression interface.
-func (p *MPointFromWKB) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *MPointFromWKB) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	mPoint, err := EvalGeomFromWKB(ctx, row, p.ChildExpressions, types.WKBMultiPointID)
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(p.FunctionName())
@@ -543,7 +543,7 @@ func (l *MLineFromWKB) WithChildren(ctx *sql.Context, children ...sql.Expression
 }
 
 // Eval implements the sql.Expression interface.
-func (l *MLineFromWKB) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (l *MLineFromWKB) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	mline, err := EvalGeomFromWKB(ctx, row, l.ChildExpressions, types.WKBMultiLineID)
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(l.FunctionName())
@@ -601,7 +601,7 @@ func (p *MPolyFromWKB) WithChildren(ctx *sql.Context, children ...sql.Expression
 }
 
 // Eval implements the sql.Expression interface.
-func (p *MPolyFromWKB) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *MPolyFromWKB) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	mpoly, err := EvalGeomFromWKB(ctx, row, p.ChildExpressions, types.WKBPolyID)
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(p.FunctionName())
@@ -659,7 +659,7 @@ func (g *GeomCollFromWKB) WithChildren(ctx *sql.Context, children ...sql.Express
 }
 
 // Eval implements the sql.Expression interface.
-func (g *GeomCollFromWKB) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (g *GeomCollFromWKB) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	geom, err := EvalGeomFromWKB(ctx, row, g.ChildExpressions, types.WKBGeomCollID)
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(g.FunctionName())

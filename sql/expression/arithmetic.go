@@ -226,19 +226,11 @@ func (a *Arithmetic) getReturnType(ctx *sql.Context) sql.Type {
 		rScale := rTyp.(sql.DecimalType).Scale()
 
 		var prec, scale uint8
-		if lPrec > rPrec {
-			prec = lPrec
-		} else {
-			prec = rPrec
-		}
+		prec = max(lPrec, rPrec)
 
 		switch a.Op {
 		case sqlparser.PlusStr, sqlparser.MinusStr:
-			if lScale > rScale {
-				scale = lScale
-			} else {
-				scale = rScale
-			}
+			scale = max(lScale, rScale)
 			prec = prec + scale
 		case sqlparser.MultStr:
 			scale = lScale + rScale
@@ -290,7 +282,7 @@ func (a *Arithmetic) WithChildren(ctx *sql.Context, children ...sql.Expression) 
 }
 
 // Eval implements the Expression interface.
-func (a *Arithmetic) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (a *Arithmetic) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	lval, rval, err := a.evalLeftRight(ctx, row)
 	if err != nil {
 		return nil, err
@@ -305,7 +297,7 @@ func (a *Arithmetic) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	var result interface{}
+	var result any
 	switch strings.ToLower(a.Op) {
 	case sqlparser.PlusStr:
 		result, err = plus(lval, rval)
@@ -333,8 +325,8 @@ func (a *Arithmetic) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	return result, nil
 }
 
-func (a *Arithmetic) evalLeftRight(ctx *sql.Context, row sql.Row) (interface{}, interface{}, error) {
-	var lval, rval interface{}
+func (a *Arithmetic) evalLeftRight(ctx *sql.Context, row sql.Row) (any, any, error) {
+	var lval, rval any
 	var err error
 
 	if i, ok := a.LeftChild.(*Interval); ok {
@@ -364,7 +356,7 @@ func (a *Arithmetic) evalLeftRight(ctx *sql.Context, row sql.Row) (interface{}, 
 	return lval, rval, nil
 }
 
-func (a *Arithmetic) convertLeftRight(ctx *sql.Context, left interface{}, right interface{}) (interface{}, interface{}, error) {
+func (a *Arithmetic) convertLeftRight(ctx *sql.Context, left any, right any) (any, any, error) {
 	typ := a.Type(ctx)
 
 	lIsTimeType := types.IsTime(a.LeftChild.Type(ctx))
@@ -446,8 +438,8 @@ func isOutermostArithmeticOp(e sql.Expression, opScale int32) bool {
 // invalid and cannot be converted to the given type, it returns nil, and it should be
 // interpreted as value of 0. For time types, all the numbers are parsed up to seconds only.
 // E.g: `2022-11-10 12:14:36` is parsed into `20221110121436` and `2022-03-24` is parsed into `20220324`.
-func convertValueToType(ctx *sql.Context, typ sql.Type, val interface{}, isTimeType bool) interface{} {
-	var cval interface{}
+func convertValueToType(ctx *sql.Context, typ sql.Type, val any, isTimeType bool) any {
+	var cval any
 	if isTimeType {
 		val = convertTimeTypeToString(val)
 	}
@@ -474,7 +466,7 @@ func convertValueToType(ctx *sql.Context, typ sql.Type, val interface{}, isTimeT
 // parsing. E.g:
 // `2022-11-10 12:14:36` is parsed into `20221110121436`
 // `2022-03-24` is parsed into `20220324`.
-func convertTimeTypeToString(val interface{}) interface{} {
+func convertTimeTypeToString(val any) any {
 	if t, ok := val.(time.Time); ok {
 		val = t.In(time.UTC).Format("2006-01-02 15:04:05")
 	}
@@ -486,7 +478,7 @@ func convertTimeTypeToString(val interface{}) interface{} {
 	return val
 }
 
-func plus(lval, rval interface{}) (interface{}, error) {
+func plus(lval, rval any) (any, error) {
 	if lval == nil || rval == nil {
 		return nil, nil
 	}
@@ -565,7 +557,7 @@ func plus(lval, rval interface{}) (interface{}, error) {
 	return nil, errUnableToCast.New(lval, rval)
 }
 
-func minus(lval, rval interface{}) (interface{}, error) {
+func minus(lval, rval any) (any, error) {
 	if lval == nil || rval == nil {
 		return nil, nil
 	}
@@ -639,7 +631,7 @@ func minus(lval, rval interface{}) (interface{}, error) {
 	return nil, errUnableToCast.New(lval, rval)
 }
 
-func mult(lval, rval interface{}) (interface{}, error) {
+func mult(lval, rval any) (any, error) {
 	switch l := lval.(type) {
 	case uint8:
 		switch r := rval.(type) {
@@ -717,7 +709,7 @@ func NewUnaryMinus(child sql.Expression) *UnaryMinus {
 }
 
 // Eval implements the sql.Expression interface.
-func (e *UnaryMinus) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (e *UnaryMinus) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	child, err := e.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -774,7 +766,7 @@ func (e *UnaryMinus) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		// try getting int out of string value
 		i, iErr := strconv.ParseInt(n, 10, 64)
 		if iErr != nil {
-			return nil, sql.ErrInvalidType.New(reflect.TypeOf(n))
+			return nil, sql.ErrInvalidType.New(reflect.TypeFor[string]())
 		}
 		return -i, nil
 	case bool:

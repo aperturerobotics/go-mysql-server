@@ -34,7 +34,7 @@ func TestConvert(t *testing.T) {
 		castTo      string
 		typeLength  int
 		typeScale   int
-		expected    interface{}
+		expected    any
 		expectedErr bool
 	}{
 		{

@@ -11,8 +11,8 @@ import (
 
 func TestRoundUpFloat(t *testing.T) {
 	tests := []struct {
-		val interface{}
-		exp interface{}
+		val any
+		exp any
 	}{
 		// float 32
 		{
@@ -168,8 +168,8 @@ func TestRoundUpFloat(t *testing.T) {
 
 func TestRoundDownFloat(t *testing.T) {
 	tests := []struct {
-		val interface{}
-		exp interface{}
+		val any
+		exp any
 	}{
 		// float 32
 		{

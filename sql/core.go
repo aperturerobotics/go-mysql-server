@@ -41,7 +41,7 @@ type Expression interface {
 	// IsNullable returns whether the expression can be null.
 	IsNullable(ctx *Context) bool
 	// Eval evaluates the given row and returns a result.
-	Eval(ctx *Context, row Row) (interface{}, error)
+	Eval(ctx *Context, row Row) (any, error)
 	// Children returns the children expressions of this expression.
 	Children() []Expression
 	// WithChildren returns a copy of the expression with children replaced.
@@ -296,7 +296,7 @@ type Lockable interface {
 
 // ConvertToBool converts a value to a boolean. nil is considered false.
 // TODO: the logic here should be merged with types.Boolean.Convert()
-func ConvertToBool(ctx *Context, v interface{}) (bool, error) {
+func ConvertToBool(ctx *Context, v any) (bool, error) {
 	switch b := v.(type) {
 	case []uint8:
 		return ConvertToBool(ctx, string(b))
@@ -369,7 +369,7 @@ func EncodeVector(floats []float32) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&floats[0])), len(floats)*int(values.Float32Size))
 }
 
-func ConvertToVector(ctx context.Context, v interface{}) ([]float32, error) {
+func ConvertToVector(ctx context.Context, v any) ([]float32, error) {
 	var err error
 	v, err = UnwrapAny(ctx, v)
 	if err != nil {
@@ -381,7 +381,7 @@ func ConvertToVector(ctx context.Context, v interface{}) ([]float32, error) {
 	case []byte:
 		return DecodeVector(b)
 	case string:
-		var val interface{}
+		var val any
 		err := json.Unmarshal([]byte(b), &val)
 		if err != nil {
 			return nil, fmt.Errorf("can't convert JSON to vector: %w", err)
@@ -398,8 +398,8 @@ func ConvertToVector(ctx context.Context, v interface{}) ([]float32, error) {
 	}
 }
 
-func convertJsonInterfaceToVector(val interface{}) ([]float32, error) {
-	array, ok := val.([]interface{})
+func convertJsonInterfaceToVector(val any) ([]float32, error) {
+	array, ok := val.([]any)
 	if !ok {
 		return nil, fmt.Errorf("can't convert JSON to vector; expected array, got %T", val)
 	}
@@ -426,7 +426,7 @@ func convertJsonInterfaceToVector(val interface{}) ([]float32, error) {
 
 // EvaluateCondition evaluates a condition, which is an expression whose value
 // will be nil or coerced boolean.
-func EvaluateCondition(ctx *Context, cond Expression, row Row) (interface{}, error) {
+func EvaluateCondition(ctx *Context, cond Expression, row Row) (any, error) {
 	defer trace2.StartRegion(ctx, "EvaluateCondition").End()
 
 	v, err := cond.Eval(ctx, row)
@@ -444,13 +444,13 @@ func EvaluateCondition(ctx *Context, cond Expression, row Row) (interface{}, err
 }
 
 // IsFalse coerces EvaluateCondition interface{} response to boolean
-func IsFalse(val interface{}) bool {
+func IsFalse(val any) bool {
 	res, ok := val.(bool)
 	return ok && !res
 }
 
 // IsTrue coerces EvaluateCondition interface{} response to boolean
-func IsTrue(val interface{}) bool {
+func IsTrue(val any) bool {
 	res, ok := val.(bool)
 	return ok && res
 }
@@ -463,7 +463,7 @@ type DebugStringer interface {
 }
 
 // DebugString returns a debug string for the Node or Expression given.
-func DebugString(ctx *Context, nodeOrExpression interface{}) string {
+func DebugString(ctx *Context, nodeOrExpression any) string {
 	if ds, ok := nodeOrExpression.(DebugStringer); ok {
 		return ds.DebugString(ctx)
 	}
@@ -493,15 +493,15 @@ type SystemVariableRegistry interface {
 	// AddSystemVariables adds the given system variables to this registry
 	AddSystemVariables(sysVars []SystemVariable)
 	// AssignValues assigns the given values to the system variables in this registry
-	AssignValues(vals map[string]interface{}) error
+	AssignValues(vals map[string]any) error
 	// NewSessionMap returns a map of system variables values that can be used by a session
 	NewSessionMap() map[string]SystemVarValue
 	// GetGlobal returns the current global value of the system variable with the given name
-	GetGlobal(name string) (SystemVariable, interface{}, bool)
+	GetGlobal(name string) (SystemVariable, any, bool)
 	// SetGlobal sets the global value of the system variable with the given name
-	SetGlobal(ctx *Context, name string, val interface{}) error
+	SetGlobal(ctx *Context, name string, val any) error
 	// GetAllGlobalVariables returns a copy of all global variable values.
-	GetAllGlobalVariables() map[string]interface{}
+	GetAllGlobalVariables() map[string]any
 }
 
 // SystemVariable is used to system variables.
@@ -543,7 +543,7 @@ type MysqlSystemVariable struct {
 	// Type defines the type of the system variable. This may be a special type not accessible to standard MySQL operations.
 	Type Type
 	// Default defines the default value of the system variable.
-	Default interface{}
+	Default any
 	// Scope defines the scope of the system variable, which is either Global, Session, or Both.
 	Scope *MysqlScope
 	// NotifyChanged is called by the engine if the value of this variable
@@ -562,7 +562,7 @@ type MysqlSystemVariable struct {
 	// the value of this system variable whenever it is requested. System variables
 	// that provide a ValueFunction should also set Dynamic to false, since they
 	// cannot be assigned a value and will return a read-only error if tried.
-	ValueFunction func() (interface{}, error)
+	ValueFunction func() (any, error)
 	// Name is the name of the system variable.
 	Name string
 	// Dynamic defines whether the variable may be written to during runtime. Variables with this set to `false` will
@@ -815,7 +815,7 @@ func (s MysqlSVScopeType) String() string {
 
 type SystemVarValue struct {
 	Var SystemVariable
-	Val interface{}
+	Val any
 }
 
 type NameableNode interface {
@@ -833,10 +833,10 @@ type StatusVariableRegistry interface {
 	// NewGlobalMap returns a deep copy of the status variables of every scope
 	NewGlobalMap() map[string]StatusVarValue
 	// GetGlobal returns the current global value of the status variable with the given name
-	GetGlobal(name string) (StatusVariable, interface{}, bool)
+	GetGlobal(name string) (StatusVariable, any, bool)
 	// SetGlobal sets the global value of the status variable with the given
 	// name, returns an error if the variable is SessionOnly scope
-	SetGlobal(name string, val interface{}) error
+	SetGlobal(name string, val any) error
 	// IncrementGlobal increments the value of the status variable by the
 	// given integer value. Noop if the variable is session-only scoped.
 	IncrementGlobal(name string, val int)
@@ -855,13 +855,13 @@ type StatusVariable interface {
 	GetName() string
 	GetScope() StatusVariableScope
 	GetType() Type
-	GetDefault() interface{}
+	GetDefault() any
 }
 
 // MySQLStatusVariable represents a mysql status variable.
 type MySQLStatusVariable struct {
 	Type    Type
-	Default interface{}
+	Default any
 	Name    string
 	Scope   StatusVariableScope
 }
@@ -884,14 +884,14 @@ func (m *MySQLStatusVariable) GetType() Type {
 }
 
 // GetDefault implements StatusVariable.
-func (m *MySQLStatusVariable) GetDefault() interface{} {
+func (m *MySQLStatusVariable) GetDefault() any {
 	return m.Default
 }
 
 type StatusVarValue interface {
 	Increment(uint64) error
-	Set(interface{}) error
-	Value() interface{}
+	Set(any) error
+	Value() any
 	Variable() StatusVariable
 	Copy() StatusVarValue
 }
@@ -907,7 +907,7 @@ func (s *MutableStatusVarValue) Increment(v uint64) error {
 	return nil
 }
 
-func (s *MutableStatusVarValue) Set(v interface{}) error {
+func (s *MutableStatusVarValue) Set(v any) error {
 	typedVal, ok := v.(uint64)
 	if !ok {
 		return fmt.Errorf("expected uint64")
@@ -920,7 +920,7 @@ func (s *MutableStatusVarValue) Variable() StatusVariable {
 	return s.Var
 }
 
-func (s *MutableStatusVarValue) Value() interface{} {
+func (s *MutableStatusVarValue) Value() any {
 	return s.Val.Load()
 }
 
@@ -933,14 +933,14 @@ func (s *MutableStatusVarValue) Copy() StatusVarValue {
 
 type ImmutableStatusVarValue struct {
 	Var StatusVariable
-	Val interface{}
+	Val any
 }
 
 func (s *ImmutableStatusVarValue) Increment(uint64) error {
 	return fmt.Errorf("status variable %s is not a uint64", s.Variable().GetName())
 }
 
-func (s *ImmutableStatusVarValue) Set(v interface{}) error {
+func (s *ImmutableStatusVarValue) Set(v any) error {
 	s.Val = v
 	return nil
 }
@@ -949,7 +949,7 @@ func (s *ImmutableStatusVarValue) Variable() StatusVariable {
 	return s.Var
 }
 
-func (s *ImmutableStatusVarValue) Value() interface{} {
+func (s *ImmutableStatusVarValue) Value() any {
 	return s.Val
 }
 

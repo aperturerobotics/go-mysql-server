@@ -74,7 +74,7 @@ func (n *NumGeometries) WithChildren(ctx *sql.Context, children ...sql.Expressio
 }
 
 // Eval implements the sql.Expression interface.
-func (n *NumGeometries) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (n *NumGeometries) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := n.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

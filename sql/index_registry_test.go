@@ -472,8 +472,8 @@ type dummyExpr struct {
 var _ Expression = (*dummyExpr)(nil)
 var _ CollationCoercible = (*dummyExpr)(nil)
 
-func (dummyExpr) Children() []Expression                  { return nil }
-func (dummyExpr) Eval(*Context, Row) (interface{}, error) { panic("not implemented") }
+func (dummyExpr) Children() []Expression          { return nil }
+func (dummyExpr) Eval(*Context, Row) (any, error) { panic("not implemented") }
 func (e dummyExpr) WithChildren(ctx *Context, children ...Expression) (Expression, error) {
 	return e, nil
 }
