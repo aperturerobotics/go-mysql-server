@@ -21,10 +21,10 @@ import (
 
 type IndexDef struct {
 	Name       string
+	Comment    string
 	Columns    []IndexColumn
 	Constraint IndexConstraint
 	Storage    IndexUsing
-	Comment    string
 }
 
 func (i *IndexDef) String() string {
@@ -41,6 +41,10 @@ func (i *IndexDef) IsFullText() bool {
 
 func (i *IndexDef) IsSpatial() bool {
 	return i.Constraint == IndexConstraint_Spatial
+}
+
+func (i *IndexDef) IsVector() bool {
+	return i.Constraint == IndexConstraint_Vector
 }
 
 func (i *IndexDef) IsPrimary() bool {
@@ -73,6 +77,7 @@ const (
 	IndexConstraint_Unique
 	IndexConstraint_Fulltext
 	IndexConstraint_Spatial
+	IndexConstraint_Vector
 	IndexConstraint_Primary
 )
 
@@ -103,6 +108,8 @@ type Index interface {
 	IsSpatial() bool
 	// IsFullText returns whether this index is a Full-Text index
 	IsFullText() bool
+	// IsVector returns whether this index is a Full-Text index
+	IsVector() bool
 	// Comment returns the comment for this index
 	Comment() string
 	// IndexType returns the type of this index, e.g. BTREE
@@ -113,10 +120,14 @@ type Index interface {
 	// ColumnExpressionTypes returns each expression and its associated Type.
 	// Each expression string should exactly match the string returned from
 	// Index.Expressions().
-	ColumnExpressionTypes() []ColumnExpressionType
+	ColumnExpressionTypes(*Context) []ColumnExpressionType
 	// CanSupport returns whether this index supports lookups on the given
 	// range filters.
-	CanSupport(...Range) bool
+	CanSupport(*Context, ...Range) bool
+	// CanSupportOrderBy returns whether this index can optimize ORDER BY a given expression type.
+	// Verifying that the expression's children match the index columns are done separately.
+	CanSupportOrderBy(expr Expression) bool
+
 	// PrefixLengths returns the prefix lengths for each column in this index
 	PrefixLengths() []uint16
 }
@@ -130,18 +141,19 @@ type ExtendedIndex interface {
 	Index
 	// ExtendedExpressions returns the same result as Expressions, but appends any primary keys that are implicitly in
 	// the index. The appended primary keys are in declaration order.
-	ExtendedExpressions() []string
+	ExtendedExpressions(ctx *Context) []string
 	// ExtendedColumnExpressionTypes returns the same result as ColumnExpressionTypes, but appends the type of any
 	// primary keys that are implicitly in the index. The appended primary keys are in declaration order.
-	ExtendedColumnExpressionTypes() []ColumnExpressionType
+	ExtendedColumnExpressionTypes(ctx *Context) []ColumnExpressionType
 }
 
 // IndexLookup is the implementation-specific definition of an index lookup. The IndexLookup must contain all necessary
 // information to retrieve exactly the rows in the table as specified by the ranges given to their parent index.
 // Implementors are responsible for all semantics of correctly returning rows that match an index lookup.
 type IndexLookup struct {
-	Index  Index
-	Ranges RangeCollection
+	Index               Index
+	Ranges              RangeCollection
+	VectorOrderAndLimit OrderAndLimit
 	// IsPointLookup is true if the lookup will return one or zero
 	// values; the range is null safe, the index is unique, every index
 	// column has a range expression, and every range expression is an
@@ -154,7 +166,50 @@ type IndexLookup struct {
 
 var emptyLookup = IndexLookup{}
 
-func NewIndexLookup(idx Index, ranges RangeCollection, isPointLookup, isEmptyRange, isSpatialLookup, isReverse bool) IndexLookup {
+type IndexComparisonExpression interface {
+	// TODO: IndexScanOp probably needs to be moved into this package as well
+	IndexScanOperation() (IndexScanOp, Expression, Expression, bool)
+}
+
+type IndexScanOp uint8
+
+//go:generate stringer -type=IndexScanOp -linecomment
+
+const (
+	IndexScanOpEq         IndexScanOp = iota // =
+	IndexScanOpNullSafeEq                    // <=>
+	IndexScanOpInSet                         // =
+	IndexScanOpNotInSet                      // !=
+	IndexScanOpNotEq                         // !=
+	IndexScanOpGt                            // >
+	IndexScanOpGte                           // >=
+	IndexScanOpLt                            // <
+	IndexScanOpLte                           // <=
+	IndexScanOpAnd                           // &&
+	IndexScanOpOr                            // ||
+	IndexScanOpIsNull                        // IS NULL
+	IndexScanOpIsNotNull                     // IS NOT NULL
+	IndexScanOpSpatialEq                     // SpatialEq
+	IndexScanOpFulltextEq                    // FulltextEq
+)
+
+// Swap returns the identity op for swapping a comparison's LHS and RHS
+func (o IndexScanOp) Swap() IndexScanOp {
+	switch o {
+	case IndexScanOpGt:
+		return IndexScanOpLt
+	case IndexScanOpGte:
+		return IndexScanOpLte
+	case IndexScanOpLt:
+		return IndexScanOpGt
+	case IndexScanOpLte:
+		return IndexScanOpGte
+	default:
+		return o
+	}
+}
+
+func NewIndexLookup(idx Index, ranges MySQLRangeCollection, isPointLookup, isEmptyRange, isSpatialLookup, isReverse bool) IndexLookup {
 	if isReverse {
 		for i, j := 0, len(ranges)-1; i < j; i, j = i+1, j-1 {
 			ranges[i], ranges[j] = ranges[j], ranges[i]
@@ -181,10 +236,10 @@ func (il IndexLookup) String() string {
 	return pr.String()
 }
 
-func (il IndexLookup) DebugString() string {
+func (il IndexLookup) DebugString(ctx *Context) string {
 	pr := NewTreePrinter()
 	_ = pr.WriteNode("IndexLookup")
-	pr.WriteChildren(fmt.Sprintf("index: %s", il.Index), fmt.Sprintf("ranges: %s", il.Ranges.DebugString()))
+	pr.WriteChildren(fmt.Sprintf("index: %s", il.Index), fmt.Sprintf("ranges: %s", il.Ranges.DebugString(ctx)))
 	return pr.String()
 }
 
@@ -194,7 +249,7 @@ type FilteredIndex interface {
 	Index
 	// HandledFilters returns a subset of |filters| that are satisfied
 	// by index lookups to this index.
-	HandledFilters(filters []Expression) (handled []Expression)
+	HandledFilters(ctx *Context, filters []Expression) (handled []Expression)
 }
 
 type IndexOrder byte
@@ -210,15 +265,15 @@ const (
 type OrderedIndex interface {
 	Index
 	// Order returns the order of results for reads from this index
-	Order() IndexOrder
+	Order(ctx *Context) IndexOrder
 	// Reversible returns whether or not this index can be iterated on backwards
-	Reversible() bool
+	Reversible(ctx *Context) bool
 }
 
 // ColumnExpressionType returns a column expression along with its Type.
 type ColumnExpressionType struct {
-	Expression string
 	Type       Type
+	Expression string
 }
 
 // ValidatePrimaryKeyDrop validates that a primary key may be dropped. If any validation error is returned, then it

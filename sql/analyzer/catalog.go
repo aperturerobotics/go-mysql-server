@@ -29,23 +29,26 @@ import (
 )
 
 type Catalog struct {
-	MySQLDb       *mysql_db.MySQLDb
 	InfoSchema    sql.Database
 	StatsProvider sql.StatsProvider
+	DbProvider    sql.DatabaseProvider
+	AuthHandler   sql.AuthorizationHandler
 
-	DbProvider       sql.DatabaseProvider
-	builtInFunctions function.Registry
-
+	// BinlogConsumer holds an optional consumer that processes binlog events (e.g. for BINLOG statements).
+	BinlogConsumer binlogreplication.BinlogConsumer
 	// BinlogReplicaController holds an optional controller that receives forwarded binlog
 	// replication messages (e.g. "start replica").
 	BinlogReplicaController binlogreplication.BinlogReplicaController
-
 	// BinlogPrimaryController holds an optional controller that receives forwarded binlog
 	// replication messages (e.g. "show replicas") and commands (e.g. COM_REGISTER_REPLICA).
 	BinlogPrimaryController binlogreplication.BinlogPrimaryController
 
-	mu    sync.RWMutex
+	MySQLDb          *mysql_db.MySQLDb
+	builtInFunctions function.Registry
+	overrides        sql.EngineOverrides
+
 	locks sessionLocks
+	mu    sync.RWMutex
 }
 
 func (c *Catalog) DropDbStats(ctx *sql.Context, db string, flush bool) error {
@@ -53,8 +56,9 @@ func (c *Catalog) DropDbStats(ctx *sql.Context, db string, flush bool) error {
 }
 
 var _ sql.Catalog = (*Catalog)(nil)
-var _ binlogreplication.BinlogReplicaCatalog = (*Catalog)(nil)
-var _ binlogreplication.BinlogPrimaryCatalog = (*Catalog)(nil)
+var _ binlogreplication.BinlogConsumerProvider = (*Catalog)(nil)
+var _ binlogreplication.BinlogReplicaProvider = (*Catalog)(nil)
+var _ binlogreplication.BinlogPrimaryProvider = (*Catalog)(nil)
 
 type tableLocks map[string]struct{}
 
@@ -63,15 +67,26 @@ type dbLocks map[string]tableLocks
 type sessionLocks map[uint32]dbLocks
 
 // NewCatalog returns a new empty Catalog with the given provider
-func NewCatalog(provider sql.DatabaseProvider) *Catalog {
-	return &Catalog{
+func NewCatalog(provider sql.DatabaseProvider, overrides sql.EngineOverrides) *Catalog {
+	c := &Catalog{
 		MySQLDb:          mysql_db.CreateEmptyMySQLDb(),
 		InfoSchema:       information_schema.NewInformationSchemaDatabase(),
 		DbProvider:       provider,
 		builtInFunctions: function.NewRegistry(),
+		overrides:        overrides,
 		StatsProvider:    memory.NewStatsProv(),
 		locks:            make(sessionLocks),
 	}
+	c.AuthHandler = sql.GetAuthorizationHandlerFactory().CreateHandler(c)
+	return c
+}
+
+func (c *Catalog) HasBinlogConsumer() bool {
+	return c.BinlogConsumer != nil
+}
+
+func (c *Catalog) GetBinlogConsumer() binlogreplication.BinlogConsumer {
+	return c.BinlogConsumer
 }
 
 func (c *Catalog) HasBinlogReplicaController() bool {
@@ -109,7 +124,7 @@ func (c *Catalog) AllDatabases(ctx *sql.Context) []sql.Database {
 	dbs = append(dbs, c.InfoSchema)
 
 	if c.MySQLDb.Enabled() {
-		dbs = append(dbs, mysql_db.NewPrivilegedDatabaseProvider(c.MySQLDb, c.DbProvider).AllDatabases(ctx)...)
+		dbs = append(dbs, mysql_db.NewPrivilegedDatabaseProvider(c.MySQLDb, c.DbProvider, c.AuthHandler).AllDatabases(ctx)...)
 	} else {
 		dbs = append(dbs, c.DbProvider.AllDatabases(ctx)...)
 	}
@@ -150,11 +165,13 @@ func (c *Catalog) RemoveDatabase(ctx *sql.Context, dbName string) error {
 	defer c.mu.Unlock()
 
 	mut, ok := c.DbProvider.(sql.MutableDatabaseProvider)
-	if ok {
-		return mut.DropDatabase(ctx, dbName)
-	} else {
+	if !ok {
 		return sql.ErrImmutableDatabaseProvider.New()
 	}
+	if strings.EqualFold(dbName, "information_schema") || (c.MySQLDb.Enabled() && strings.EqualFold(dbName, "mysql")) {
+		return fmt.Errorf("unable to drop database: %s", dbName)
+	}
+	return mut.DropDatabase(ctx, dbName)
 }
 
 func (c *Catalog) HasDatabase(ctx *sql.Context, db string) bool {
@@ -162,7 +179,7 @@ func (c *Catalog) HasDatabase(ctx *sql.Context, db string) bool {
 	if db == "information_schema" {
 		return true
 	} else if c.MySQLDb.Enabled() {
-		return mysql_db.NewPrivilegedDatabaseProvider(c.MySQLDb, c.DbProvider).HasDatabase(ctx, db)
+		return mysql_db.NewPrivilegedDatabaseProvider(c.MySQLDb, c.DbProvider, c.AuthHandler).HasDatabase(ctx, db)
 	} else {
 		return c.DbProvider.HasDatabase(ctx, db)
 	}
@@ -173,7 +190,7 @@ func (c *Catalog) Database(ctx *sql.Context, db string) (sql.Database, error) {
 	if strings.ToLower(db) == "information_schema" {
 		return c.InfoSchema, nil
 	} else if c.MySQLDb.Enabled() {
-		return mysql_db.NewPrivilegedDatabaseProvider(c.MySQLDb, c.DbProvider).Database(ctx, db)
+		return mysql_db.NewPrivilegedDatabaseProvider(c.MySQLDb, c.DbProvider, c.AuthHandler).Database(ctx, db)
 	} else {
 		return c.DbProvider.Database(ctx, db)
 	}
@@ -247,6 +264,34 @@ func (c *Catalog) Table(ctx *sql.Context, dbName, tableName string) (sql.Table, 
 	return c.DatabaseTable(ctx, db, tableName)
 }
 
+// TableSchema returns the table in the given database with the given name, in the given schema name
+func (c *Catalog) TableSchema(ctx *sql.Context, dbName, schemaName, tableName string) (sql.Table, sql.Database, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	db, err := c.Database(ctx, dbName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if schemaName != "" {
+		sdb, ok := db.(sql.SchemaDatabase)
+		if !ok {
+			return nil, nil, sql.ErrDatabaseSchemasNotSupported.New(db.Name())
+		}
+
+		db, ok, err = sdb.GetSchema(ctx, schemaName)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !ok {
+			return nil, nil, sql.ErrDatabaseSchemaNotFound.New(schemaName)
+		}
+	}
+
+	return c.DatabaseTable(ctx, db, tableName)
+}
+
 func (c *Catalog) DatabaseTable(ctx *sql.Context, db sql.Database, tableName string) (sql.Table, sql.Database, error) {
 	_, ok := db.(sql.UnresolvedDatabase)
 	if ok {
@@ -310,8 +355,19 @@ func (c *Catalog) RegisterFunction(ctx *sql.Context, fns ...sql.Function) {
 	}
 }
 
+// ExternalFunctionProvider is a function provider that may be set by an integrator for cases that the DatabaseProvider
+// does not implement the necessary function provider logic (and we need more than the built-in functions). This is used
+// by Catalog to check for functions if it is non-nil.
+var ExternalFunctionProvider sql.FunctionProvider
+
 // Function returns the function with the name given, or false if it doesn't exist.
 func (c *Catalog) Function(ctx *sql.Context, name string) (sql.Function, bool) {
+	if ExternalFunctionProvider != nil {
+		f, ok := ExternalFunctionProvider.Function(ctx, name)
+		if ok {
+			return f, true
+		}
+	}
 	if fp, ok := c.DbProvider.(sql.FunctionProvider); ok {
 		f, ok := fp.Function(ctx, name)
 		if ok {
@@ -351,21 +407,23 @@ func (c *Catalog) ExternalStoredProcedures(ctx *sql.Context, name string) ([]sql
 }
 
 // TableFunction implements the TableFunctionProvider interface
-func (c *Catalog) TableFunction(ctx *sql.Context, name string) (sql.TableFunction, error) {
+func (c *Catalog) TableFunction(ctx *sql.Context, name string) (sql.TableFunction, bool) {
 	if fp, ok := c.DbProvider.(sql.TableFunctionProvider); ok {
-		tf, err := fp.TableFunction(ctx, name)
-		if err != nil {
-			return nil, err
-		} else if tf != nil {
-			return tf, nil
+		tf, found := fp.TableFunction(ctx, name)
+		if found && tf != nil {
+			return tf, true
 		}
 	}
-
-	return nil, sql.ErrTableFunctionNotFound.New(name)
+	return nil, false
 }
 
-func (c *Catalog) RefreshTableStats(ctx *sql.Context, table sql.Table, db string) error {
-	return c.StatsProvider.RefreshTableStats(ctx, table, db)
+// Overrides implements the sql.Catalog interface
+func (c *Catalog) Overrides() sql.EngineOverrides {
+	return c.overrides
+}
+
+func (c *Catalog) AnalyzeTable(ctx *sql.Context, table sql.Table, db string) error {
+	return c.StatsProvider.AnalyzeTable(ctx, table, db)
 }
 
 func (c *Catalog) GetTableStats(ctx *sql.Context, db string, table sql.Table) ([]sql.Statistic, error) {
@@ -412,6 +470,10 @@ func (c *Catalog) DataLength(ctx *sql.Context, db string, table sql.Table) (uint
 	return st.DataLength(ctx)
 }
 
+func (c *Catalog) AuthorizationHandler() sql.AuthorizationHandler {
+	return c.AuthHandler
+}
+
 func getStatisticsTable(table sql.Table, prevTable sql.Table) (sql.StatisticsTable, bool) {
 	// Some TableNodes return themselves for UnderlyingTable, so we need to check for that
 	if table == prevTable {
@@ -422,6 +484,8 @@ func getStatisticsTable(table sql.Table, prevTable sql.Table) (sql.StatisticsTab
 		return t, true
 	case sql.TableNode:
 		return getStatisticsTable(t.UnderlyingTable(), table)
+	case sql.TableWrapper:
+		return getStatisticsTable(t.Underlying(), table)
 	default:
 		return nil, false
 	}

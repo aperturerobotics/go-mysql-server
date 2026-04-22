@@ -33,7 +33,7 @@ const MaxIdentifierLength = 64
 type Schema []*Column
 
 // CheckRow checks the row conforms to the schema.
-func (s Schema) CheckRow(row Row) error {
+func (s Schema) CheckRow(ctx *Context, row Row) error {
 	expected := len(s)
 	got := len(row)
 	if expected != got {
@@ -42,7 +42,7 @@ func (s Schema) CheckRow(row Row) error {
 
 	for idx, f := range s {
 		v := row[idx]
-		if f.Check(v) {
+		if f.Check(ctx, v) {
 			continue
 		}
 
@@ -202,10 +202,10 @@ func NewPrimaryKeySchema(s Schema, pkOrds ...int) PrimaryKeySchema {
 // SchemaToPrimaryKeySchema adapts the schema given to a PrimaryKey schema using the primary keys of the table given, if
 // present. The resulting PrimaryKeySchema may have an empty key set if the table has no primary keys. Matching for
 // ordinals is performed by column name, with the aid of |renames| when provided.
-func SchemaToPrimaryKeySchema(table Table, sch Schema, renames ...ColumnRename) PrimaryKeySchema {
+func SchemaToPrimaryKeySchema(ctx *Context, table Table, sch Schema, renames ...ColumnRename) PrimaryKeySchema {
 	var pks []*Column
 	if pkt, ok := table.(PrimaryKeyTable); ok {
-		schema := pkt.PrimaryKeySchema()
+		schema := pkt.PrimaryKeySchema(ctx)
 		for _, ordinal := range schema.PkOrdinals {
 			pks = append(pks, schema.Schema[ordinal])
 		}
@@ -232,8 +232,8 @@ func SchemaToPrimaryKeySchema(table Table, sch Schema, renames ...ColumnRename) 
 
 // ColumnOrder is used in ALTER TABLE statements to change the order of inserted / modified columns.
 type ColumnOrder struct {
-	First       bool   // True if this column should come first
 	AfterColumn string // Set to the name of the column after which this column should appear
+	First       bool   // True if this column should come first
 }
 
 type ColumnRename struct {

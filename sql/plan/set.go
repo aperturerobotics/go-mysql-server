@@ -15,10 +15,10 @@
 package plan
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
 // Set represents a set statement. This can be variables, but in some instances can also refer to row values.
@@ -50,18 +50,12 @@ func (s *Set) Children() []sql.Node { return nil }
 func (s *Set) IsReadOnly() bool { return true }
 
 // WithChildren implements the sql.Node interface.
-func (s *Set) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (s *Set) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(s, len(children), 0)
 	}
 
 	return s, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (s *Set) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	//TODO: determine which variables cannot be set without a privilege check
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -70,7 +64,7 @@ func (*Set) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, 
 }
 
 // WithExpressions implements the sql.Expressioner interface.
-func (s *Set) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (s *Set) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != len(s.Exprs) {
 		return nil, sql.ErrInvalidChildrenNumber.New(s, len(exprs), len(s.Exprs))
 	}
@@ -83,27 +77,23 @@ func (s *Set) Expressions() []sql.Expression {
 	return s.Exprs
 }
 
-// setSch is used to differentiate from the nil schema,
-// because Set does return rows
-var setSch = make(sql.Schema, 0)
-
 // Schema implements the sql.Node interface.
-func (s *Set) Schema() sql.Schema {
-	return setSch
+func (s *Set) Schema(ctx *sql.Context) sql.Schema {
+	return types.OkResultSchema
 }
 
 func (s *Set) String() string {
 	var children = make([]string, len(s.Exprs))
 	for i, v := range s.Exprs {
-		children[i] = fmt.Sprintf(v.String())
+		children[i] = v.String()
 	}
 	return strings.Join(children, ", ")
 }
 
-func (s *Set) DebugString() string {
+func (s *Set) DebugString(ctx *sql.Context) string {
 	var children = make([]string, len(s.Exprs))
 	for i, v := range s.Exprs {
-		children[i] = fmt.Sprintf(sql.DebugString(v))
+		children[i] = sql.DebugString(ctx, v)
 	}
 	return strings.Join(children, ", ")
 }

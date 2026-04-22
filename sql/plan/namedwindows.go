@@ -54,43 +54,33 @@ func (n *NamedWindows) String() string {
 	}
 	pr := sql.NewTreePrinter()
 	sb.WriteString(")")
-	_ = pr.WriteNode(sb.String())
+	_ = pr.WriteNode("%s", sb.String())
 	_ = pr.WriteChildren(n.Child.String())
 	return pr.String()
 }
 
 // DebugString implements sql.Node
-func (n *NamedWindows) DebugString() string {
+func (n *NamedWindows) DebugString(ctx *sql.Context) string {
 	var sb strings.Builder
 	sb.WriteString("NamedWindows(")
 	var sep string
 	for n, def := range n.WindowDefs {
-		sb.WriteString(strings.ReplaceAll(fmt.Sprintf("%s%s %s", sep, n, def.DebugString()), "over", "as"))
+		sb.WriteString(strings.ReplaceAll(fmt.Sprintf("%s%s %s", sep, n, def.DebugString(ctx)), "over", "as"))
 		sep = ", "
 	}
 	pr := sql.NewTreePrinter()
 	sb.WriteString(")")
-	_ = pr.WriteNode(sb.String())
-	_ = pr.WriteChildren(sql.DebugString(n.Child))
+	_ = pr.WriteNode("%s", sb.String())
+	_ = pr.WriteChildren(sql.DebugString(ctx, n.Child))
 	return pr.String()
 }
 
-// RowIter implements sql.Node
-func (n *NamedWindows) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
-	panic("cannot iterate *plan.NamedWindows")
-}
-
 // WithChildren implements sql.Node
-func (n *NamedWindows) WithChildren(nodes ...sql.Node) (sql.Node, error) {
+func (n *NamedWindows) WithChildren(ctx *sql.Context, nodes ...sql.Node) (sql.Node, error) {
 	if len(nodes) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(n, len(nodes), 1)
 	}
 	return NewNamedWindows(n.WindowDefs, nodes[0]), nil
-}
-
-// CheckPrivileges implements sql.Node
-func (n *NamedWindows) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return n.Child.CheckPrivileges(ctx, opChecker)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

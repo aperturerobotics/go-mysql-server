@@ -57,7 +57,7 @@ func JoinAnd(exprs ...sql.Expression) sql.Expression {
 }
 
 // SplitConjunction breaks AND expressions into their left and right parts, recursively
-func SplitConjunction(expr sql.Expression) []sql.Expression {
+func SplitConjunction(ctx *sql.Context, expr sql.Expression) []sql.Expression {
 	if expr == nil {
 		return nil
 	}
@@ -67,8 +67,8 @@ func SplitConjunction(expr sql.Expression) []sql.Expression {
 	}
 
 	return append(
-		SplitConjunction(and.LeftChild),
-		SplitConjunction(and.RightChild)...,
+		SplitConjunction(ctx, and.LeftChild),
+		SplitConjunction(ctx, and.RightChild)...,
 	)
 }
 
@@ -89,9 +89,9 @@ func SplitDisjunction(expr sql.Expression) []sql.Expression {
 }
 
 type LookupColumn struct {
-	Col string
 	Lit *Literal
 	Eq  *Equals
+	Col string
 }
 
 // LookupEqualityColumn breaks AND expressions into a list of equalities split into
@@ -107,7 +107,7 @@ func LookupEqualityColumn(db, table string, e sql.Expression) (LookupColumn, boo
 			if strings.EqualFold(gf.Table(), table) && strings.EqualFold(gf.Database(), db) {
 				switch r := e.Right().(type) {
 				case *Literal:
-					return LookupColumn{strings.ToLower(gf.name), r, e}, true
+					return LookupColumn{Eq: e, Lit: r, Col: strings.ToLower(gf.name)}, true
 				}
 			}
 		}
@@ -115,7 +115,7 @@ func LookupEqualityColumn(db, table string, e sql.Expression) (LookupColumn, boo
 			if strings.EqualFold(gf.Table(), table) && strings.EqualFold(gf.Database(), db) {
 				switch l := e.Left().(type) {
 				case *Literal:
-					return LookupColumn{strings.ToLower(gf.name), l, e}, true
+					return LookupColumn{Eq: e, Lit: l, Col: strings.ToLower(gf.name)}, true
 				}
 			}
 		}
@@ -127,16 +127,16 @@ func (a *And) String() string {
 	return fmt.Sprintf("(%s AND %s)", a.LeftChild, a.RightChild)
 }
 
-func (a *And) DebugString() string {
+func (a *And) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("AND")
-	children := []string{sql.DebugString(a.LeftChild), sql.DebugString(a.RightChild)}
+	children := []string{sql.DebugString(ctx, a.LeftChild), sql.DebugString(ctx, a.RightChild)}
 	_ = pr.WriteChildren(children...)
 	return pr.String()
 }
 
 // Type implements the Expression interface.
-func (*And) Type() sql.Type {
+func (*And) Type(ctx *sql.Context) sql.Type {
 	return types.Boolean
 }
 
@@ -177,7 +177,7 @@ func (a *And) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 }
 
 // WithChildren implements the Expression interface.
-func (a *And) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (a *And) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(a, len(children), 2)
 	}
@@ -222,16 +222,16 @@ func (o *Or) String() string {
 	return fmt.Sprintf("(%s OR %s)", o.LeftChild, o.RightChild)
 }
 
-func (o *Or) DebugString() string {
+func (o *Or) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("Or")
-	children := []string{sql.DebugString(o.LeftChild), sql.DebugString(o.RightChild)}
+	children := []string{sql.DebugString(ctx, o.LeftChild), sql.DebugString(ctx, o.RightChild)}
 	_ = pr.WriteChildren(children...)
 	return pr.String()
 }
 
 // Type implements the Expression interface.
-func (*Or) Type() sql.Type {
+func (*Or) Type(ctx *sql.Context) sql.Type {
 	return types.Boolean
 }
 
@@ -264,17 +264,15 @@ func (o *Or) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		}
 	}
 
-	// Can also be triggered by lval and rval not being bool types.
-	if lval == false && rval == false {
-		return false, nil
+	if lval == nil || rval == nil {
+		return nil, nil
 	}
 
-	// (lval == nil && rval == nil) || (lval == false && rval == nil) || (lval == nil && rval == false)
-	return nil, nil
+	return false, nil
 }
 
 // WithChildren implements the Expression interface.
-func (o *Or) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (o *Or) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(o, len(children), 2)
 	}
@@ -298,12 +296,12 @@ func (x *Xor) String() string {
 	return fmt.Sprintf("(%s XOR %s)", x.LeftChild, x.RightChild)
 }
 
-func (x *Xor) DebugString() string {
-	return fmt.Sprintf("%s XOR %s", sql.DebugString(x.LeftChild), sql.DebugString(x.RightChild))
+func (x *Xor) DebugString(ctx *sql.Context) string {
+	return fmt.Sprintf("%s XOR %s", sql.DebugString(ctx, x.LeftChild), sql.DebugString(ctx, x.RightChild))
 }
 
 // Type implements the Expression interface.
-func (*Xor) Type() sql.Type {
+func (*Xor) Type(ctx *sql.Context) sql.Type {
 	return types.Boolean
 }
 
@@ -339,14 +337,11 @@ func (x *Xor) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	// a XOR b == (a AND (NOT b)) OR ((NOT a) and b)
-	if (rvalue && !lvalue) || (!rvalue && lvalue) {
-		return true, nil
-	}
-	return false, nil
+	return (rvalue && !lvalue) || (!rvalue && lvalue), nil
 }
 
 // WithChildren implements the Expression interface.
-func (x *Xor) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (x *Xor) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(x, len(children), 2)
 	}

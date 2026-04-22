@@ -30,7 +30,7 @@ func resolveUnions(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scope,
 		return n, transform.SameTree, nil
 	}
 
-	return transform.Node(n, func(n sql.Node) (sql.Node, transform.TreeIdentity, error) {
+	return transform.Node(ctx, n, func(ctx *sql.Context, n sql.Node) (sql.Node, transform.TreeIdentity, error) {
 		var u *plan.SetOp
 		switch n := n.(type) {
 		case *plan.SetOp:
@@ -51,7 +51,7 @@ func resolveUnions(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scope,
 			return nil, transform.SameTree, err
 		}
 
-		ret, err := n.WithChildren(StripPassthroughNodes(left), StripPassthroughNodes(right))
+		ret, err := n.WithChildren(ctx, left, right)
 		if err != nil {
 			return nil, transform.SameTree, err
 		}
@@ -65,7 +65,7 @@ func finalizeUnions(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scope
 		return n, transform.SameTree, nil
 	}
 
-	return transform.Node(n, func(n sql.Node) (sql.Node, transform.TreeIdentity, error) {
+	return transform.Node(ctx, n, func(ctx *sql.Context, n sql.Node) (sql.Node, transform.TreeIdentity, error) {
 		var u *plan.SetOp
 		switch n := n.(type) {
 		case *plan.SetOp:
@@ -95,10 +95,14 @@ func finalizeUnions(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scope
 
 		scope.SetJoin(false)
 
-		newn, err := n.WithChildren(StripPassthroughNodes(left), StripPassthroughNodes(right))
+		newN, err := n.WithChildren(ctx, left, right)
 		if err != nil {
 			return nil, transform.SameTree, err
 		}
-		return newn, transform.NewTree, nil
+
+		// UNION can return multiple rows even when child queries use LIMIT 1, so disable Max1Row optimization
+		qFlags.Unset(sql.QFlagMax1Row)
+
+		return newN, transform.NewTree, nil
 	})
 }

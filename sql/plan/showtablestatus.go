@@ -62,7 +62,7 @@ var showTableStatusSchema = sql.Schema{
 	{Name: "Collation", Type: types.LongText},
 	{Name: "Checksum", Type: types.LongText, Nullable: true},
 	{Name: "Create_options", Type: types.LongText, Nullable: true},
-	{Name: "Comments", Type: types.LongText, Nullable: true},
+	{Name: "Comment", Type: types.LongText, Nullable: true},
 }
 
 // Children implements the sql.Node interface.
@@ -72,7 +72,7 @@ func (s *ShowTableStatus) Children() []sql.Node { return nil }
 func (s *ShowTableStatus) Resolved() bool { return true }
 
 // Schema implements the sql.Node interface.
-func (s *ShowTableStatus) Schema() sql.Schema { return showTableStatusSchema }
+func (s *ShowTableStatus) Schema(ctx *sql.Context) sql.Schema { return showTableStatusSchema }
 
 func (s *ShowTableStatus) String() string {
 	return "SHOW TABLE STATUS"
@@ -83,18 +83,12 @@ func (s *ShowTableStatus) IsReadOnly() bool {
 }
 
 // WithChildren implements the Node interface.
-func (s *ShowTableStatus) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (s *ShowTableStatus) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(s, len(children), 0)
 	}
 
 	return s, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (s *ShowTableStatus) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	// Some tables won't be visible in RowIter if the user doesn't have the correct privileges
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

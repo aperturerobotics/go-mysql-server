@@ -17,7 +17,7 @@ package sql
 // Function is a function defined by the user that can be applied in a SQL query.
 type Function interface {
 	// NewInstance returns a new instance of the function to evaluate against rows
-	NewInstance([]Expression) (Expression, error)
+	NewInstance(ctx *Context, exprs []Expression) (Expression, error)
 	// FunctionName returns the name of this function
 	FunctionName() string
 	// isFunction is a private method to restrict implementations of Function
@@ -31,63 +31,63 @@ type FunctionProvider interface {
 	Function(ctx *Context, name string) (Function, bool)
 }
 
-type CreateFunc0Args func() Expression
-type CreateFunc1Args func(e1 Expression) Expression
-type CreateFunc2Args func(e1, e2 Expression) Expression
-type CreateFunc3Args func(e1, e2, e3 Expression) Expression
-type CreateFunc4Args func(e1, e2, e3, e4 Expression) Expression
-type CreateFunc5Args func(e1, e2, e3, e4, e5 Expression) Expression
-type CreateFunc6Args func(e1, e2, e3, e4, e5, e6 Expression) Expression
-type CreateFunc7Args func(e1, e2, e3, e4, e5, e6, e7 Expression) Expression
-type CreateFuncNArgs func(args ...Expression) (Expression, error)
+type CreateFunc0Args func(ctx *Context) Expression
+type CreateFunc1Args func(ctx *Context, e1 Expression) Expression
+type CreateFunc2Args func(ctx *Context, e1, e2 Expression) Expression
+type CreateFunc3Args func(ctx *Context, e1, e2, e3 Expression) Expression
+type CreateFunc4Args func(ctx *Context, e1, e2, e3, e4 Expression) Expression
+type CreateFunc5Args func(ctx *Context, e1, e2, e3, e4, e5 Expression) Expression
+type CreateFunc6Args func(ctx *Context, e1, e2, e3, e4, e5, e6 Expression) Expression
+type CreateFunc7Args func(ctx *Context, e1, e2, e3, e4, e5, e6, e7 Expression) Expression
+type CreateFuncNArgs func(ctx *Context, args ...Expression) (Expression, error)
 
 type (
 	// Function0 is a function with 0 arguments.
 	Function0 struct {
-		Name string
 		Fn   CreateFunc0Args
+		Name string
 	}
 	// Function1 is a function with 1 argument.
 	Function1 struct {
-		Name string
 		Fn   CreateFunc1Args
+		Name string
 	}
 	// Function2 is a function with 2 arguments.
 	Function2 struct {
-		Name string
 		Fn   CreateFunc2Args
+		Name string
 	}
 	// Function3 is a function with 3 arguments.
 	Function3 struct {
-		Name string
 		Fn   CreateFunc3Args
+		Name string
 	}
 	// Function4 is a function with 4 arguments.
 	Function4 struct {
-		Name string
 		Fn   CreateFunc4Args
+		Name string
 	}
 	// Function5 is a function with 5 arguments.
 	Function5 struct {
-		Name string
 		Fn   CreateFunc5Args
+		Name string
 	}
 	// Function6 is a function with 6 arguments.
 	Function6 struct {
-		Name string
 		Fn   CreateFunc6Args
+		Name string
 	}
 	// Function7 is a function with 7 arguments.
 	Function7 struct {
-		Name string
 		Fn   CreateFunc7Args
+		Name string
 	}
 	// FunctionN is a function with variable number of arguments. This function
 	// is expected to return ErrInvalidArgumentNumber if the arity does not
 	// match, since the check has to be done in the implementation.
 	FunctionN struct {
-		Name string
 		Fn   CreateFuncNArgs
+		Name string
 	}
 )
 
@@ -101,79 +101,88 @@ var _ Function = Function6{}
 var _ Function = Function7{}
 var _ Function = FunctionN{}
 
-func NewFunction0(name string, fn func() Expression) Function0 {
+func NewFunction0(name string, fn func(ctx *Context) Expression) Function0 {
 	return Function0{
 		Name: name,
 		Fn:   fn,
 	}
 }
 
-func (fn Function0) NewInstance(args []Expression) (Expression, error) {
-	if len(args) != 0 {
-		return nil, ErrInvalidArgumentNumber.New(fn.Name, 0, len(args))
+// NewInstance implements the interface Function.
+func (fn Function0) NewInstance(ctx *Context, exprs []Expression) (Expression, error) {
+	if len(exprs) != 0 {
+		return nil, ErrInvalidArgumentNumber.New(fn.Name, 0, len(exprs))
 	}
 
-	return fn.Fn(), nil
+	return fn.Fn(ctx), nil
 }
 
-func (fn Function1) NewInstance(args []Expression) (Expression, error) {
-	if len(args) != 1 {
-		return nil, ErrInvalidArgumentNumber.New(fn.Name, 1, len(args))
+// NewInstance implements the interface Function.
+func (fn Function1) NewInstance(ctx *Context, exprs []Expression) (Expression, error) {
+	if len(exprs) != 1 {
+		return nil, ErrInvalidArgumentNumber.New(fn.Name, 1, len(exprs))
 	}
 
-	return fn.Fn(args[0]), nil
+	return fn.Fn(ctx, exprs[0]), nil
 }
 
-func (fn Function2) NewInstance(args []Expression) (Expression, error) {
-	if len(args) != 2 {
-		return nil, ErrInvalidArgumentNumber.New(fn.Name, 2, len(args))
+// NewInstance implements the interface Function.
+func (fn Function2) NewInstance(ctx *Context, exprs []Expression) (Expression, error) {
+	if len(exprs) != 2 {
+		return nil, ErrInvalidArgumentNumber.New(fn.Name, 2, len(exprs))
 	}
 
-	return fn.Fn(args[0], args[1]), nil
+	return fn.Fn(ctx, exprs[0], exprs[1]), nil
 }
 
-func (fn Function3) NewInstance(args []Expression) (Expression, error) {
-	if len(args) != 3 {
-		return nil, ErrInvalidArgumentNumber.New(fn.Name, 3, len(args))
+// NewInstance implements the interface Function.
+func (fn Function3) NewInstance(ctx *Context, exprs []Expression) (Expression, error) {
+	if len(exprs) != 3 {
+		return nil, ErrInvalidArgumentNumber.New(fn.Name, 3, len(exprs))
 	}
 
-	return fn.Fn(args[0], args[1], args[2]), nil
+	return fn.Fn(ctx, exprs[0], exprs[1], exprs[2]), nil
 }
 
-func (fn Function4) NewInstance(args []Expression) (Expression, error) {
-	if len(args) != 4 {
-		return nil, ErrInvalidArgumentNumber.New(fn.Name, 4, len(args))
+// NewInstance implements the interface Function.
+func (fn Function4) NewInstance(ctx *Context, exprs []Expression) (Expression, error) {
+	if len(exprs) != 4 {
+		return nil, ErrInvalidArgumentNumber.New(fn.Name, 4, len(exprs))
 	}
 
-	return fn.Fn(args[0], args[1], args[2], args[3]), nil
+	return fn.Fn(ctx, exprs[0], exprs[1], exprs[2], exprs[3]), nil
 }
 
-func (fn Function5) NewInstance(args []Expression) (Expression, error) {
-	if len(args) != 5 {
-		return nil, ErrInvalidArgumentNumber.New(fn.Name, 5, len(args))
+// NewInstance implements the interface Function.
+func (fn Function5) NewInstance(ctx *Context, exprs []Expression) (Expression, error) {
+	if len(exprs) != 5 {
+		return nil, ErrInvalidArgumentNumber.New(fn.Name, 5, len(exprs))
 	}
 
-	return fn.Fn(args[0], args[1], args[2], args[3], args[4]), nil
+	return fn.Fn(ctx, exprs[0], exprs[1], exprs[2], exprs[3], exprs[4]), nil
 }
 
-func (fn Function6) NewInstance(args []Expression) (Expression, error) {
-	if len(args) != 6 {
-		return nil, ErrInvalidArgumentNumber.New(fn.Name, 6, len(args))
+// NewInstance implements the interface Function.
+func (fn Function6) NewInstance(ctx *Context, exprs []Expression) (Expression, error) {
+	if len(exprs) != 6 {
+		return nil, ErrInvalidArgumentNumber.New(fn.Name, 6, len(exprs))
 	}
 
-	return fn.Fn(args[0], args[1], args[2], args[3], args[4], args[5]), nil
+	return fn.Fn(ctx, exprs[0], exprs[1], exprs[2], exprs[3], exprs[4], exprs[5]), nil
 }
 
-func (fn Function7) NewInstance(args []Expression) (Expression, error) {
-	if len(args) != 7 {
-		return nil, ErrInvalidArgumentNumber.New(fn.Name, 7, len(args))
+// NewInstance implements the interface Function.
+func (fn Function7) NewInstance(ctx *Context, exprs []Expression) (Expression, error) {
+	if len(exprs) != 7 {
+		return nil, ErrInvalidArgumentNumber.New(fn.Name, 7, len(exprs))
 	}
 
-	return fn.Fn(args[0], args[1], args[2], args[3], args[4], args[5], args[6]), nil
+	return fn.Fn(ctx, exprs[0], exprs[1], exprs[2], exprs[3], exprs[4], exprs[5], exprs[6]), nil
 }
 
-func (fn FunctionN) NewInstance(args []Expression) (Expression, error) {
-	return fn.Fn(args...)
+// NewInstance implements the interface Function.
+func (fn FunctionN) NewInstance(ctx *Context, exprs []Expression) (Expression, error) {
+	return fn.Fn(ctx, exprs...)
 }
 
 func (fn Function0) FunctionName() string { return fn.Name }

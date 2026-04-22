@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dolthub/vitess/go/mysql"
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
 	"github.com/dolthub/vitess/go/vt/sqlparser"
@@ -436,10 +437,22 @@ func ColumnTypeToType(ct *sqlparser.ColumnType) (sql.Type, error) {
 		return PolygonType{}, nil
 	case "multipolygon":
 		return MultiPolygonType{}, nil
+	case "vector":
+		dimensions := int64(DefaultVectorDimensions)
+		if ct.Length != nil {
+			var err error
+			dimensions, err = strconv.ParseInt(string(ct.Length.Val), 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid VECTOR dimension: %v", err)
+			}
+		}
+		if dimensions < 1 || dimensions > MaxVectorDimensions {
+			return nil, sql.ErrInvalidColTypeDefinition.New(ct.String(), fmt.Sprintf("VECTOR dimension must be between 1 and %d", MaxVectorDimensions))
+		}
+		return CreateVectorType(int(dimensions))
 	default:
 		return nil, fmt.Errorf("unknown type: %v", ct.Type)
 	}
-	return nil, fmt.Errorf("type not yet implemented: %v", ct.Type)
 }
 
 // CompareNulls compares two values, and returns true if either is null.
@@ -456,6 +469,24 @@ func CompareNulls(a interface{}, b interface{}) (bool, int) {
 		return true, -1
 	}
 	return false, 0
+}
+
+// CompareNullValues compares two sql.Values, and returns true if either is null.
+// The returned integer represents the ordering, with a rule that states nulls
+// as being ordered before non-nulls.
+func CompareNullValues(a, b sql.Value) (bool, int) {
+	aIsNull := a.IsNull()
+	bIsNull := b.IsNull()
+	switch {
+	case aIsNull && bIsNull:
+		return true, 0
+	case aIsNull && !bIsNull:
+		return false, 1
+	case !aIsNull && bIsNull:
+		return false, -1
+	default:
+		return false, 0
+	}
 }
 
 // NumColumns returns the number of columns in a type. This is one for all
@@ -517,11 +548,11 @@ func TypesEqual(a, b sql.Type) bool {
 	case EnumType:
 		aEnumType := at
 		bEnumType := b.(EnumType)
-		if len(aEnumType.indexToVal) != len(bEnumType.indexToVal) {
+		if len(aEnumType.idxToVal) != len(bEnumType.idxToVal) {
 			return false
 		}
-		for i := 0; i < len(aEnumType.indexToVal); i++ {
-			if aEnumType.indexToVal[i] != bEnumType.indexToVal[i] {
+		for i := 0; i < len(aEnumType.idxToVal); i++ {
+			if aEnumType.idxToVal[i] != bEnumType.idxToVal[i] {
 				return false
 			}
 		}
@@ -551,6 +582,243 @@ func TypesEqual(a, b sql.Type) bool {
 		}
 		return false
 	default:
-		return a == b
+		return a.Equals(b)
 	}
+}
+
+// generalizeNumberTypes assumes both inputs return true for IsNumber
+func generalizeNumberTypes(a, b sql.Type) sql.Type {
+	if IsFloat(a) || IsFloat(b) {
+		// TODO: handle cases where MySQL returns Float32
+		return Float64
+	}
+
+	if IsDecimal(a) || IsDecimal(b) {
+		// TODO: match precision and scale to that of the decimal type, check if defines column
+		return MustCreateDecimalType(DecimalTypeMaxPrecision, DecimalTypeMaxScale)
+	}
+
+	aIsSigned := IsSigned(a)
+	bIsSigned := IsSigned(b)
+
+	if a == Uint64 || b == Uint64 {
+		if aIsSigned || bIsSigned {
+			return MustCreateDecimalType(DecimalTypeMaxPrecision, 0)
+		}
+		return Uint64
+	}
+
+	if a == Int64 || b == Int64 {
+		return Int64
+	}
+
+	if a == Uint32 || b == Uint32 {
+		if aIsSigned || bIsSigned {
+			return Int64
+		}
+		return Uint32
+	}
+
+	if a == Int32 || b == Int32 {
+		return Int32
+	}
+
+	if a == Uint24 || b == Uint24 {
+		if aIsSigned || bIsSigned {
+			return Int32
+		}
+		return Uint24
+	}
+
+	if a == Int24 || b == Int24 {
+		return Int24
+	}
+
+	if a == Uint16 || b == Uint16 {
+		if aIsSigned || bIsSigned {
+			return Int24
+		}
+		return Uint16
+	}
+
+	if a == Int16 || b == Int16 {
+		return Int16
+	}
+
+	if a == Uint8 || b == Uint8 {
+		if aIsSigned || bIsSigned {
+			return Int16
+		}
+		return Uint8
+	}
+
+	if a == Int8 || b == Int8 {
+		return Int8
+	}
+
+	if IsBoolean(a) && IsBoolean(b) {
+		return Boolean
+	}
+
+	return Int64
+}
+
+// GeneralizeTypes returns the more "general" of two types as defined by
+// https://dev.mysql.com/doc/refman/8.4/en/flow-control-functions.html
+// TODO: Create and handle "Illegal mix of collations" error
+// TODO: Handle extended types, like DoltgresType
+func GeneralizeTypes(a, b sql.Type) sql.Type {
+	if a != nil && b != nil && a.Equals(b) {
+		return a
+	}
+
+	if IsNullType(a) {
+		return b
+	}
+	if IsNullType(b) {
+		return a
+	}
+
+	if svt, ok := a.(sql.SystemVariableType); ok {
+		a = svt.UnderlyingType()
+	}
+	if svt, ok := a.(sql.SystemVariableType); ok {
+		b = svt.UnderlyingType()
+	}
+
+	if IsJSON(a) && IsJSON(b) {
+		return JSON
+	}
+
+	if IsGeometry(a) && IsGeometry(b) {
+		return a
+	}
+
+	if IsEnum(a) && IsEnum(b) {
+		return a
+	}
+
+	if IsSet(a) && IsSet(b) {
+		return a
+	}
+
+	aIsTimespan := IsTimespan(a)
+	bIsTimespan := IsTimespan(b)
+	if aIsTimespan && bIsTimespan {
+		return Time
+	}
+	if (IsTime(a) || aIsTimespan) && (IsTime(b) || bIsTimespan) {
+		if IsDateType(a) && IsDateType(b) {
+			return Date
+		}
+		if IsTimestampType(a) && IsTimestampType(b) {
+			// TODO: match precision to max precision of the two timestamps
+			return TimestampMaxPrecision
+		}
+		// TODO: match precision to max precision of the two time types
+		return DatetimeMaxPrecision
+	}
+
+	if IsBlobType(a) || IsBlobType(b) {
+		// TODO: match blob length to max of the blob lengths
+		return LongBlob
+	}
+	aIsBit := IsBit(a)
+	bIsBit := IsBit(b)
+	if aIsBit && bIsBit {
+		// TODO: match max bits to max of max bits between a and b
+		return a.Promote()
+	}
+	if aIsBit {
+		a = Int64
+	}
+	if bIsBit {
+		b = Int64
+	}
+	aIsYear := IsYear(a)
+	bIsYear := IsYear(b)
+	if aIsYear && bIsYear {
+		return a
+	}
+	if aIsYear {
+		a = Int32
+	}
+	if bIsYear {
+		b = Int32
+	}
+
+	if IsNumber(a) && IsNumber(b) {
+		return generalizeNumberTypes(a, b)
+	}
+
+	if IsText(a) && IsText(b) {
+		sta := a.(sql.StringType)
+		stb := b.(sql.StringType)
+		if sta.Length() > stb.Length() {
+			return a
+		}
+		return b
+	}
+
+	// TODO: decide if we want to make this VarChar to match MySQL, match VarChar length to max of two types
+	return LongText
+}
+
+// TypeAwareConversion converts a value to a specified type, with awareness of the value's original type. This is
+// necessary because some types, such as EnumType and SetType, are stored as ints and require information from the
+// original type to properly convert to strings.
+func TypeAwareConversion(ctx *sql.Context, val interface{}, originalType sql.Type, convertedType sql.Type) (interface{}, sql.ConvertInRange, error) {
+	if val == nil {
+		return nil, sql.InRange, nil
+	}
+	var err error
+	if (IsEnum(originalType) || IsSet(originalType)) && IsText(convertedType) {
+		val, _, err = ConvertToCollatedString(ctx, val, originalType)
+		if err != nil {
+			return nil, sql.InRange, err
+		}
+	}
+	return convertedType.Convert(ctx, val)
+}
+
+// ConvertOrTruncate converts the value |i| to type |t| and returns the converted value; if the value does not convert
+// cleanly and the type is automatically coerced (i.e. string and numeric types), then a warning is logged and the
+// value is truncated to the Zero value for type |t|. If the value does not convert and the type is not automatically
+// coerced, then return an error.
+// TODO: Should truncate to number prefix instead of Zero.
+func ConvertOrTruncate(ctx *sql.Context, i any, t sql.Type) (any, sql.ConvertInRange, error) {
+	converted, inRange, err := t.Convert(ctx, i)
+	if err == nil {
+		return converted, inRange, nil
+	}
+	if sql.ErrTruncatedIncorrect.Is(err) {
+		ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
+		return converted, inRange, nil
+	}
+
+	// If a value can't be converted to an enum or set type, truncate it to a value that is guaranteed
+	// to not match any enum value.
+	if IsEnum(t) || IsSet(t) {
+		return nil, inRange, nil
+	}
+
+	// Values for numeric and string types are automatically coerced. For all other types, if they
+	// don't convert cleanly, it's an error.
+	if err != nil && !(IsNumber(t) || IsTextOnly(t)) {
+		return nil, inRange, err
+	}
+
+	// For numeric and string types, if the value can't be cleanly converted, truncate to the zero value for
+	// the type and log a warning in the session.
+	warning := sql.Warning{
+		Level:   "Warning",
+		Message: fmt.Sprintf("Truncated incorrect %s value: %v", t.String(), i),
+		Code:    1292,
+	}
+
+	if ctx != nil && ctx.Session != nil {
+		ctx.Session.Warn(&warning)
+	}
+
+	return t.Zero(), inRange, nil
 }

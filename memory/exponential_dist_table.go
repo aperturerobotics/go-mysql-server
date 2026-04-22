@@ -28,7 +28,7 @@ func (s ExponentialDistTable) UnderlyingTable() sql.Table {
 	return s
 }
 
-func (s ExponentialDistTable) NewInstance(_ *sql.Context, db sql.Database, args []sql.Expression) (sql.Node, error) {
+func (s ExponentialDistTable) NewInstance(ctx *sql.Context, db sql.Database, args []sql.Expression) (sql.Node, error) {
 	if len(args) != 3 {
 		return nil, fmt.Errorf("exponential_dist table expects 2 arguments: (cols, rows, lambda)")
 	}
@@ -36,24 +36,24 @@ func (s ExponentialDistTable) NewInstance(_ *sql.Context, db sql.Database, args 
 	if !ok {
 		return nil, fmt.Errorf("normal_dist table expects arguments to be literal expressions")
 	}
-	colCnt, inBounds, _ := types.Int64.Convert(colCntLit.Value())
-	if !inBounds {
+	colCnt, inRange, _ := types.Int64.Convert(ctx, colCntLit.Value())
+	if inRange != sql.InRange {
 		return nil, fmt.Errorf("normal_dist table expects 1st argument to be column count")
 	}
 	rowCntLit, ok := args[1].(*expression.Literal)
 	if !ok {
 		return nil, fmt.Errorf("normal_dist table expects arguments to be literal expressions")
 	}
-	rowCnt, inBounds, _ := types.Int64.Convert(rowCntLit.Value())
-	if !inBounds {
+	rowCnt, inRange, _ := types.Int64.Convert(ctx, rowCntLit.Value())
+	if inRange != sql.InRange {
 		return nil, fmt.Errorf("normal_dist table expects 2nd argument to be row count")
 	}
 	lambdaLit, ok := args[2].(*expression.Literal)
 	if !ok {
 		return nil, fmt.Errorf("exponential_dist table expects arguments to be literal expressions")
 	}
-	lambda, inBounds, _ := types.Float64.Convert(lambdaLit.Value())
-	if !inBounds {
+	lambda, inRange, _ := types.Float64.Convert(ctx, lambdaLit.Value())
+	if inRange != sql.InRange {
 		return nil, fmt.Errorf("exponential_dist table expects 3rd argument to be row count")
 	}
 	return ExponentialDistTable{db: db, colCnt: int(colCnt.(int64)), rowCnt: int(rowCnt.(int64)), lambda: lambda.(float64)}, nil
@@ -71,7 +71,7 @@ func (s ExponentialDistTable) String() string {
 	return "normal_dist"
 }
 
-func (s ExponentialDistTable) DebugString() string {
+func (s ExponentialDistTable) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("normal_dist")
 	children := []string{
@@ -83,7 +83,7 @@ func (s ExponentialDistTable) DebugString() string {
 	return pr.String()
 }
 
-func (s ExponentialDistTable) Schema() sql.Schema {
+func (s ExponentialDistTable) Schema(ctx *sql.Context) sql.Schema {
 	var sch sql.Schema
 	for i := 0; i < s.colCnt+1; i++ {
 		sch = append(sch, &sql.Column{
@@ -104,12 +104,8 @@ func (s ExponentialDistTable) RowIter(_ *sql.Context, _ sql.Row) (sql.RowIter, e
 	return stats.NewExpDistIter(s.colCnt, s.rowCnt, s.lambda), nil
 }
 
-func (s ExponentialDistTable) WithChildren(_ ...sql.Node) (sql.Node, error) {
+func (s ExponentialDistTable) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return s, nil
-}
-
-func (s ExponentialDistTable) CheckPrivileges(_ *sql.Context, _ sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -126,7 +122,7 @@ func (s ExponentialDistTable) Expressions() []sql.Expression {
 	return []sql.Expression{}
 }
 
-func (s ExponentialDistTable) WithExpressions(e ...sql.Expression) (sql.Node, error) {
+func (s ExponentialDistTable) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	return s, nil
 }
 

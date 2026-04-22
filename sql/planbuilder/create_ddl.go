@@ -16,9 +16,9 @@ package planbuilder
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	ast "github.com/dolthub/vitess/go/vt/sqlparser"
 
@@ -29,6 +29,14 @@ import (
 )
 
 func (b *Builder) buildCreateTrigger(inScope *scope, subQuery string, fullQuery string, c *ast.DDL) (outScope *scope) {
+	b.qFlags.Set(sql.QFlagCreateTrigger)
+	defer func() {
+		b.qFlags.Unset(sql.QFlagCreateTrigger)
+	}()
+	if b.qFlags.IsSet(sql.QFlagCreateEvent) || b.qFlags.IsSet(sql.QFlagCreateProcedure) {
+		b.handleErr(fmt.Errorf("can't create a TRIGGER from within another stored routine"))
+	}
+
 	outScope = inScope.push()
 	var triggerOrder *plan.TriggerOrder
 	if c.TriggerSpec.Order != nil {
@@ -36,72 +44,76 @@ func (b *Builder) buildCreateTrigger(inScope *scope, subQuery string, fullQuery 
 			PrecedesOrFollows: c.TriggerSpec.Order.PrecedesOrFollows,
 			OtherTriggerName:  c.TriggerSpec.Order.OtherTriggerName,
 		}
-	} else {
-		//TODO: fix vitess->sql.y, in CREATE TRIGGER, if trigger_order_opt evaluates to empty then SubStatementPositionStart swallows the first token of the body
-		beforeSwallowedToken := strings.LastIndexFunc(strings.TrimRightFunc(fullQuery[:c.SubStatementPositionStart], unicode.IsSpace), unicode.IsSpace)
-		if beforeSwallowedToken != -1 {
-			c.SubStatementPositionStart = beforeSwallowedToken
-		}
 	}
 
-	// resolve table -> create initial scope
-	prevTriggerCtxActive := b.TriggerCtx().Active
-	b.TriggerCtx().Active = true
-	defer func() {
-		b.TriggerCtx().Active = prevTriggerCtxActive
-	}()
+	db, ok := b.resolveDbForTable(c.Table)
+	if !ok {
+		b.handleErr(sql.ErrDatabaseSchemaNotFound.New(c.Table.SchemaQualifier.String()))
+	}
 
-	tableName := strings.ToLower(c.Table.Name.String())
 	tableScope, ok := b.buildResolvedTableForTablename(inScope, c.Table, nil)
 	if !ok {
-		b.handleErr(sql.ErrTableNotFound.New(tableName))
+		b.handleErr(sql.ErrTableNotFound.New(c.Table.Name.String()))
 	}
 	if _, ok := tableScope.node.(*plan.UnresolvedTable); ok {
 		// unknown table in trigger body is OK, but the target table must exist
-		b.handleErr(sql.ErrTableNotFound.New(tableName))
+		b.handleErr(sql.ErrTableNotFound.New(c.Table.Name.String()))
 	}
 
-	// todo scope with new and old columns provided
-	// insert/update have "new"
-	// update/delete have "old"
-	newScope := tableScope.replace()
-	oldScope := tableScope.replace()
-	for _, col := range tableScope.cols {
-		switch c.TriggerSpec.Event {
-		case ast.InsertStr:
-			newScope.newColumn(col)
-		case ast.UpdateStr:
-			newScope.newColumn(col)
-			oldScope.newColumn(col)
-		case ast.DeleteStr:
-			oldScope.newColumn(col)
-		}
-	}
-	newScope.setTableAlias("new")
-	oldScope.setTableAlias("old")
-	triggerScope := tableScope.replace()
-
-	triggerScope.addColumns(newScope.cols)
-	triggerScope.addColumns(oldScope.cols)
-
-	bodyStr := strings.TrimSpace(fullQuery[c.SubStatementPositionStart:c.SubStatementPositionEnd])
-	bodyScope := b.buildSubquery(triggerScope, c.TriggerSpec.Body, bodyStr, fullQuery)
-	definer := getCurrentUserForDefiner(b.ctx, c.TriggerSpec.Definer)
-
-	db := b.resolveDbForTable(c.Table)
+	triggerCtx := b.TriggerCtx()
 
 	if _, ok := tableScope.node.(*plan.ResolvedTable); !ok {
-		if prevTriggerCtxActive {
-			// previous ctx set means this is an INSERT or SHOW
-			// old version of Dolt permitted a bad trigger on VIEW
-			// warn and noop
-			b.ctx.Warn(0, fmt.Sprintf("trigger on view is not supported; 'DROP TRIGGER  %s' to fix", c.TriggerSpec.TrigName.Name.String()))
-			bodyScope.node = plan.NewResolvedDualTable()
+		// Old versions of GMS/Dolt permitted creating an invalid trigger on VIEW
+		if triggerCtx.LoadOnly {
+			// LoadOnly means a CreateTrigger statement was parsed while loading triggers for SHOW, INSERT, UPDATE, or
+			// DELETE. Warn and no-op. Since tableScope.node here is not a ResolvedTable, it won't be matched to any
+			// table during applyTriggers.
+			b.ctx.Warn(0, "Trigger on view is not supported. Please run 'DROP TRIGGER %s;'", c.TriggerSpec.TrigName.Name.String())
 		} else {
-			// top-level call is DDL
-			err := sql.ErrExpectedTableFoundView.New(tableName)
+			// Top-level call is DDL, and we should not allow a trigger on a VIEW to be created here. Or somehow, a
+			// trigger on a VIEW has been matched during applyTriggers, and we should not run that trigger.
+			err := sql.ErrExpectedTableFoundView.New(c.Table.Name.String())
 			b.handleErr(err)
 		}
+	}
+
+	var bodyNode sql.Node
+	bodyStr := strings.TrimSpace(fullQuery[c.SubStatementPositionStart:c.SubStatementPositionEnd])
+	if !triggerCtx.LoadOnly {
+		prevTriggerCtxActive := triggerCtx.Active
+		triggerCtx.Active = true
+		defer func() {
+			triggerCtx.Active = prevTriggerCtxActive
+		}()
+
+		// todo scope with new and old columns provided
+		// insert/update have "new"
+		// update/delete have "old"
+		newScope := tableScope.replace()
+		oldScope := tableScope.replace()
+		for _, col := range tableScope.cols {
+			switch c.TriggerSpec.Event {
+			case ast.InsertStr:
+				newScope.newColumn(col)
+			case ast.UpdateStr:
+				newScope.newColumn(col)
+				oldScope.newColumn(col)
+			case ast.DeleteStr:
+				oldScope.newColumn(col)
+			}
+		}
+		newScope.setTableAlias("new")
+		oldScope.setTableAlias("old")
+		triggerScope := tableScope.replace()
+
+		triggerScope.addColumns(newScope.cols)
+		triggerScope.addColumns(oldScope.cols)
+
+		triggerScope.addExpressions(newScope.exprs)
+		triggerScope.addExpressions(oldScope.exprs)
+
+		bodyScope := b.buildSubquery(triggerScope, c.TriggerSpec.Body, bodyStr, fullQuery)
+		bodyNode = bodyScope.node
 	}
 
 	outScope.node = plan.NewCreateTrigger(
@@ -111,11 +123,11 @@ func (b *Builder) buildCreateTrigger(inScope *scope, subQuery string, fullQuery 
 		c.TriggerSpec.Event,
 		triggerOrder,
 		tableScope.node,
-		bodyScope.node,
+		bodyNode,
 		subQuery,
 		bodyStr,
 		b.ctx.QueryTime(),
-		definer,
+		getCurrentUserForDefiner(b.ctx, c.TriggerSpec.Definer),
 	)
 	return outScope
 }
@@ -128,9 +140,9 @@ func getCurrentUserForDefiner(ctx *sql.Context, definer string) string {
 	return definer
 }
 
-func (b *Builder) buildCreateProcedure(inScope *scope, subQuery string, fullQuery string, c *ast.DDL) (outScope *scope) {
+func (b *Builder) buildProcedureParams(procParams []ast.ProcedureParam) []plan.ProcedureParam {
 	var params []plan.ProcedureParam
-	for _, param := range c.ProcedureSpec.Params {
+	for _, param := range procParams {
 		var direction plan.ProcedureParamDirection
 		switch param.Direction {
 		case ast.ProcedureParamDirection_In:
@@ -154,11 +166,14 @@ func (b *Builder) buildCreateProcedure(inScope *scope, subQuery string, fullQuer
 			Variadic:  false,
 		})
 	}
+	return params
+}
 
+func (b *Builder) buildProcedureCharacteristics(procCharacteristics []ast.Characteristic) ([]plan.Characteristic, plan.ProcedureSecurityContext, string) {
 	var characteristics []plan.Characteristic
 	securityType := plan.ProcedureSecurityContext_Definer // Default Security Context
 	comment := ""
-	for _, characteristic := range c.ProcedureSpec.Characteristics {
+	for _, characteristic := range procCharacteristics {
 		switch characteristic.Type {
 		case ast.CharacteristicValue_Comment:
 			comment = characteristic.Comment
@@ -185,46 +200,226 @@ func (b *Builder) buildCreateProcedure(inScope *scope, subQuery string, fullQuer
 			b.handleErr(err)
 		}
 	}
+	return characteristics, securityType, comment
+}
 
-	inScope.initProc()
-	procName := strings.ToLower(c.ProcedureSpec.ProcName.Name.String())
-	for _, p := range params {
-		// populate inScope with the procedure parameters. this will be
-		// subject maybe a bug where an inner procedure has access to
-		// outer procedure parameters.
-		inScope.proc.AddVar(expression.NewProcedureParam(strings.ToLower(p.Name), p.Type))
+func (b *Builder) buildCreateProcedure(inScope *scope, subQuery string, fullQuery string, c *ast.DDL) (outScope *scope) {
+	b.qFlags.Set(sql.QFlagCreateProcedure)
+	defer func() {
+		b.qFlags.Unset(sql.QFlagCreateProcedure)
+	}()
+	if b.qFlags.IsSet(sql.QFlagCreateEvent) || b.qFlags.IsSet(sql.QFlagCreateTrigger) {
+		b.handleErr(fmt.Errorf("can't create a PROCEDURE from within another stored routine"))
 	}
-	bodyStr := strings.TrimSpace(fullQuery[c.SubStatementPositionStart:c.SubStatementPositionEnd])
 
-	bodyScope := b.buildSubquery(inScope, c.ProcedureSpec.Body, bodyStr, fullQuery)
+	b.validateCreateProcedure(inScope, subQuery)
 
 	var db sql.Database = nil
-	dbName := c.ProcedureSpec.ProcName.Qualifier.String()
-	if dbName != "" {
+	if dbName := c.ProcedureSpec.ProcName.Qualifier.String(); dbName != "" {
 		db = b.resolveDb(dbName)
 	} else {
 		db = b.currentDb()
 	}
 
+	now := time.Now()
+	spd := sql.StoredProcedureDetails{
+		Name:            strings.ToLower(c.ProcedureSpec.ProcName.Name.String()),
+		CreateStatement: subQuery,
+		CreatedAt:       now,
+		ModifiedAt:      now,
+		SqlMode:         sql.LoadSqlMode(b.ctx).String(),
+	}
+
+	bodyStr := strings.TrimSpace(fullQuery[c.SubStatementPositionStart:c.SubStatementPositionEnd])
+
 	outScope = inScope.push()
-	outScope.node = plan.NewCreateProcedure(
-		db,
-		procName,
-		c.ProcedureSpec.Definer,
-		params,
-		time.Now(),
-		time.Now(),
-		securityType,
-		characteristics,
-		bodyScope.node,
-		comment,
-		subQuery,
-		bodyStr,
-	)
+	outScope.node = plan.NewCreateProcedure(db, spd, bodyStr)
 	return outScope
 }
 
+func (b *Builder) validateBlock(inScope *scope, stmts ast.Statements) {
+	for _, s := range stmts {
+		switch s.(type) {
+		case *ast.Declare:
+		default:
+			if inScope.procActive() {
+				inScope.proc.NewState(dsBody)
+			}
+		}
+		b.validateStatement(inScope, s)
+	}
+}
+
+func (b *Builder) validateStatement(inScope *scope, stmt ast.Statement) {
+	// TODO: a ton of this code is repeated from their build counterparts, consider refactoring into helper methods
+	switch s := stmt.(type) {
+	case *ast.DDL:
+		switch s.Action {
+		case ast.TruncateStr:
+		case ast.CreateStr:
+			if s.ProcedureSpec != nil {
+				b.handleErr(fmt.Errorf("can't create a PROCEDURE from within another stored routine"))
+			}
+			if s.TriggerSpec != nil {
+				b.handleErr(fmt.Errorf("can't create a TRIGGER from within another stored routine"))
+			}
+		}
+	case *ast.DBDDL:
+		b.handleErr(fmt.Errorf("DBDDL in CREATE PROCEDURE not yet supported"))
+	case *ast.Declare:
+		if s.Condition != nil {
+			dc := s.Condition
+			if dc.SqlStateValue != "" {
+				if len(dc.SqlStateValue) != 5 {
+					err := fmt.Errorf("SQLSTATE VALUE must be a string with length 5 consisting of only integers")
+					b.handleErr(err)
+				}
+				if dc.SqlStateValue[0:2] == "00" {
+					err := fmt.Errorf("invalid SQLSTATE VALUE: '%s'", dc.SqlStateValue)
+					b.handleErr(err)
+				}
+			} else {
+				number, err := strconv.ParseUint(string(dc.MysqlErrorCode.Val), 10, 64)
+				if err != nil || number == 0 {
+					// We use our own error instead
+					err := fmt.Errorf("invalid value '%s' for MySQL error code", string(dc.MysqlErrorCode.Val))
+					b.handleErr(err)
+				}
+				//TODO: implement MySQL error code support
+				err = sql.ErrUnsupportedSyntax.New(ast.String(s))
+				b.handleErr(err)
+			}
+			inScope.proc.AddCondition(plan.NewDeclareCondition(dc.Name, 0, ""))
+		} else if s.Variables != nil {
+			typ, err := types.ColumnTypeToType(&s.Variables.VarType)
+			if err != nil {
+				b.handleErr(err)
+			}
+			for _, v := range s.Variables.Names {
+				varName := strings.ToLower(v.String())
+				param := expression.NewProcedureParam(varName, typ)
+				inScope.proc.AddVar(b.ctx, param)
+				inScope.newColumn(scopeColumn{col: varName, typ: typ, scalar: param})
+			}
+		} else if s.Cursor != nil {
+			inScope.proc.AddCursor(s.Cursor.Name)
+		} else if s.Handler != nil {
+			switch s.Handler.ConditionValues[0].ValueType {
+			case ast.DeclareHandlerCondition_NotFound:
+			case ast.DeclareHandlerCondition_SqlException:
+			default:
+				err := sql.ErrUnsupportedSyntax.New(ast.String(s))
+				b.handleErr(err)
+			}
+			inScope.proc.AddHandler(nil)
+		}
+	case *ast.BeginEndBlock:
+		blockScope := inScope.push()
+		blockScope.initProc()
+		blockScope.proc.AddLabel(s.Label, false)
+		b.validateBlock(blockScope, s.Statements)
+	case *ast.Loop:
+		blockScope := inScope.push()
+		blockScope.initProc()
+		blockScope.proc.AddLabel(s.Label, true)
+		b.validateBlock(blockScope, s.Statements)
+	case *ast.Repeat:
+		blockScope := inScope.push()
+		blockScope.initProc()
+		blockScope.proc.AddLabel(s.Label, true)
+		b.validateBlock(blockScope, s.Statements)
+	case *ast.While:
+		blockScope := inScope.push()
+		blockScope.initProc()
+		blockScope.proc.AddLabel(s.Label, true)
+		b.validateBlock(blockScope, s.Statements)
+	case *ast.IfStatement:
+		for _, cond := range s.Conditions {
+			b.validateBlock(inScope, cond.Statements)
+		}
+		if s.Else != nil {
+			b.validateBlock(inScope, s.Else)
+		}
+	case *ast.Iterate:
+		if exists, isLoop := inScope.proc.HasLabel(s.Label); !exists || !isLoop {
+			err := sql.ErrLoopLabelNotFound.New("ITERATE", s.Label)
+			b.handleErr(err)
+		}
+	case *ast.Signal:
+		if s.ConditionName != "" {
+			signalName := strings.ToLower(s.ConditionName)
+			condition := inScope.proc.GetCondition(signalName)
+			if condition == nil {
+				err := sql.ErrDeclareConditionNotFound.New(signalName)
+				b.handleErr(err)
+			}
+		}
+	case *ast.FetchCursor:
+		if !inScope.proc.HasCursor(s.Name) {
+			b.handleErr(sql.ErrCursorNotFound.New(s.Name))
+		}
+	case *ast.OpenCursor:
+		if !inScope.proc.HasCursor(s.Name) {
+			b.handleErr(sql.ErrCursorNotFound.New(s.Name))
+		}
+	case *ast.CloseCursor:
+		if !inScope.proc.HasCursor(s.Name) {
+			b.handleErr(sql.ErrCursorNotFound.New(s.Name))
+		}
+
+	// limit validation
+	case *ast.Select:
+		if s.Limit != nil {
+			if expr, ok := s.Limit.Rowcount.(*ast.ColName); ok && inScope.procActive() {
+				if col, ok := inScope.proc.GetVar(expr.String()); ok {
+					// proc param is OK
+					if pp, ok := col.scalarGf().(*expression.ProcedureParam); ok {
+						if !pp.Type(b.ctx).Promote().Equals(types.Int64) && !pp.Type(b.ctx).Promote().Equals(types.Uint64) {
+							err := fmt.Errorf("the variable '%s' has a non-integer based type: %s", pp.Name(), pp.Type(b.ctx).String())
+							b.handleErr(err)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+func (b *Builder) validateCreateProcedure(inScope *scope, createStmt string) {
+	stmt, _, _, _ := b.parser.ParseWithOptions(b.ctx, createStmt, ';', false, b.parserOpts)
+	procStmt := stmt.(*ast.DDL)
+
+	// validate parameters
+	procParams := b.buildProcedureParams(procStmt.ProcedureSpec.Params)
+	paramNames := make(map[string]struct{})
+	for _, param := range procParams {
+		paramName := strings.ToLower(param.Name)
+		if _, ok := paramNames[paramName]; ok {
+			b.handleErr(sql.ErrDeclareVariableDuplicate.New(paramName))
+		}
+		paramNames[param.Name] = struct{}{}
+	}
+
+	inScope.initProc()
+	for _, p := range procParams {
+		inScope.proc.AddVar(b.ctx, expression.NewProcedureParam(strings.ToLower(p.Name), p.Type))
+	}
+
+	bodyStmt := procStmt.ProcedureSpec.Body
+	b.validateStatement(inScope, bodyStmt)
+
+	// TODO: check for limit clauses that are not integers
+}
+
 func (b *Builder) buildCreateEvent(inScope *scope, subQuery string, fullQuery string, c *ast.DDL) (outScope *scope) {
+	b.qFlags.Set(sql.QFlagCreateEvent)
+	defer func() {
+		b.qFlags.Unset(sql.QFlagCreateEvent)
+	}()
+	if b.qFlags.IsSet(sql.QFlagCreateTrigger) || b.qFlags.IsSet(sql.QFlagCreateProcedure) {
+		b.handleErr(fmt.Errorf("can't create an EVENT from within another stored routine"))
+	}
+
 	outScope = inScope.push()
 	eventSpec := c.EventSpec
 	dbName := strings.ToLower(eventSpec.EventName.Qualifier.String())
@@ -278,7 +473,9 @@ func (b *Builder) buildCreateEvent(inScope *scope, subQuery string, fullQuery st
 	}
 
 	outScope.node = plan.NewCreateEvent(
+		b.ctx,
 		database,
+		b.scheduler,
 		eventSpec.EventName.Name.String(), definer,
 		at, starts, ends, everyInterval,
 		onCompletionPreserve,
@@ -419,7 +616,9 @@ func (b *Builder) buildAlterEvent(inScope *scope, subQuery string, fullQuery str
 
 	outScope = inScope.push()
 	alterEvent := plan.NewAlterEvent(
-		database, eventName, definer,
+		database,
+		b.scheduler,
+		eventName, definer,
 		alterSchedule, at, starts, ends, everyInterval,
 		alterOnComp, newOnCompPreserve,
 		alterEventName, newName,
@@ -433,6 +632,18 @@ func (b *Builder) buildAlterEvent(inScope *scope, subQuery string, fullQuery str
 }
 
 func (b *Builder) buildCreateView(inScope *scope, subQuery string, fullQuery string, c *ast.DDL) (outScope *scope) {
+	dbName := c.Table.DbQualifier.String()
+	if dbName == "" {
+		dbName = b.ctx.GetCurrentDatabase()
+		if b.ViewCtx().DbName != "" {
+			dbName = b.ViewCtx().DbName
+		}
+
+		if dbName == "" {
+			b.handleErr(sql.ErrNoDatabaseSelected.New())
+		}
+	}
+
 	outScope = inScope.push()
 	selectStr := c.SubStatementStr
 	if selectStr == "" {
@@ -449,7 +660,8 @@ func (b *Builder) buildCreateView(inScope *scope, subQuery string, fullQuery str
 	}
 	queryScope := b.buildSelectStmt(inScope, selectStatement)
 
-	queryAlias := plan.NewSubqueryAlias(c.ViewSpec.ViewName.Name.String(), selectStr, queryScope.node)
+	aliasName := c.ViewSpec.ViewName.Name.String()
+	queryAlias := plan.NewSubqueryAlias(aliasName, selectStr, queryScope.node)
 	b.qFlags.Set(sql.QFlagRelSubquery)
 
 	definer := getCurrentUserForDefiner(b.ctx, c.ViewSpec.Definer)
@@ -465,13 +677,38 @@ func (b *Builder) buildCreateView(inScope *scope, subQuery string, fullQuery str
 			b.handleErr(err)
 		}
 		queryAlias = queryAlias.WithColumnNames(columnsToStrings(c.ViewSpec.Columns))
+	} else {
+		columnNames := make([]string, len(queryScope.cols))
+		for i, col := range queryScope.cols {
+			columnNames[i] = col.col
+		}
+		queryAlias = queryAlias.WithColumnNames(columnNames)
 	}
 
-	dbName := c.ViewSpec.ViewName.DbQualifier.String()
-	if dbName == "" {
-		dbName = b.ctx.GetCurrentDatabase()
+	scopeMapping := make(map[sql.ColumnId]sql.Expression)
+	var cols sql.ColSet
+
+	for i, col := range queryScope.cols {
+		id := outScope.newColumn(scopeColumn{
+			db:          dbName,
+			table:       aliasName,
+			col:         strings.ToLower(queryAlias.ColumnNames[i]),
+			originalCol: queryAlias.ColumnNames[i],
+			typ:         col.typ,
+			nullable:    col.nullable,
+		})
+		cols.Add(sql.ColumnId(id))
+		scopeMapping[sql.ColumnId(id)] = col.scalarGf()
 	}
-	db := b.resolveDb(dbName)
-	outScope.node = plan.NewCreateView(db, c.ViewSpec.ViewName.Name.String(), queryAlias, c.OrReplace, subQuery, c.ViewSpec.Algorithm, definer, c.ViewSpec.Security)
+
+	queryAlias = queryAlias.WithScopeMapping(scopeMapping).WithColumns(cols).(*plan.SubqueryAlias)
+
+	db, ok := b.resolveDbForTable(c.ViewSpec.ViewName)
+	if !ok {
+		b.handleErr(sql.ErrDatabaseSchemaNotFound.New(c.Table.SchemaQualifier.String()))
+	}
+	createView := plan.NewCreateView(db, c.ViewSpec.ViewName.Name.String(), queryAlias, c.IfNotExists, c.OrReplace, subQuery, c.ViewSpec.Algorithm, definer, c.ViewSpec.Security)
+	outScope.node = b.modifySchemaTarget(queryScope, createView, createView.Definition.Schema(b.ctx))
+
 	return outScope
 }

@@ -15,7 +15,7 @@
 package planbuilder
 
 import (
-	"fmt"
+	"sort"
 	"strings"
 
 	ast "github.com/dolthub/vitess/go/vt/sqlparser"
@@ -29,39 +29,46 @@ import (
 // scope tracks relational dependencies necessary to type check expressions,
 // resolve name definitions, and build relational nodes.
 type scope struct {
-	b      *Builder
-	parent *scope
-	ast    ast.SQLNode
 	node   sql.Node
-
-	activeSubquery *subquery
-	refsSubquery   bool
-
-	// cols are definitions provided by this scope
-	cols   []scopeColumn
 	colset sql.ColSet
-	// extraCols are auxillary output columns required
-	// for sorting or grouping
-	extraCols []scopeColumn
+	ast    ast.SQLNode
+
+	// exprs collects unique expression ids for reference
+	exprs map[string]columnId
+
+	// tables are the list of table definitions in this scope
+	tables              map[string]sql.TableId
+	oldTables           map[sql.TableId]string
+	windowDefs          map[string]*sql.WindowDefinition
+	selectAliases       map[string]sql.Expression
+	insertColumnAliases map[string]string
+
 	// redirectCol is used for using and natural joins right-table
 	// attributes that redirect to the left table intersection
 	redirectCol map[string]scopeColumn
-	// tables are the list of table definitions in this scope
-	tables map[string]sql.TableId
+
 	// ctes are common table expressions defined in this scope
-	// TODO these should be case-sensitive
+	// TODO: these should be case-sensitive
 	ctes map[string]*scope
+
+	b              *Builder
+	proc           *procCtx
+	parent         *scope
+	activeSubquery *subquery
+
 	// groupBy collects aggregation functions and inputs
 	groupBy *groupBy
+
+	insertTableAlias string
+
+	// cols are definitions provided by this scope
+	cols []scopeColumn
+	// extraCols are auxillary output columns required for sorting or grouping
+	extraCols []scopeColumn
 	// windowFuncs is a list of window functions in the current scope
 	windowFuncs []scopeColumn
-	windowDefs  map[string]*sql.WindowDefinition
-	// exprs collects unique expression ids for reference
-	exprs map[string]columnId
-	proc  *procCtx
 
-	insertTableAlias    string
-	insertColumnAliases map[string]string
+	refsSubquery bool
 }
 
 // resolveColumn matches a variable use to a column definition with a unique
@@ -142,10 +149,42 @@ func (s *scope) resolveColumn(db, table, col string, checkParent, chooseFirst bo
 		return scopeColumn{}, false
 	}
 
-	if s.parent.activeSubquery != nil {
-		s.parent.activeSubquery.addOutOfScope(c.id)
+	if s.activeSubquery != nil {
+		s.activeSubquery.addOutOfScope(c.id)
 	}
 	return c, true
+}
+
+// resolveColumnAsTable resolves a column as though it were a table, by searching the table space. This then returns all
+// columns (in their index order) of the table.
+func (s *scope) resolveColumnAsTable(db, table string) []scopeColumn {
+	var tableCols []scopeColumn
+	tabId := s.getTable(table)
+	for _, col := range s.cols {
+		if col.tableId != tabId || (db != "" && !strings.EqualFold(col.db, db)) {
+			continue
+		}
+		tableCols = append(tableCols, col)
+	}
+	if len(tableCols) == 0 && s.parent != nil {
+		return s.parent.resolveColumnAsTable(db, table)
+	}
+	sort.Slice(tableCols, func(i, j int) bool {
+		return tableCols[i].id < tableCols[j].id
+	})
+	return tableCols
+}
+
+// getCol gets a scopeColumn based on a columnId
+func (s *scope) getCol(colId sql.ColumnId) (scopeColumn, bool) {
+	if s.colset.Contains(colId) {
+		for _, c := range s.cols {
+			if sql.ColumnId(c.id) == colId {
+				return c, true
+			}
+		}
+	}
+	return scopeColumn{}, false
 }
 
 func (s *scope) hasTable(table string) bool {
@@ -157,6 +196,18 @@ func (s *scope) hasTable(table string) bool {
 		return s.parent.hasTable(table)
 	}
 	return false
+}
+
+// getTable returns the table ID matching the given name.
+func (s *scope) getTable(table string) sql.TableId {
+	id, ok := s.tables[strings.ToLower(table)]
+	if ok {
+		return id
+	}
+	if s.parent != nil {
+		return s.parent.getTable(table)
+	}
+	return 0
 }
 
 // triggerCol is used to hallucinate a new column during trigger DDL
@@ -225,7 +276,9 @@ func (s *scope) initProc() {
 // initGroupBy creates a container scope for aggregation
 // functions and function inputs.
 func (s *scope) initGroupBy() {
-	s.groupBy = &groupBy{outScope: s.replace()}
+	if s.groupBy == nil {
+		s.groupBy = &groupBy{outScope: s.replace()}
+	}
 }
 
 // pushSubquery creates a new scope with the subquery already initialized.
@@ -300,6 +353,10 @@ func (s *scope) setTableAlias(t string) {
 		s.tables = make(map[string]sql.TableId)
 	}
 	s.tables[t] = id
+	if s.oldTables == nil {
+		s.oldTables = make(map[sql.TableId]string)
+	}
+	s.oldTables[id] = oldTable
 }
 
 // setColAlias updates the column name definitions for this scope
@@ -356,18 +413,24 @@ func (s *scope) replace() *scope {
 
 // aliasCte copies a scope, but increments the column and table ids
 // for the new relation.
-func (s *scope) aliasCte(alias string) *scope {
+func (s *scope) aliasCte(ctx *sql.Context, alias string) *scope {
 	if s == nil {
 		return nil
 	}
-	outScope := s.copy()
-	if _, ok := s.tables[alias]; ok || alias == "" {
-		return outScope
-	}
+	outScope := s.copy(ctx)
 
 	sq, _ := outScope.node.(*plan.SubqueryAlias)
 
-	tabId := outScope.addTable(alias)
+	name := strings.ToLower(outScope.node.(sql.NameableNode).Name())
+
+	var tabId sql.TableId
+	if alias != "" {
+		tabId = outScope.addTable(alias)
+	} else {
+		alias = name
+		tabId = s.tables[strings.ToLower(name)]
+	}
+
 	outScope.cols = nil
 	var colSet sql.ColSet
 	scopeMapping := make(map[sql.ColumnId]sql.Expression)
@@ -396,14 +459,14 @@ func (s *scope) aliasCte(alias string) *scope {
 }
 
 // copy produces an identical scope with copied references.
-func (s *scope) copy() *scope {
+func (s *scope) copy(ctx *sql.Context) *scope {
 	if s == nil {
 		return nil
 	}
 
 	ret := *s
 	if ret.node != nil {
-		ret.node, _ = DeepCopyNode(s.node)
+		ret.node, _ = DeepCopyNode(ctx, s.node)
 	}
 	if s.tables != nil {
 		ret.tables = make(map[string]sql.TableId, len(s.tables))
@@ -434,14 +497,20 @@ func (s *scope) copy() *scope {
 	if !s.colset.Empty() {
 		ret.colset = s.colset.Copy()
 	}
+	if s.selectAliases != nil {
+		ret.selectAliases = make(map[string]sql.Expression, len(s.selectAliases))
+		for k, v := range s.selectAliases {
+			ret.selectAliases[k] = v
+		}
+	}
 
 	return &ret
 }
 
 // DeepCopyNode copies a sql.Node.
-func DeepCopyNode(node sql.Node) (sql.Node, error) {
-	n, _, err := transform.NodeExprs(node, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
-		e, err := transform.Clone(e)
+func DeepCopyNode(ctx *sql.Context, node sql.Node) (sql.Node, error) {
+	n, _, err := transform.NodeExprs(ctx, node, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+		e, err := transform.Clone(ctx, e)
 		return e, transform.NewTree, err
 	})
 	return n, err
@@ -463,6 +532,7 @@ func (s *scope) getCte(name string) *scope {
 		if checkScope.ctes != nil {
 			cte, ok := checkScope.ctes[strings.ToLower(name)]
 			if ok {
+				cte.tables[name] += 1
 				return cte
 			}
 		}
@@ -535,6 +605,15 @@ func (s *scope) addColumns(cols []scopeColumn) {
 	s.cols = append(s.cols, cols...)
 }
 
+func (s *scope) addExpressions(newExprs map[string]columnId) {
+	if s.exprs == nil {
+		s.exprs = make(map[string]columnId)
+	}
+	for k, v := range newExprs {
+		s.exprs[k] = v
+	}
+}
+
 // appendColumnsFromScope merges column definitions for
 // multi-relational expressions.
 func (s *scope) appendColumnsFromScope(src *scope) {
@@ -574,17 +653,17 @@ type tableId uint16
 type columnId uint16
 
 type scopeColumn struct {
-	nullable    bool
-	descending  bool
-	outOfScope  bool
-	id          columnId
 	typ         sql.Type
 	scalar      sql.Expression
-	tableId     sql.TableId
 	db          string
 	table       string
 	col         string
 	originalCol string
+	id          columnId
+	tableId     sql.TableId
+	nullable    bool
+	descending  bool
+	outOfScope  bool
 }
 
 // empty returns true if a scopeColumn is the null value
@@ -613,9 +692,12 @@ func (c scopeColumn) unwrapGetFieldAliasId() columnId {
 	return c.id
 }
 
-func (c scopeColumn) withOriginal(col string) scopeColumn {
-	if !strings.EqualFold(c.db, sql.InformationSchemaDatabaseName) {
-		// info schema columns always presented as uppercase
+func (c scopeColumn) withOriginal(origTbl, col string) scopeColumn {
+	// info schema columns always presented as uppercase, except for processlist
+	// can't reference information_schema.ProcessListTableName because of import cycles
+	if !strings.EqualFold(c.db, sql.InformationSchemaDatabaseName) ||
+		(strings.EqualFold(c.db, sql.InformationSchemaDatabaseName) && strings.EqualFold(c.table, "processlist")) ||
+		(strings.EqualFold(c.db, sql.InformationSchemaDatabaseName) && strings.EqualFold(origTbl, "processlist")) {
 		c.originalCol = col
 	}
 	return c
@@ -624,8 +706,9 @@ func (c scopeColumn) withOriginal(col string) scopeColumn {
 // scalarGf returns a getField reference to this column's expression.
 func (c scopeColumn) scalarGf() sql.Expression {
 	if c.scalar != nil {
-		if p, ok := c.scalar.(*expression.ProcedureParam); ok {
-			return p
+		switch e := c.scalar.(type) {
+		case *expression.ProcedureParam:
+			return e
 		}
 	}
 	if c.originalCol != "" {
@@ -638,6 +721,6 @@ func (c scopeColumn) String() string {
 	if c.table == "" {
 		return c.col
 	} else {
-		return fmt.Sprintf("%s.%s", c.table, c.col)
+		return c.table + "." + c.col
 	}
 }

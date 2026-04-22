@@ -15,7 +15,6 @@
 package plan
 
 import (
-	gmstime "github.com/dolthub/go-mysql-server/internal/time"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
@@ -75,7 +74,7 @@ func (s *ShowEvents) Children() []sql.Node {
 }
 
 // Schema implements the sql.Node interface.
-func (s *ShowEvents) Schema() sql.Schema {
+func (s *ShowEvents) Schema(ctx *sql.Context) sql.Schema {
 	return showEventsSchema
 }
 
@@ -100,7 +99,7 @@ func (s *ShowEvents) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error)
 	for _, event := range s.Events {
 		eventType := "RECURRING"
 		var executeAt, intervalVal, intervalField, starts, ends, status interface{}
-		e := event.ConvertTimesFromUTCToTz(gmstime.SystemTimezoneOffset())
+		e := event.ConvertTimesFromUTCToTz(sql.SystemTimezoneOffset())
 		if e.HasExecuteAt {
 			eventType = "ONE TIME"
 			executeAt = e.ExecuteAt.Format(sql.EventDateSpaceTimeFormat)
@@ -154,14 +153,8 @@ func (s *ShowEvents) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error)
 }
 
 // WithChildren implements the sql.Node interface.
-func (s *ShowEvents) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (s *ShowEvents) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(s, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (s *ShowEvents) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	//TODO: figure out what privileges are needed here
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

@@ -46,7 +46,7 @@ func (l *Leave) String() string {
 }
 
 // Schema implements the interface sql.Node.
-func (l *Leave) Schema() sql.Schema {
+func (l *Leave) Schema(ctx *sql.Context) sql.Schema {
 	return nil
 }
 
@@ -60,13 +60,8 @@ func (l *Leave) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (l *Leave) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (l *Leave) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(l, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (l *Leave) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

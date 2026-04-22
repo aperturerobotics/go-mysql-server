@@ -25,24 +25,28 @@ import (
 
 // GetField is an expression to get the field of a table.
 type GetField struct {
+	fieldType sql.Type
+	// schemaFormatter is the schemaFormatter used to quote field names
+	schemaFormatter sql.SchemaFormatter
+
 	db         string
 	table      string
+	name       string
 	fieldIndex int
+
 	// exprId lets the lifecycle of getFields be idempotent. We can re-index
 	// or re-apply scope/caching optimizations without worrying about losing
 	// the reference to the unique id.
-	exprId     sql.ColumnId
-	tableId    sql.TableId
-	name       string
-	fieldType  sql.Type
-	fieldType2 sql.Type2
-	nullable   bool
+	exprId  sql.ColumnId
+	tableId sql.TableId
 
-	backTickNames bool
+	// quoteName indicates whether the field name should be quoted when printed with String()
+	quoteName bool
+	nullable  bool
 }
 
 var _ sql.Expression = (*GetField)(nil)
-var _ sql.Expression2 = (*GetField)(nil)
+var _ sql.ValueExpression = (*GetField)(nil)
 var _ sql.CollationCoercible = (*GetField)(nil)
 var _ sql.IdExpression = (*GetField)(nil)
 
@@ -53,13 +57,11 @@ func NewGetField(index int, fieldType sql.Type, fieldName string, nullable bool)
 
 // NewGetFieldWithTable creates a GetField expression with table name. The table name may be an alias.
 func NewGetFieldWithTable(index, tableId int, fieldType sql.Type, db, table, fieldName string, nullable bool) *GetField {
-	fieldType2, _ := fieldType.(sql.Type2)
 	return &GetField{
 		db:         db,
 		table:      table,
 		fieldIndex: index,
 		fieldType:  fieldType,
-		fieldType2: fieldType2,
 		name:       fieldName,
 		nullable:   nullable,
 		exprId:     sql.ColumnId(index),
@@ -119,22 +121,17 @@ func (p *GetField) Name() string {
 }
 
 // IsNullable returns whether the field is nullable or not.
-func (p *GetField) IsNullable() bool {
+func (p *GetField) IsNullable(ctx *sql.Context) bool {
 	return p.nullable
 }
 
 // Type returns the type of the field.
-func (p *GetField) Type() sql.Type {
+func (p *GetField) Type(ctx *sql.Context) sql.Type {
 	return p.fieldType
 }
 
-// Type2 returns the type of the field, if this field has a sql.Type2.
-func (p *GetField) Type2() sql.Type2 {
-	return p.fieldType2
-}
-
 // ErrIndexOutOfBounds is returned when the field index is out of the bounds.
-var ErrIndexOutOfBounds = errors.NewKind("unable to find field with index %d in row of %d columns")
+var ErrIndexOutOfBounds = errors.NewKind("unable to find field with index %d in row of %d columns. \n This is a bug. Please file an issue here: https://github.com/dolthub/dolt/issues")
 
 // Eval implements the Expression interface.
 func (p *GetField) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
@@ -144,16 +141,21 @@ func (p *GetField) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	return row[p.fieldIndex], nil
 }
 
-func (p *GetField) Eval2(ctx *sql.Context, row sql.Row2) (sql.Value, error) {
-	if p.fieldIndex < 0 || p.fieldIndex >= row.Len() {
-		return sql.Value{}, ErrIndexOutOfBounds.New(p.fieldIndex, row.Len())
+// EvalValue implements the ValueExpression interface.
+func (p *GetField) EvalValue(ctx *sql.Context, row sql.ValueRow) (sql.Value, error) {
+	if p.fieldIndex < 0 || p.fieldIndex >= len(row) {
+		return sql.Value{}, ErrIndexOutOfBounds.New(p.fieldIndex, len(row))
 	}
+	return row[p.fieldIndex], nil
+}
 
-	return row.GetField(p.fieldIndex), nil
+// IsValueRowIter implements the ValueExpression interface.
+func (p *GetField) IsValueExpression(ctx *sql.Context) bool {
+	return true
 }
 
 // WithChildren implements the Expression interface.
-func (p *GetField) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (p *GetField) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(p, len(children), 0)
 	}
@@ -161,16 +163,20 @@ func (p *GetField) WithChildren(children ...sql.Expression) (sql.Expression, err
 }
 
 func (p *GetField) String() string {
+	// We never quote anything if the table identifier is present. Quoting the field name is a very narrow use case
+	// used only for serializing column default values and related fields, in which case the table name will always be
+	// stripped away. The output of this method is load-bearing in many places of analysis and execution.
 	if p.table == "" {
-		if p.backTickNames {
-			return fmt.Sprintf("`%s`", p.name)
+		if p.quoteName {
+			return p.schemaFormatter.QuoteIdentifier(p.name)
 		}
 		return p.name
 	}
-	return fmt.Sprintf("%s.%s", p.table, p.name)
+
+	return p.table + "." + p.name
 }
 
-func (p *GetField) DebugString() string {
+func (p *GetField) DebugString(ctx *sql.Context) string {
 	var notNull string
 	if !p.nullable {
 		notNull = "!null"
@@ -188,22 +194,28 @@ func (p *GetField) WithIndex(n int) sql.Expression {
 	return &p2
 }
 
-// WithBackTickNames returns a copy of this expression with the backtick names flag set to the given value.
-func (p *GetField) WithBackTickNames(backtick bool) *GetField {
+// WithQuotedNames returns a copy of this expression with the backtick names flag set to the given value.
+func (p *GetField) WithQuotedNames(formatter sql.SchemaFormatter, quoteNames bool) *GetField {
 	p2 := *p
-	p2.backTickNames = backtick
+	p2.quoteName = quoteNames
+	p2.schemaFormatter = formatter
 	return &p2
 }
 
-// IsBackTickNames returns whether the field name should be quoted with backticks.
-func (p *GetField) IsBackTickNames() bool {
-	return p.backTickNames
+// IsQuotedIdentifier returns whether the field name should be quoted.
+func (p *GetField) IsQuotedIdentifier() bool {
+	return p.quoteName
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (p *GetField) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	collation, _ = p.fieldType.CollationCoercibility(ctx)
 	return collation, 2
+}
+
+// IsSameField checks if another *GetField refers to the same field
+func (p *GetField) IsSameField(other *GetField) bool {
+	return strings.EqualFold(p.Table(), other.Table()) && strings.EqualFold(p.Name(), other.Name())
 }
 
 // SchemaToGetFields takes a schema and returns an expression array of
@@ -230,10 +242,10 @@ func SchemaToGetFields(s sql.Schema, columns sql.ColSet) []sql.Expression {
 
 // ExtractGetField returns the inner GetField expression from another expression. If there are multiple GetField
 // expressions that are not the same, then none of the GetField expressions are returned.
-func ExtractGetField(e sql.Expression) *GetField {
+func ExtractGetField(ctx *sql.Context, e sql.Expression) *GetField {
 	var field *GetField
 	multipleFields := false
-	sql.Inspect(e, func(expr sql.Expression) bool {
+	sql.Inspect(ctx, e, func(ctx *sql.Context, expr sql.Expression) bool {
 		if f, ok := expr.(*GetField); ok {
 			if field == nil {
 				field = f

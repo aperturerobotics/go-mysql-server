@@ -20,6 +20,7 @@ import (
 	"gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/transform"
 )
 
 var ErrDeleteFromNotSupported = errors.NewKind("table doesn't support DELETE FROM")
@@ -27,12 +28,17 @@ var ErrDeleteFromNotSupported = errors.NewKind("table doesn't support DELETE FRO
 // DeleteFrom is a node describing a deletion from some table.
 type DeleteFrom struct {
 	UnaryNode
-	// targets are the explicitly specified table nodes from which rows should be deleted. For simple DELETES against a
-	// single source table, targets do NOT need to be explicitly specified and will not be set here. For DELETE FROM JOIN
-	// statements, targets MUST be explicitly specified by the user and will be populated here.
-	explicitTargets []sql.Node
-	RefsSingleRel   bool
-	IsProcNested    bool
+	// targets contains the table nodes from which rows should be deleted. For simple DELETEs, this contains the single
+	// inferred table. For DELETE FROM JOIN, this contains the explicitly specified tables.
+	targets []sql.Node
+	// hasExplicitTargets indicates whether the targets were explicitly specified in SQL (e.g., "DELETE t1, t2 FROM ...
+	// ") vs inferred (e.g., "DELETE FROM table WHERE ...").
+	hasExplicitTargets bool
+	// Returning is a list of expressions to return after the delete operation. This feature is not
+	// supported in MySQL's syntax, but is exposed through PostgreSQL's syntax.
+	Returning     []sql.Expression
+	RefsSingleRel bool
+	IsProcNested  bool
 }
 
 var _ sql.Databaseable = (*DeleteFrom)(nil)
@@ -40,37 +46,60 @@ var _ sql.Node = (*DeleteFrom)(nil)
 var _ sql.CollationCoercible = (*DeleteFrom)(nil)
 
 // NewDeleteFrom creates a DeleteFrom node.
-func NewDeleteFrom(n sql.Node, targets []sql.Node) *DeleteFrom {
+func NewDeleteFrom(n sql.Node, targets []sql.Node, hasExplicitTargets bool) *DeleteFrom {
 	return &DeleteFrom{
-		UnaryNode:       UnaryNode{n},
-		explicitTargets: targets,
+		UnaryNode:          UnaryNode{n},
+		targets:            targets,
+		hasExplicitTargets: hasExplicitTargets,
 	}
 }
 
-// HasExplicitTargets returns true if the target delete tables were explicitly specified. This can only happen with
-// DELETE FROM JOIN statements – for DELETE FROM statements using a single source table, the target is NOT explicitly
-// specified and is assumed to be the single source table.
+// HasExplicitTargets returns true if the target delete tables were explicitly specified in SQL. This can only happen
+// with DELETE FROM JOIN statements. For DELETE FROM statements using a single source table, the target is NOT
+// explicitly specified and is assumed to be the single source table.
 func (p *DeleteFrom) HasExplicitTargets() bool {
-	return len(p.explicitTargets) > 0
+	return p.hasExplicitTargets
 }
 
 // WithExplicitTargets returns a new DeleteFrom node instance with the specified |targets| set as the explicitly
 // specified targets of the delete operation.
 func (p *DeleteFrom) WithExplicitTargets(targets []sql.Node) *DeleteFrom {
 	copy := *p
-	copy.explicitTargets = targets
+	copy.targets = targets
+	copy.hasExplicitTargets = true
 	return &copy
 }
 
-// GetDeleteTargets returns the sql.Nodes representing the tables from which rows should be deleted. For a DELETE FROM
-// JOIN statement, this will return the tables explicitly specified by the caller. For a DELETE FROM statement this will
-// return the single table in the DELETE FROM source that is implicitly assumed to be the target of the delete operation.
+// WithTargets returns a new DeleteFrom node instance with the specified |targets| set, preserving the
+// hasExplicitTargets flag. This is used for simple DELETEs where targets need to be updated (e.g., with
+// foreign key handlers) without changing whether they were explicitly specified.
+func (p *DeleteFrom) WithTargets(targets []sql.Node) *DeleteFrom {
+	copy := *p
+	copy.targets = targets
+	return &copy
+}
+
+// GetDeleteTargets returns the sql.Nodes representing the tables from which rows should be deleted.
 func (p *DeleteFrom) GetDeleteTargets() []sql.Node {
-	if len(p.explicitTargets) == 0 {
-		return []sql.Node{p.Child}
-	} else {
-		return p.explicitTargets
+	return p.targets
+}
+
+// Schema implements the sql.Node interface.
+func (p *DeleteFrom) Schema(ctx *sql.Context) sql.Schema {
+	// Postgres allows the returned values of the delete statement to be controlled, so if returning
+	// expressions were specified, then we return a different schema.
+	if p.Returning != nil {
+		// We know that returning exprs are resolved here, because you can't call Schema()
+		// safely until Resolved() is true.
+		returningSchema := sql.Schema{}
+		for _, expr := range p.Returning {
+			returningSchema = append(returningSchema, transform.ExpressionToColumn(ctx, expr, ""))
+		}
+
+		return returningSchema
 	}
+
+	return p.Child.Schema(ctx)
 }
 
 // Resolved implements the sql.Resolvable interface.
@@ -79,13 +108,35 @@ func (p *DeleteFrom) Resolved() bool {
 		return false
 	}
 
-	for _, target := range p.explicitTargets {
+	for _, target := range p.targets {
 		if target.Resolved() == false {
 			return false
 		}
 	}
 
+	for _, expr := range p.Returning {
+		if expr.Resolved() == false {
+			return false
+		}
+	}
+
 	return true
+}
+
+// Expressions implements the sql.Expressioner interface.
+func (p *DeleteFrom) Expressions() []sql.Expression {
+	return p.Returning
+}
+
+// WithExpressions implements the sql.Expressioner interface.
+func (p *DeleteFrom) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
+	if len(exprs) != len(p.Returning) {
+		return nil, sql.ErrInvalidChildrenNumber.New(p, len(exprs), len(p.Returning))
+	}
+
+	copy := *p
+	copy.Returning = exprs
+	return &copy, nil
 }
 
 func (p *DeleteFrom) IsReadOnly() bool {
@@ -106,37 +157,14 @@ func (p *DeleteFrom) Database() string {
 }
 
 // WithChildren implements the Node interface.
-func (p *DeleteFrom) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (p *DeleteFrom) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(p, len(children), 1)
 	}
-	return NewDeleteFrom(children[0], p.explicitTargets), nil
-}
 
-// CheckPrivileges implements the interface sql.Node.
-func (p *DeleteFrom) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	// TODO: If column values are retrieved then the SELECT privilege is required
-	//       For example: "DELETE FROM table WHERE z > 0"
-	//       We would need SELECT privileges on the "z" column as it's retrieving values
-
-	for _, target := range p.GetDeleteTargets() {
-		deletable, err := GetDeletable(target)
-		if err != nil {
-			ctx.GetLogger().Warnf("unable to determine deletable table from delete target: %v", target)
-			return false
-		}
-
-		subject := sql.PrivilegeCheckSubject{
-			Database: CheckPrivilegeNameForDatabase(GetDatabase(target)),
-			Table:    deletable.Name(),
-		}
-		op := sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Delete)
-		if opChecker.UserHasPrivileges(ctx, op) == false {
-			return false
-		}
-	}
-
-	return true
+	deleteFrom := NewDeleteFrom(children[0], p.targets, p.hasExplicitTargets)
+	deleteFrom.Returning = p.Returning
+	return deleteFrom, nil
 }
 
 func GetDeletable(node sql.Node) (sql.DeletableTable, error) {
@@ -193,9 +221,9 @@ func (p *DeleteFrom) String() string {
 	return pr.String()
 }
 
-func (p *DeleteFrom) DebugString() string {
+func (p *DeleteFrom) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("Delete")
-	_ = pr.WriteChildren(sql.DebugString(p.Child))
+	_ = pr.WriteChildren(sql.DebugString(ctx, p.Child))
 	return pr.String()
 }

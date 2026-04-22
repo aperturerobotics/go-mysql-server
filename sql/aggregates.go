@@ -24,7 +24,7 @@ import "fmt"
 type Aggregation interface {
 	WindowAdaptableExpression
 	// NewBuffer creates a new aggregation buffer and returns it as a Row.
-	NewBuffer() (AggregationBuffer, error)
+	NewBuffer(ctx *Context) (AggregationBuffer, error)
 }
 
 // WindowBuffer is a type alias for a window materialization
@@ -49,7 +49,7 @@ type WindowFunction interface {
 	// TODO: implement sliding window interface in aggregation functions and windowBlockIter
 	// NewSlidingFrameInterval(added, dropped WindowInterval)
 	// Compute returns an aggregation result for a given interval and buffer
-	Compute(*Context, WindowInterval, WindowBuffer) interface{}
+	Compute(*Context, WindowInterval, WindowBuffer) (interface{}, error)
 }
 
 // WindowAdaptableExpression is an Expression that can be executed as a window aggregation
@@ -57,10 +57,10 @@ type WindowAdaptableExpression interface {
 	Expression
 	IdExpression
 
-	// NewEvalable constructs an executable aggregation WindowFunction
-	NewWindowFunction() (WindowFunction, error)
+	// NewWindowFunction constructs an executable aggregation WindowFunction
+	NewWindowFunction(ctx *Context) (WindowFunction, error)
 	// WithWindow returns a version of this aggregation with the WindowDefinition given
-	WithWindow(window *WindowDefinition) WindowAdaptableExpression
+	WithWindow(ctx *Context, window *WindowDefinition) WindowAdaptableExpression
 	// Window returns this expression's window
 	Window() *WindowDefinition
 }
@@ -115,7 +115,7 @@ type WindowFrame interface {
 	StartNFollowing() Expression
 	// EndNPreceding returns whether a frame end preceding Expression or nil
 	EndNPreceding() Expression
-	// EndNPreceding returns whether a frame end following Expression or nil
+	// EndNFollowing returns whether a frame end following Expression or nil
 	EndNFollowing() Expression
 }
 
@@ -134,4 +134,10 @@ type AggregationBuffer interface {
 // index given on demand.
 type WindowAggregation interface {
 	WindowAdaptableExpression
+}
+
+// OrderedAggregation are aggregate functions that modify the current working row with additional result columns.
+type OrderedAggregation interface {
+	// OutputExpressions gets a list of return expressions.
+	OutputExpressions() []Expression
 }

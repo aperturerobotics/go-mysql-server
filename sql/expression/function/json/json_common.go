@@ -67,7 +67,7 @@ func getJSONDocumentFromRow(ctx *sql.Context, row sql.Row, json sql.Expression) 
 	case string:
 		// When coercing a string into a JSON object, don't use LazyJSONDocument; actually unmarshall it.
 		// This guarantees that we validate and normalize the JSON.
-		strData, _, err := types.LongBlob.Convert(js)
+		strData, _, err := types.LongBlob.Convert(ctx, js)
 		if err != nil {
 			return nil, err
 		}
@@ -102,7 +102,7 @@ func MutableJsonDoc(ctx context.Context, wrapper sql.JSONWrapper) (types.Mutable
 		return mutable, nil
 	}
 
-	val, err := clonedJsonWrapper.ToInterface()
+	val, err := clonedJsonWrapper.ToInterface(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -111,8 +111,8 @@ func MutableJsonDoc(ctx context.Context, wrapper sql.JSONWrapper) (types.Mutable
 
 // pathValPair is a helper struct for use by functions which take json paths paired with a json value. eg. JSON_SET, JSON_INSERT, etc.
 type pathValPair struct {
-	path string
 	val  sql.JSONWrapper
+	path string
 }
 
 // buildPath builds a path from the given row and expression
@@ -151,5 +151,5 @@ func buildPathValue(ctx *sql.Context, pathExp sql.Expression, valExp sql.Express
 		jsonVal = types.JSONDocument{Val: val}
 	}
 
-	return &pathValPair{*path, jsonVal}, nil
+	return &pathValPair{path: *path, val: jsonVal}, nil
 }

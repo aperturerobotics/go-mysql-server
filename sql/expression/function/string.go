@@ -15,6 +15,7 @@
 package function
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -38,7 +39,7 @@ type Ascii struct {
 var _ sql.FunctionExpression = (*Ascii)(nil)
 var _ sql.CollationCoercible = (*Ascii)(nil)
 
-func NewAscii(arg sql.Expression) sql.Expression {
+func NewAscii(ctx *sql.Context, arg sql.Expression) sql.Expression {
 	return &Ascii{NewUnaryFunc(arg, "ASCII", types.Uint8)}
 }
 
@@ -63,7 +64,7 @@ func (a *Ascii) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	str, _, err := types.Text.Convert(val)
+	str, _, err := types.Text.Convert(ctx, val)
 
 	if err != nil {
 		return nil, err
@@ -78,11 +79,11 @@ func (a *Ascii) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 }
 
 // WithChildren implements the sql.Expression interface
-func (a *Ascii) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (a *Ascii) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(a, len(children), 1)
 	}
-	return NewAscii(children[0]), nil
+	return NewAscii(ctx, children[0]), nil
 }
 
 // Ord implements the sql function "ord" which returns the numeric value of the leftmost character
@@ -93,7 +94,7 @@ type Ord struct {
 var _ sql.FunctionExpression = (*Ord)(nil)
 var _ sql.CollationCoercible = (*Ord)(nil)
 
-func NewOrd(arg sql.Expression) sql.Expression {
+func NewOrd(ctx *sql.Context, arg sql.Expression) sql.Expression {
 	return &Ord{NewUnaryFunc(arg, "ORD", types.Int64)}
 }
 
@@ -118,7 +119,7 @@ func (o *Ord) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	str, _, err := types.Text.Convert(val)
+	str, _, err := types.Text.Convert(ctx, val)
 	if err != nil {
 		return nil, err
 	}
@@ -140,11 +141,11 @@ func (o *Ord) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 }
 
 // WithChildren implements the sql.Expression interface
-func (o *Ord) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (o *Ord) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(o, len(children), 1)
 	}
-	return NewOrd(children[0]), nil
+	return NewOrd(ctx, children[0]), nil
 }
 
 // Hex implements the sql function "hex" which returns the hexadecimal representation of the string or numeric value
@@ -155,7 +156,7 @@ type Hex struct {
 var _ sql.FunctionExpression = (*Hex)(nil)
 var _ sql.CollationCoercible = (*Hex)(nil)
 
-func NewHex(arg sql.Expression) sql.Expression {
+func NewHex(ctx *sql.Context, arg sql.Expression) sql.Expression {
 	// Although this may seem convoluted, the Collation_Default is NOT guaranteed to be the character set's default
 	// collation. This ensures that you're getting the character set's default collation, and also works in the event
 	// that the Collation_Default is ever changed.
@@ -185,22 +186,26 @@ func (h *Hex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	switch val := arg.(type) {
-	case string:
-		childType := h.Child.Type()
+	case string, sql.StringWrapper:
+		s, _, err := sql.Unwrap[string](ctx, val)
+		if err != nil {
+			return nil, err
+		}
+		childType := h.Child.Type(ctx)
 		if types.IsTextOnly(childType) {
 			// For string types we need to re-encode the internal string so that we get the correct hex output
 			encoder := childType.(sql.StringType).Collation().CharacterSet().Encoder()
-			encodedBytes, ok := encoder.Encode(encodings.StringToBytes(val))
+			encodedBytes, ok := encoder.Encode(encodings.StringToBytes(s))
 			if !ok {
 				return nil, fmt.Errorf("unable to re-encode string for HEX function")
 			}
 			return hexForString(encodings.BytesToString(encodedBytes)), nil
 		} else {
-			return hexForString(val), nil
+			return hexForString(s), nil
 		}
 
 	case uint8, uint16, uint32, uint, int, int8, int16, int32, int64:
-		n, _, err := types.Int64.Convert(arg)
+		n, _, err := types.Int64.Convert(ctx, arg)
 
 		if err != nil {
 			return nil, err
@@ -244,8 +249,12 @@ func (h *Hex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 
 		return hexForString(s), nil
 
-	case []byte:
-		return hexForString(string(val)), nil
+	case []byte, sql.BytesWrapper:
+		b, _, err := sql.Unwrap[[]byte](ctx, val)
+		if err != nil {
+			return nil, err
+		}
+		return hexForString(string(b)), nil
 
 	case types.GeometryValue:
 		return hexForString(string(val.Serialize())), nil
@@ -256,11 +265,11 @@ func (h *Hex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 }
 
 // WithChildren implements the sql.Expression interface
-func (h *Hex) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (h *Hex) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(h, len(children), 1)
 	}
-	return NewHex(children[0]), nil
+	return NewHex(ctx, children[0]), nil
 }
 
 func hexChar(b byte) byte {
@@ -320,7 +329,7 @@ type Unhex struct {
 var _ sql.FunctionExpression = (*Unhex)(nil)
 var _ sql.CollationCoercible = (*Unhex)(nil)
 
-func NewUnhex(arg sql.Expression) sql.Expression {
+func NewUnhex(ctx *sql.Context, arg sql.Expression) sql.Expression {
 	return &Unhex{NewUnaryFunc(arg, "UNHEX", types.LongBlob)}
 }
 
@@ -345,7 +354,7 @@ func (h *Unhex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	val, _, err := types.LongText.Convert(arg)
+	val, _, err := types.LongText.Convert(ctx, arg)
 
 	if err != nil {
 		return nil, err
@@ -373,11 +382,11 @@ func (h *Unhex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 }
 
 // WithChildren implements the sql.Expression interface
-func (h *Unhex) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (h *Unhex) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(h, len(children), 1)
 	}
-	return NewUnhex(children[0]), nil
+	return NewUnhex(ctx, children[0]), nil
 }
 
 // MySQL expects the 64 bit 2s complement representation for negative integer values. Typical methods for converting a
@@ -404,7 +413,7 @@ type Bin struct {
 var _ sql.FunctionExpression = (*Bin)(nil)
 var _ sql.CollationCoercible = (*Bin)(nil)
 
-func NewBin(arg sql.Expression) sql.Expression {
+func NewBin(ctx *sql.Context, arg sql.Expression) sql.Expression {
 	return &Bin{NewUnaryFunc(arg, "BIN", types.Text)}
 }
 
@@ -456,11 +465,11 @@ func (h *Bin) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 }
 
 // WithChildren implements the sql.Expression interface
-func (h *Bin) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (h *Bin) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(h, len(children), 1)
 	}
-	return NewBin(children[0]), nil
+	return NewBin(ctx, children[0]), nil
 }
 
 // convertToInt64 handles the conversion from the given interface to an Int64. This mirrors the original behavior of how
@@ -543,7 +552,7 @@ func (h *Bin) convertToInt64(v interface{}) (int64, error) {
 	}
 }
 
-// Bitlength implements the sql function "bit_length" which returns the data length of the argument in bits
+// Bitlength implements the sql function "bit_length" which returns the length of a string in bits
 type Bitlength struct {
 	*UnaryFunc
 }
@@ -551,7 +560,7 @@ type Bitlength struct {
 var _ sql.FunctionExpression = (*Bitlength)(nil)
 var _ sql.CollationCoercible = (*Bitlength)(nil)
 
-func NewBitlength(arg sql.Expression) sql.Expression {
+func NewBitlength(ctx *sql.Context, arg sql.Expression) sql.Expression {
 	return &Bitlength{NewUnaryFunc(arg, "BIT_LENGTH", types.Int32)}
 }
 
@@ -581,28 +590,70 @@ func (h *Bitlength) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	switch val := arg.(type) {
-	case uint8, int8, bool:
-		return 8, nil
-	case uint16, int16:
-		return 16, nil
-	case int, uint, uint32, int32, float32:
-		return 32, nil
-	case uint64, int64, float64:
-		return 64, nil
-	case string:
-		return 8 * len([]byte(val)), nil
-	case time.Time:
-		return 128, nil
+	content, _, err := types.ConvertToCollatedString(ctx, arg, h.Child.Type(ctx))
+	if err != nil {
+		return nil, err
 	}
 
-	return nil, sql.ErrInvalidArgumentDetails.New("bit_length", fmt.Sprint(arg))
+	return 8 * len(content), nil
 }
 
 // WithChildren implements the sql.Expression interface
-func (h *Bitlength) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (h *Bitlength) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(h, len(children), 1)
 	}
-	return NewBitlength(children[0]), nil
+	return NewBitlength(ctx, children[0]), nil
+}
+
+type Quote struct {
+	*UnaryFunc
+}
+
+var _ sql.FunctionExpression = (*Bitlength)(nil)
+var _ sql.CollationCoercible = (*Bitlength)(nil)
+
+func NewQuote(ctx *sql.Context, arg sql.Expression) sql.Expression {
+	return &Quote{UnaryFunc: NewUnaryFunc(arg, "QUOTE", types.Text)}
+}
+
+func (q *Quote) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+	arg, err := q.EvalChild(ctx, row)
+	if err != nil {
+		return nil, err
+	}
+
+	val, _, err := types.Blob.Convert(ctx, arg)
+	if err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, nil
+	}
+	valBytes := val.([]byte)
+
+	ret := new(bytes.Buffer)
+	ret.WriteByte('\'')
+	for _, c := range valBytes {
+		switch c {
+		// '\032' is CTRL+Z character
+		case '\\', '\'', '\032':
+			ret.WriteByte('\\')
+			ret.WriteByte(c)
+		case '\000':
+			ret.WriteByte('\\')
+			ret.WriteByte('0')
+		default:
+			ret.WriteByte(c)
+		}
+	}
+	ret.WriteByte('\'')
+	return ret.String(), nil
+}
+
+func (q *Quote) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	if len(children) != 1 {
+		return nil, sql.ErrInvalidChildrenNumber.New(q, len(children), 1)
+	}
+	return NewQuote(ctx, children[0]), nil
 }

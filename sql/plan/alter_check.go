@@ -28,9 +28,6 @@ import (
 var (
 	// ErrNoCheckConstraintSupport is returned when the table does not support CONSTRAINT CHECK operations.
 	ErrNoCheckConstraintSupport = errors.NewKind("the table does not support check constraint operations: %s")
-
-	// ErrCheckViolated is returned when the check constraint evaluates to false
-	ErrCheckViolated = errors.NewKind("check constraint %s is violated.")
 )
 
 type CreateCheck struct {
@@ -44,8 +41,9 @@ var _ sql.CollationCoercible = (*CreateCheck)(nil)
 
 type DropCheck struct {
 	ddlNode
-	Table *ResolvedTable
-	Name  string
+	Table    *ResolvedTable
+	Name     string
+	IfExists bool
 }
 
 var _ sql.Node = (*DropCheck)(nil)
@@ -82,7 +80,7 @@ func (c *CreateCheck) IsReadOnly() bool {
 }
 
 // WithExpressions implements the sql.Expressioner interface.
-func (c *CreateCheck) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (c *CreateCheck) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != 1 {
 		return nil, fmt.Errorf("expected one expression, got: %d", len(exprs))
 	}
@@ -93,7 +91,7 @@ func (c *CreateCheck) WithExpressions(exprs ...sql.Expression) (sql.Node, error)
 }
 
 // WithChildren implements the Node interface.
-func (c *CreateCheck) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (c *CreateCheck) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(c, len(children), 1)
 	}
@@ -104,22 +102,12 @@ func (c *CreateCheck) Children() []sql.Node {
 	return []sql.Node{c.Table}
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (c *CreateCheck) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	db := c.Table.Database()
-	subject := sql.PrivilegeCheckSubject{
-		Database: CheckPrivilegeNameForDatabase(db),
-		Table:    getTableName(c.Table),
-	}
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Alter))
-}
-
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (c *CreateCheck) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.Collation_binary, 7
 }
 
-func (c *CreateCheck) Schema() sql.Schema { return types.OkResultSchema }
+func (c *CreateCheck) Schema(ctx *sql.Context) sql.Schema { return types.OkResultSchema }
 
 func (c CreateCheck) String() string {
 	pr := sql.NewTreePrinter()
@@ -136,22 +124,14 @@ func (d *DropCheck) Children() []sql.Node {
 }
 
 // WithChildren implements the Node interface.
-func (d *DropCheck) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (d *DropCheck) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(d, len(children), 1)
 	}
-	return NewAlterDropCheck(children[0].(*ResolvedTable), d.Name), nil
-}
 
-// CheckPrivileges implements the interface sql.Node.
-func (d *DropCheck) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	db := d.Table.Database()
-	subject := sql.PrivilegeCheckSubject{
-		Database: CheckPrivilegeNameForDatabase(db),
-		Table:    getTableName(d.Table),
-	}
-
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Alter))
+	newAlterDropCheck := NewAlterDropCheck(children[0].(*ResolvedTable), d.Name)
+	newAlterDropCheck.IfExists = d.IfExists
+	return newAlterDropCheck, nil
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -159,7 +139,7 @@ func (d *DropCheck) CollationCoercibility(ctx *sql.Context) (collation sql.Colla
 	return sql.Collation_binary, 7
 }
 
-func (d *DropCheck) Schema() sql.Schema { return nil }
+func (d *DropCheck) Schema(ctx *sql.Context) sql.Schema { return nil }
 
 func (d *DropCheck) IsReadOnly() bool { return false }
 
@@ -170,14 +150,16 @@ func (d DropCheck) String() string {
 	return pr.String()
 }
 
-func NewCheckDefinition(ctx *sql.Context, check *sql.CheckConstraint) (*sql.CheckDefinition, error) {
+func NewCheckDefinition(ctx *sql.Context, check *sql.CheckConstraint, schemaFormatter sql.SchemaFormatter) (*sql.CheckDefinition, error) {
 	// When transforming an analyzed CheckConstraint into a CheckDefinition (for storage), we strip off any table
 	// qualifiers that got resolved during analysis. This is to naively match the MySQL behavior, which doesn't print
 	// any table qualifiers in check expressions.
-	unqualifiedCols, _, err := transform.Expr(check.Expr, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+	unqualifiedCols, _, err := transform.Expr(ctx, check.Expr, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 		gf, ok := e.(*expression.GetField)
 		if ok {
-			return expression.NewGetField(gf.Index(), gf.Type(), gf.Name(), gf.IsNullable()), transform.NewTree, nil
+			newGf := expression.NewGetField(gf.Index(), gf.Type(ctx), gf.Name(), gf.IsNullable(ctx))
+			newGf = newGf.WithQuotedNames(schemaFormatter, true)
+			return newGf, transform.NewTree, nil
 		}
 		return e, transform.SameTree, nil
 	})
@@ -187,7 +169,7 @@ func NewCheckDefinition(ctx *sql.Context, check *sql.CheckConstraint) (*sql.Chec
 
 	return &sql.CheckDefinition{
 		Name:            check.Name,
-		CheckExpression: fmt.Sprintf("%s", unqualifiedCols),
+		CheckExpression: unqualifiedCols.String(),
 		Enforced:        check.Enforced,
 	}, nil
 }
@@ -196,7 +178,8 @@ func NewCheckDefinition(ctx *sql.Context, check *sql.CheckConstraint) (*sql.Chec
 // not known, and is determined during analysis.
 type DropConstraint struct {
 	UnaryNode
-	Name string
+	Name     string
+	IfExists bool
 }
 
 var _ sql.Node = (*DropConstraint)(nil)
@@ -209,7 +192,7 @@ func (d *DropConstraint) String() string {
 	return tp.String()
 }
 
-func (d DropConstraint) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (d DropConstraint) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(d, len(children), 1)
 	}
@@ -217,16 +200,6 @@ func (d DropConstraint) WithChildren(children ...sql.Node) (sql.Node, error) {
 	nd := &d
 	nd.UnaryNode = UnaryNode{children[0]}
 	return nd, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (d *DropConstraint) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	db := GetDatabase(d.Child)
-	subject := sql.PrivilegeCheckSubject{
-		Database: CheckPrivilegeNameForDatabase(db),
-		Table:    getTableName(d.Child),
-	}
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Alter))
 }
 
 func (d *DropConstraint) IsReadOnly() bool { return false }

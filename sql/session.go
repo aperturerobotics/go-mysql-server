@@ -23,6 +23,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/dolthub/vitess/go/vt/sqlparser"
+
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -66,6 +68,8 @@ type Session interface {
 	Client() Client
 	// SetClient returns a new session with the given client.
 	SetClient(Client)
+	// InitSessionVariableDefault sets this session's default value of the system variable with the given name.
+	InitSessionVariableDefault(ctx *Context, sysVarName string, value interface{}) error
 	// SetSessionVariable sets the given system variable to the value given for this session.
 	SetSessionVariable(ctx *Context, sysVarName string, value interface{}) error
 	// InitSessionVariable sets the given system variable to the value given for this session and will allow for
@@ -76,6 +80,9 @@ type Session interface {
 	// GetSessionVariable returns this session's value of the system variable with the given name.
 	// To access global scope, use sql.SystemVariables.GetGlobal instead.
 	GetSessionVariable(ctx *Context, sysVarName string) (interface{}, error)
+	// GetSessionVariableDefault returns this session's default value of the system variable with the given name.
+	// To access global scope, use sql.SystemVariables.GetGlobal instead.
+	GetSessionVariableDefault(ctx *Context, sysVarName string) (interface{}, error)
 	// GetUserVariable returns this session's value of the user variable with the given name, along with its most
 	// appropriate type.
 	GetUserVariable(ctx *Context, varName string) (Type, interface{}, error)
@@ -92,6 +99,12 @@ type Session interface {
 	GetAllStatusVariables(ctx *Context) map[string]StatusVarValue
 	// IncrementStatusVariable increments the value of the status variable by the integer value
 	IncrementStatusVariable(ctx *Context, statVarName string, val int)
+	// NewStoredProcParam creates a new Stored Procedure Parameter in the Session.
+	NewStoredProcParam(name string, param *StoredProcParam) *StoredProcParam
+	// GetStoredProcParam finds and returns the Stored Procedure Parameter by the given name.
+	GetStoredProcParam(name string) *StoredProcParam
+	// SetStoredProcParam sets the Stored Procedure Parameter of the given name to the given val.
+	SetStoredProcParam(name string, val any) error
 	// GetCurrentDatabase gets the current database for this session
 	GetCurrentDatabase() string
 	// SetCurrentDatabase sets the current database for this session
@@ -104,6 +117,8 @@ type Session interface {
 	Warn(warn *Warning)
 	// Warnings returns a copy of session warnings (from the most recent).
 	Warnings() []*Warning
+	// ClearWarningCount clears the warning count without clearing the actual warnings.
+	ClearWarningCount()
 	// ClearWarnings cleans up session warnings.
 	ClearWarnings()
 	// WarningCount returns a number of session warnings
@@ -118,14 +133,8 @@ type Session interface {
 	DelLock(lockName string) error
 	// IterLocks iterates through all locks owned by this user
 	IterLocks(cb func(name string) error) error
-	// SetLastQueryInfoInt sets session-level query info for the key given, applying to the query just executed.
-	SetLastQueryInfoInt(key string, value int64)
-	// GetLastQueryInfoInt returns the session-level query info for the key given, for the query most recently executed.
-	GetLastQueryInfoInt(key string) int64
-	// SetLastQueryInfoString sets session-level query info as a string for the key given, applying to the query just executed.
-	SetLastQueryInfoString(key string, value string)
-	// GetLastQueryInfoString returns the session-level query info as a string for the key given, for the query most recently executed.
-	GetLastQueryInfoString(key string) string
+	// GetLastQueryInfo returns session-level info for the most recently executed query.
+	GetLastQueryInfo() *LastQueryInfo
 	// GetTransaction returns the active transaction, if any
 	GetTransaction() Transaction
 	// SetTransaction sets the session's transaction
@@ -169,13 +178,23 @@ type Session interface {
 	// ValidateSession provides integrators a chance to do any custom validation of this session before any query is
 	// executed in it. For example, Dolt uses this hook to validate that the session's working set is valid.
 	ValidateSession(ctx *Context) error
+	// PrepareQuery saves a parsed query AST to the session map keyed by `query`.
+	PrepareQuery(query string, stmt sqlparser.Statement)
+	// UnprepareQuery removes the saved query
+	UnprepareQuery(query string)
+	// GetPreparedQuery retrieves the saved query AST along with a bool indicating if it was found.
+	GetPreparedQuery(query string) (sqlparser.Statement, bool)
+	// CacheQuery saves a parsed query AST to the session.
+	CacheQuery(query string, stmt sqlparser.Statement)
+	// GetCachedQuery retrieves the saved query AST along with a bool indicating it was found.
+	GetCachedQuery(query string) (sqlparser.Statement, bool)
 }
 
 // PersistableSession supports serializing/deserializing global system variables/
 type PersistableSession interface {
 	Session
 	// PersistGlobal writes to the persisted global system variables file
-	PersistGlobal(sysVarName string, value interface{}) error
+	PersistGlobal(ctx *Context, sysVarName string, value interface{}) error
 	// RemovePersistedGlobal deletes a variable from the persisted globals file
 	RemovePersistedGlobal(sysVarName string) error
 	// RemoveAllPersistedGlobals clears the contents of the persisted globals file
@@ -205,6 +224,26 @@ type TransactionSession interface {
 	ReleaseSavepoint(ctx *Context, transaction Transaction, name string) error
 }
 
+// A LifecycleAwareSession is a a sql.Session that gets lifecycle callbacks
+// from the handler when it begins and ends a command and when it itself ends.
+//
+// This is an optional interface which integrators can choose to implement
+// if they want those callbacks.
+type LifecycleAwareSession interface {
+	CommandBegin() error
+	CommandEnd()
+	SessionEnd()
+}
+
+// An optional Lifecycle callback which a session can receive. This can be
+// delivered periodically during a long running operation, between the
+// CommandBegin and CommandEnd calls. Across the call to this method, the
+// gms.Engine is not accessing the session or any of its state, such as
+// table editors, database providers, etc.
+type SafepointAwareSession interface {
+	CommandSafepoint()
+}
+
 type (
 	// TypedValue is a value along with its type.
 	TypedValue struct {
@@ -220,28 +259,38 @@ type (
 	}
 )
 
-const (
-	RowCount       = "row_count"
-	FoundRows      = "found_rows"
-	LastInsertId   = "last_insert_id"
-	LastInsertUuid = "last_insert_uuid"
-)
+type LastQueryInfo struct {
+	RowCount       atomic.Int64 // Session-level Row Count for the last executed query
+	FoundRows      atomic.Int64 // Session-level Found Rows for the last executed query
+	LastInsertId   atomic.Int64 // Session-level ID for the last executed insert query
+	LastInsertUUID atomic.Value // Session-level UUID for the last executed insert query
+}
+
+func defaultLastQueryInfo() *LastQueryInfo {
+	ret := LastQueryInfo{}
+	ret.RowCount.Store(0)
+	ret.FoundRows.Store(1) // this is kind of a hack -- it handles the case of `select found_rows()` before any select statement is issued
+	ret.LastInsertId.Store(0)
+	ret.LastInsertUUID.Store("")
+	return &ret
+}
 
 // Session ID 0 used as invalid SessionID
 var autoSessionIDs uint32 = 1
 
 // Context of the query execution.
 type Context struct {
+	queryTime time.Time
 	context.Context
 	Session
-	Memory      *MemoryManager
 	ProcessList ProcessList
 	services    Services
-	pid         uint64
-	query       string
-	queryTime   time.Time
 	tracer      trace.Tracer
 	rootSpan    trace.Span
+	Memory      *MemoryManager
+	query       string
+	pid         uint64
+	interpreted bool
 	Version     AnalyzerVersion
 }
 
@@ -315,6 +364,17 @@ func RunWithNowFunc(nowFunc func() time.Time, fn func() error) error {
 	return fn()
 }
 
+// RunInterpreted modifies the context such that all calls to Context.IsInterpreted will return `true`. It is safe to
+// recursively call this.
+func RunInterpreted[T any](ctx *Context, f func(ctx *Context) (T, error)) (T, error) {
+	current := ctx.interpreted
+	ctx.interpreted = true
+	defer func() {
+		ctx.interpreted = current
+	}()
+	return f(ctx)
+}
+
 func swapNowFunc(newNowFunc func() time.Time) func() time.Time {
 	ctxNowFuncMutex.Lock()
 	defer ctxNowFuncMutex.Unlock()
@@ -331,6 +391,8 @@ func Now() time.Time {
 	return ctxNowFunc()
 }
 
+type ContextFactory func(context.Context, ...ContextOption) *Context
+
 // NewContext creates a new query context. Options can be passed to configure
 // the context. If some aspect of the context is not configure, the default
 // value will be used.
@@ -343,7 +405,7 @@ func NewContext(
 	c := &Context{
 		Context:   ctx,
 		Session:   nil,
-		queryTime: ctxNowFunc(),
+		queryTime: Now(),
 		tracer:    NoopTracer,
 	}
 	for _, opt := range opts {
@@ -370,8 +432,18 @@ func (c *Context) ApplyOpts(opts ...ContextOption) {
 	}
 }
 
-// NewEmptyContext returns a default context with default values.
-func NewEmptyContext() *Context { return NewContext(context.TODO()) }
+// NewEmptyContext returns a default context with default values. When an existing context is available, it is preferred
+// to call ctx.NewContext to ensure that integrator-specific overrides are retained in the new context.
+func NewEmptyContext() *Context {
+	return NewContext(context.TODO())
+}
+
+// IsInterpreted returns `true` when this is being called from within RunInterpreted. In such cases, GMS will choose to
+// handle logic differently, as running from within an interpreted function requires different considerations than
+// running in a standard environment.
+func (c *Context) IsInterpreted() bool {
+	return c.interpreted
+}
 
 // Pid returns the process id associated with this context.
 func (c *Context) Pid() uint64 {
@@ -457,6 +529,18 @@ func (c *Context) WithContext(ctx context.Context) *Context {
 	return &nc
 }
 
+// WithClient returns a new Context with the given client.
+func (c *Context) WithClient(client Client) *Context {
+	if c == nil {
+		return nil
+	}
+
+	nc := *c
+	nc.Session.SetClient(client)
+	nc.Session.SetPrivilegeSet(nil, 0)
+	return &nc
+}
+
 // RootSpan returns the root span, if any.
 func (c *Context) RootSpan() trace.Span {
 	if c == nil {
@@ -522,18 +606,6 @@ func (c *Context) NewErrgroup() (*errgroup.Group, *Context) {
 
 	eg, egCtx := errgroup.WithContext(c.Context)
 	return eg, c.WithContext(egCtx)
-}
-
-// NewCtxWithClient returns a new Context with the given [client]
-func (c *Context) NewCtxWithClient(client Client) *Context {
-	if c == nil {
-		return nil
-	}
-
-	nc := *c
-	nc.Session.SetClient(client)
-	nc.Session.SetPrivilegeSet(nil, 0)
-	return &nc
 }
 
 // Services are handles to optional or plugin functionality that can be
@@ -649,19 +721,6 @@ func (i *spanIter) Close(ctx *Context) error {
 	return i.iter.Close(ctx)
 }
 
-func defaultLastQueryInfo() map[string]*atomic.Value {
-	ret := make(map[string]*atomic.Value)
-	ret[RowCount] = &atomic.Value{}
-	ret[RowCount].Store(int64(0))
-	ret[FoundRows] = &atomic.Value{}
-	ret[FoundRows].Store(int64(1)) // this is kind of a hack -- it handles the case of `select found_rows()` before any select statement is issue)
-	ret[LastInsertId] = &atomic.Value{}
-	ret[LastInsertId].Store(int64(0))
-	ret[LastInsertUuid] = &atomic.Value{}
-	ret[LastInsertUuid].Store("")
-	return ret
-}
-
 // cc: https://dev.mysql.com/doc/refman/8.0/en/temporary-files.html
 func GetTmpdirSessionVar() string {
 	ret := os.Getenv("TMPDIR")
@@ -702,3 +761,32 @@ const (
 	VersionStable
 	VersionExperimental
 )
+
+// Helper function to call CommandBegin on a LifecycleAwareSession, or do nothing.
+func SessionCommandBegin(s Session) error {
+	if cur, ok := s.(LifecycleAwareSession); ok {
+		return cur.CommandBegin()
+	}
+	return nil
+}
+
+// Helper function to call CommandEnd on a LifecycleAwareSession, or do nothing.
+func SessionCommandEnd(s Session) {
+	if cur, ok := s.(LifecycleAwareSession); ok {
+		cur.CommandEnd()
+	}
+}
+
+// Helper function to call CommandSafepoint on a SafepointAwareSession, or do nothing.
+func SessionCommandSafepoint(s Session) {
+	if cur, ok := s.(SafepointAwareSession); ok {
+		cur.CommandSafepoint()
+	}
+}
+
+// Helper function to call SessionEnd on a LifecycleAwareSession, or do nothing.
+func SessionEnd(s Session) {
+	if cur, ok := s.(LifecycleAwareSession); ok {
+		cur.SessionEnd()
+	}
+}

@@ -23,8 +23,8 @@ import (
 // DeclareCondition represents the DECLARE ... CONDITION statement.
 type DeclareCondition struct {
 	Name          string
-	MysqlErrCode  int64
 	SqlStateValue string
+	MysqlErrCode  int64
 }
 
 var _ sql.Node = (*DeclareCondition)(nil)
@@ -60,7 +60,7 @@ func (d *DeclareCondition) String() string {
 }
 
 // Schema implements the sql.Node interface.
-func (d *DeclareCondition) Schema() sql.Schema {
+func (d *DeclareCondition) Schema(ctx *sql.Context) sql.Schema {
 	return nil
 }
 
@@ -70,13 +70,8 @@ func (d *DeclareCondition) Children() []sql.Node {
 }
 
 // WithChildren implements the sql.Node interface.
-func (d *DeclareCondition) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (d *DeclareCondition) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(d, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (d *DeclareCondition) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

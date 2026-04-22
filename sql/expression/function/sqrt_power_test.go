@@ -27,6 +27,7 @@ import (
 
 func TestSqrt(t *testing.T) {
 	f := NewSqrt(
+		sql.NewEmptyContext(),
 		expression.NewGetField(0, types.Float64, "n", false),
 	)
 	testCases := []struct {
@@ -36,10 +37,14 @@ func TestSqrt(t *testing.T) {
 		err      bool
 	}{
 		{"null input", sql.NewRow(nil), nil, false},
-		{"invalid string", sql.NewRow("foo"), nil, true},
-		{"valid string", sql.NewRow("9"), float64(3), false},
-		{"number is zero", sql.NewRow(0), float64(0), false},
-		{"positive number", sql.NewRow(8), float64(2.8284271247461903), false},
+		{"empty string", sql.NewRow("0"), 0.0, false},
+		{"invalid string", sql.NewRow("foo"), 0.0, false},
+		{"invalid string int truncated", sql.NewRow("123foo"), 11.090536506409418, false},
+		{"invalid string float truncated", sql.NewRow("1.23abc"), 1.1090536506409416, false},
+		{"scientific string notation truncated", sql.NewRow("+1.23e2"), 11.090536506409418, false},
+		{"valid string", sql.NewRow("9"), 3.0, false},
+		{"number is zero", sql.NewRow(0), 0.0, false},
+		{"positive number", sql.NewRow(8), 2.8284271247461903, false},
 		{"negative number", sql.NewRow(-1), nil, false},
 	}
 	for _, tt := range testCases {
@@ -71,18 +76,27 @@ func TestPower(t *testing.T) {
 		{"Base is nil", types.Float64, sql.NewRow(2, nil), nil, false},
 		{"Exp is nil", types.Float64, sql.NewRow(nil, 2), nil, false},
 
-		{"Base is 0", types.Float64, sql.NewRow(0, 2), float64(0), false},
-		{"Base and exp is 0", types.Float64, sql.NewRow(0, 0), float64(1), false},
-		{"Exp is 0", types.Float64, sql.NewRow(2, 0), float64(1), false},
-		{"Base is negative", types.Float64, sql.NewRow(-2, 2), float64(4), false},
-		{"Exp is negative", types.Float64, sql.NewRow(2, -2), float64(0.25), false},
-		{"Base and exp are invalid strings", types.Float64, sql.NewRow("a", "b"), nil, true},
-		{"Base and exp are valid strings", types.Float64, sql.NewRow("2", "2"), float64(4), false},
-		{"positive inf", types.Float64, sql.NewRow(2, math.Inf(1)), nil, false},
-		{"negative inf", types.Float64, sql.NewRow(2, math.Inf(1)), nil, false},
+		{"Base is 0", types.Float64, sql.NewRow(0, 2), 0.0, false},
+		{"Base and exp is 0", types.Float64, sql.NewRow(0, 0), 1.0, false},
+		{"Exp is 0", types.Float64, sql.NewRow(2, 0), 1.0, false},
+		{"Base is negative", types.Float64, sql.NewRow(-2, 2), 4.0, false},
+		{"Exp is negative", types.Float64, sql.NewRow(2, -2), 0.25, false},
+
+		{"Base and exp are invalid strings", types.Text, sql.NewRow("a", "b"), 1.0, false},
+		{"Base and exp are invalid truncated strings", types.Text, sql.NewRow("2a", "2b"), 4.0, false},
+		{"Base and exp are valid int strings", types.Text, sql.NewRow("2", "2"), 4.0, false},
+		{"Base and exp are valid float strings", types.Text, sql.NewRow("1.2", "3.4"), 1.8587296919794811, false},
+		{"Base and exp are valid int strings truncated", types.Text, sql.NewRow("12abc", "2abc"), 144.0, false},
+		{"Base and exp are valid float strings truncated", types.Text, sql.NewRow("1.2abc", "2.3abc"), 1.5209567545525318, false},
+		{"Base and exp are valid scientific float notation strings truncated", types.Text, sql.NewRow("0.12e1asdf", "+23e-1asdf"), 1.5209567545525318, false},
+
+		// This is an overflow error in MySQL because it does not allow infinity values, but go-mysql-server does to be Postgres-compatible.
+		{"positive inf", types.Float64, sql.NewRow(2, math.Inf(1)), math.Inf(1), false},
+		{"negative inf", types.Float64, sql.NewRow(2, math.Inf(-1)), 0.0, false},
 	}
 	for _, tt := range testCases {
 		f := NewPower(
+			sql.NewEmptyContext(),
 			expression.NewGetField(0, tt.rowType, "", false),
 			expression.NewGetField(1, tt.rowType, "", false),
 		)

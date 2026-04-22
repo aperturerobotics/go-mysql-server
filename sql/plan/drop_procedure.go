@@ -25,8 +25,8 @@ import (
 
 type DropProcedure struct {
 	Db            sql.Database
-	IfExists      bool
 	ProcedureName string
+	IfExists      bool
 }
 
 var _ sql.Databaser = (*DropProcedure)(nil)
@@ -62,7 +62,7 @@ func (d *DropProcedure) String() string {
 }
 
 // Schema implements the sql.Node interface.
-func (d *DropProcedure) Schema() sql.Schema {
+func (d *DropProcedure) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -72,15 +72,8 @@ func (d *DropProcedure) Children() []sql.Node {
 }
 
 // WithChildren implements the sql.Node interface.
-func (d *DropProcedure) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (d *DropProcedure) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(d, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (d *DropProcedure) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{Database: d.Db.Name()}
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewPrivilegedOperation(subject, sql.PrivilegeType_AlterRoutine))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

@@ -45,17 +45,12 @@ func (f *Filter) IsReadOnly() bool {
 }
 
 // WithChildren implements the Node interface.
-func (f *Filter) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (f *Filter) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(f, len(children), 1)
 	}
 
 	return NewFilter(f.Expression, children[0]), nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (f *Filter) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return f.Child.CheckPrivileges(ctx, opChecker)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -64,7 +59,7 @@ func (f *Filter) CollationCoercibility(ctx *sql.Context) (collation sql.Collatio
 }
 
 // WithExpressions implements the Expressioner interface.
-func (f *Filter) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (f *Filter) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(f, len(exprs), 1)
 	}
@@ -73,17 +68,20 @@ func (f *Filter) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
 }
 
 // Describe implements the sql.Describable interface
-func (f *Filter) Describe(options sql.DescribeOptions) string {
+func (f *Filter) Describe(ctx *sql.Context, options sql.DescribeOptions) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("Filter")
-	children := []string{sql.Describe(f.Expression, options), sql.Describe(f.Child, options)}
+	children := []string{sql.Describe(ctx, f.Expression, options), sql.Describe(ctx, f.Child, options)}
 	_ = pr.WriteChildren(children...)
 	return pr.String()
 }
 
 // String implements the fmt.Stringer interface
 func (f *Filter) String() string {
-	return f.Describe(sql.DescribeOptions{
+	// To maintain compatibility with fmt.Stringer we have to use an empty context, but this will fail in any case that
+	// requires a context to determine a string (such as an integrator using the context to contain type information).
+	ctx := sql.NewEmptyContext()
+	return f.Describe(ctx, sql.DescribeOptions{
 		Analyze:   false,
 		Estimates: false,
 		Debug:     false,
@@ -91,8 +89,8 @@ func (f *Filter) String() string {
 }
 
 // DebugString implements the sql.DebugStringer interface
-func (f *Filter) DebugString() string {
-	return f.Describe(sql.DescribeOptions{
+func (f *Filter) DebugString(ctx *sql.Context) string {
+	return f.Describe(ctx, sql.DescribeOptions{
 		Analyze:   false,
 		Estimates: false,
 		Debug:     true,
@@ -110,6 +108,9 @@ type FilterIter struct {
 	cond      sql.Expression
 	childIter sql.RowIter
 }
+
+var _ sql.RowIter = (*FilterIter)(nil)
+var _ sql.ValueRowIter = (*FilterIter)(nil)
 
 // NewFilterIter creates a new FilterIter.
 func NewFilterIter(
@@ -136,6 +137,36 @@ func (i *FilterIter) Next(ctx *sql.Context) (sql.Row, error) {
 			return row, nil
 		}
 	}
+}
+
+// NextValueRow implements the sql.ValueRowIter interface.
+func (i *FilterIter) NextValueRow(ctx *sql.Context) (sql.ValueRow, error) {
+	for {
+		row, err := i.childIter.(sql.ValueRowIter).NextValueRow(ctx)
+		if err != nil {
+			return nil, err
+		}
+		res, err := i.cond.(sql.ValueExpression).EvalValue(ctx, row)
+		if err != nil {
+			return nil, err
+		}
+		if res.Val[0] == 1 {
+			return row, nil
+		}
+	}
+}
+
+// IsValueRowIter implements the sql.ValueRowIter interface.
+func (i *FilterIter) IsValueRowIter(ctx *sql.Context) bool {
+	cond, ok := i.cond.(sql.ValueExpression)
+	if !ok || !cond.IsValueExpression(ctx) {
+		return false
+	}
+	childIter, ok := i.childIter.(sql.ValueRowIter)
+	if !ok || !childIter.IsValueRowIter(ctx) {
+		return false
+	}
+	return true
 }
 
 // Close implements the RowIter interface.

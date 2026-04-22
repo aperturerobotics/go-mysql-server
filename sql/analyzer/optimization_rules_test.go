@@ -35,7 +35,7 @@ func TestEvalFilter(t *testing.T) {
 	pro := memory.NewDBProvider(db)
 	ctx := newContext(pro)
 
-	inner := memory.NewTable(db, "foo", sql.PrimaryKeySchema{}, nil)
+	inner := memory.NewTable(ctx, db, "foo", sql.PrimaryKeySchema{}, nil)
 	rule := getRule(simplifyFiltersId)
 
 	testCases := []struct {
@@ -77,7 +77,7 @@ func TestEvalFilter(t *testing.T) {
 					expression.NewGetFieldWithTable(0, 0, types.Int64, "", "foo", "bar", false),
 					lit(5)),
 			),
-			plan.NewEmptyTableWithSchema(inner.Schema()),
+			plan.NewEmptyTableWithSchema(inner.Schema(ctx)),
 		},
 		{
 			and(
@@ -86,7 +86,7 @@ func TestEvalFilter(t *testing.T) {
 					lit(5)),
 				eq(lit(5), lit(4)),
 			),
-			plan.NewEmptyTableWithSchema(inner.Schema()),
+			plan.NewEmptyTableWithSchema(inner.Schema(ctx)),
 		},
 		{
 			and(
@@ -146,7 +146,7 @@ func TestEvalFilter(t *testing.T) {
 				eq(lit(5), lit(4)),
 				eq(lit(5), lit(4)),
 			),
-			plan.NewEmptyTableWithSchema(inner.Schema()),
+			plan.NewEmptyTableWithSchema(inner.Schema(ctx)),
 		},
 	}
 
@@ -191,10 +191,10 @@ func TestPushNotFilters(t *testing.T) {
 			exp: "(xy.x < 0)",
 		},
 		// TODO this isn't correct for join filters
-		//{
+		// {
 		//	in:  "NOT(y IS NULL)",
 		//	exp: "((xy.x < NULL) OR (xy.x > NULL))",
-		//},
+		// },
 		{
 			in:  "NOT (x > 2 AND y > 2)",
 			exp: "((xy.x <= 2) OR (xy.y <= 2))",
@@ -218,12 +218,12 @@ func TestPushNotFilters(t *testing.T) {
 	ctx := sql.NewContext(context.Background(), sql.WithSession(sess))
 	ctx.SetCurrentDatabase("mydb")
 
-	b := planbuilder.New(ctx, cat, sql.NewMysqlParser())
+	b := planbuilder.New(ctx, cat, nil)
 
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
 			q := fmt.Sprintf("SELECT 1 from xy WHERE %s", tt.in)
-			node, _, _, _, err := b.Parse(q, false)
+			node, _, _, _, err := b.Parse(q, nil, false)
 			require.NoError(t, err)
 
 			cmp, _, err := pushNotFilters(ctx, nil, node, nil, nil, nil)
@@ -242,16 +242,16 @@ func newTestCatalog(db *memory.Database) *sql.MapCatalog {
 		Databases: make(map[string]sql.Database),
 		Tables:    make(map[string]sql.Table),
 	}
-
-	cat.Tables["xy"] = memory.NewTable(db, "xy", sql.NewPrimaryKeySchema(sql.Schema{
-		{Name: "x", Type: types.Int64},
-		{Name: "y", Type: types.Int64},
-		{Name: "z", Type: types.Int64},
+	ctx := sql.NewEmptyContext()
+	cat.Tables["xy"] = memory.NewTable(ctx, db, "xy", sql.NewPrimaryKeySchema(sql.Schema{
+		{Name: "x", Type: types.Int64, Source: "xy"},
+		{Name: "y", Type: types.Int64, Source: "xy"},
+		{Name: "z", Type: types.Int64, Source: "xy"},
 	}, 0), nil)
-	cat.Tables["uv"] = memory.NewTable(db, "uv", sql.NewPrimaryKeySchema(sql.Schema{
-		{Name: "u", Type: types.Int64},
-		{Name: "v", Type: types.Int64},
-		{Name: "w", Type: types.Int64},
+	cat.Tables["uv"] = memory.NewTable(ctx, db, "uv", sql.NewPrimaryKeySchema(sql.Schema{
+		{Name: "u", Type: types.Int64, Source: "uv"},
+		{Name: "v", Type: types.Int64, Source: "uv"},
+		{Name: "w", Type: types.Int64, Source: "uv"},
 	}, 0), nil)
 
 	db.AddTable("xy", cat.Tables["xy"].(memory.MemTable))

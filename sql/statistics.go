@@ -21,6 +21,8 @@ import (
 	"time"
 )
 
+const DisableMergeJoin = "disable_merge_join"
+
 // StatisticsTable is a table that can provide information about its number of rows and other facts to improve query
 // planning performance.
 type StatisticsTable interface {
@@ -36,8 +38,8 @@ type StatisticsTable interface {
 type StatsProvider interface {
 	// GetTableStats returns all statistics for the table
 	GetTableStats(ctx *Context, db string, table Table) ([]Statistic, error)
-	// RefreshTableStats updates all statistics associated with a given table
-	RefreshTableStats(ctx *Context, table Table, db string) error
+	// AnalyzeTable updates all statistics associated with a given table
+	AnalyzeTable(ctx *Context, table Table, db string) error
 	// SetStats updates or overwrites a set of table statistics
 	SetStats(ctx *Context, stats Statistic) error
 	// GetStats fetches a set of statistics for a set of table columns
@@ -91,6 +93,7 @@ type MutableStatistic interface {
 	WithLowerBound(Row) Statistic
 }
 
+// NewQualifierFromString creates a new StatQualifier from a string.
 func NewQualifierFromString(q string) (StatQualifier, error) {
 	parts := strings.Split(q, ".")
 	if len(parts) < 3 {
@@ -99,23 +102,42 @@ func NewQualifierFromString(q string) (StatQualifier, error) {
 	return StatQualifier{Database: parts[0], Tab: parts[1], Idx: parts[2]}, nil
 }
 
-func NewStatQualifier(db, table, index string) StatQualifier {
-	return StatQualifier{Database: strings.ToLower(db), Tab: strings.ToLower(table), Idx: strings.ToLower(index)}
+// NewSchemaQualifierFromString creates a new StatQualifier from a string,
+// assuming the string contains a schema part.
+func NewSchemaQualifierFromString(q string) (StatQualifier, error) {
+	parts := strings.Split(q, ".")
+	if len(parts) < 4 {
+		return StatQualifier{}, fmt.Errorf("invalid qualifier string: '%s', expected '<database>.<schema>.<table>.<index>'", q)
+	}
+	return StatQualifier{Database: parts[0], Sch: parts[1], Tab: parts[2], Idx: parts[3]}, nil
+}
+
+func NewStatQualifier(db, schema, table, index string) StatQualifier {
+	return StatQualifier{
+		Database: strings.ToLower(db),
+		Sch:      strings.ToLower(schema),
+		Tab:      strings.ToLower(table),
+		Idx:      strings.ToLower(index)}
 }
 
 // StatQualifier is the namespace hierarchy for a given statistic.
 // The qualifier and set of columns completely describes a unique stat.
 type StatQualifier struct {
 	Database string `json:"database"`
+	Sch      string `json:"schema"`
 	Tab      string `json:"table"`
 	Idx      string `json:"index"`
 }
 
 func (q StatQualifier) String() string {
-	if q.Idx != "" {
-		return fmt.Sprintf("%s.%s.%s", q.Database, q.Tab, q.Idx)
+	tableName := q.Tab
+	if q.Sch != "" {
+		tableName = fmt.Sprintf("%s.%s", q.Sch, q.Tab)
 	}
-	return fmt.Sprintf("%s.%s", q.Database, q.Tab)
+	if q.Idx != "" {
+		return fmt.Sprintf("%s.%s.%s", q.Database, tableName, q.Idx)
+	}
+	return fmt.Sprintf("%s.%s", q.Database, tableName)
 }
 
 func (q StatQualifier) Empty() bool {
@@ -124,6 +146,10 @@ func (q StatQualifier) Empty() bool {
 
 func (q StatQualifier) Db() string {
 	return q.Database
+}
+
+func (q StatQualifier) Schema() string {
+	return q.Sch
 }
 
 func (q StatQualifier) Table() string {
@@ -147,7 +173,7 @@ func (h Histogram) Clone(context.Context) JSONWrapper {
 	return h
 }
 
-func (h Histogram) ToInterface() (interface{}, error) {
+func (h Histogram) ToInterface(context.Context) (interface{}, error) {
 	ret := make([]interface{}, len(h))
 	for i, b := range h {
 		var upperBound Row
@@ -175,7 +201,7 @@ func (h Histogram) ToInterface() (interface{}, error) {
 	return ret, nil
 }
 
-func (h Histogram) DebugString() string {
+func (h Histogram) DebugString(ctx *Context) string {
 	var bounds []string
 	var cnts []int
 	var allCnt int
@@ -214,14 +240,4 @@ type HistogramBucket interface {
 	McvCounts() []uint64
 	// Mcvs are the "most common values" (keys) in the index
 	Mcvs() []Row
-}
-
-// JSONWrapper is an integrator specific implementation of a JSON field value.
-// The query engine can utilize these optimized access methods improve performance
-// by minimizing the need to unmarshall a JSONWrapper into a JSONDocument.
-type JSONWrapper interface {
-	// Clone creates a new value that can be mutated without affecting the original.
-	Clone(ctx context.Context) JSONWrapper
-	// ToInterface converts a JSONWrapper to an interface{} of simple types
-	ToInterface() (interface{}, error)
 }

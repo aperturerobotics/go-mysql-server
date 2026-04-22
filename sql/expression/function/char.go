@@ -33,7 +33,7 @@ type Char struct {
 var _ sql.FunctionExpression = (*Char)(nil)
 var _ sql.CollationCoercible = (*Char)(nil)
 
-func NewChar(args ...sql.Expression) (sql.Expression, error) {
+func NewChar(ctx *sql.Context, args ...sql.Expression) (sql.Expression, error) {
 	return &Char{args: args}, nil
 }
 
@@ -63,7 +63,7 @@ func (c *Char) String() string {
 }
 
 // Type implements sql.Expression
-func (c *Char) Type() sql.Type {
+func (c *Char) Type(ctx *sql.Context) sql.Type {
 	if c.Collation == sql.Collation_binary || c.Collation == sql.Collation_Unspecified {
 		return types.MustCreateString(sqltypes.VarBinary, int64(len(c.args)*4), sql.Collation_binary)
 	}
@@ -71,7 +71,7 @@ func (c *Char) Type() sql.Type {
 }
 
 // IsNullable implements sql.Expression
-func (c *Char) IsNullable() bool {
+func (c *Char) IsNullable(ctx *sql.Context) bool {
 	return true
 }
 
@@ -85,18 +85,26 @@ func (c *Char) CollationCoercibility(ctx *sql.Context) (collation sql.CollationI
 	return sql.Collation_binary, 5
 }
 
-// char converts num into a byte array
-// This function is essentially converting the number to base 256
-func char(num uint32) []byte {
-	if num == 0 {
-		return []byte{}
+// encodeUint32 converts uint32 `num` into a []byte using the fewest number of bytes in big endian (no leading 0s)
+func encodeUint32(num uint32) []byte {
+	res := []byte{
+		byte(num >> 24),
+		byte(num >> 16),
+		byte(num >> 8),
+		byte(num),
 	}
-	return append(char(num>>8), byte(num&255))
+	var i int
+	for i = 0; i < 3; i++ {
+		if res[i] != 0 {
+			break
+		}
+	}
+	return res[i:]
 }
 
 // Eval implements the sql.Expression interface
 func (c *Char) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
-	res := []byte{}
+	var res []byte
 	for _, arg := range c.args {
 		if arg == nil {
 			continue
@@ -111,17 +119,20 @@ func (c *Char) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 			continue
 		}
 
-		v, _, err := types.Uint32.Convert(val)
+		v, _, err := types.Uint32.Convert(ctx, val)
 		if err != nil {
 			ctx.Warn(1292, "Truncated incorrect INTEGER value: '%v'", val)
+		}
+
+		if v == nil {
 			res = append(res, 0)
 			continue
 		}
 
-		res = append(res, char(v.(uint32))...)
+		res = append(res, encodeUint32(v.(uint32))...)
 	}
 
-	result, _, err := c.Type().Convert(res)
+	result, _, err := c.Type(ctx).Convert(ctx, res)
 	if err != nil {
 		return nil, err
 	}
@@ -135,6 +146,6 @@ func (c *Char) Children() []sql.Expression {
 }
 
 // WithChildren implements the sql.Expression interface
-func (c *Char) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return NewChar(children...)
+func (c *Char) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return NewChar(ctx, children...)
 }

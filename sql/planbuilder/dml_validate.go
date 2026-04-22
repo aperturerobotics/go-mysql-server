@@ -24,7 +24,7 @@ import (
 )
 
 func (b *Builder) validateInsert(ins *plan.InsertInto) {
-	table := getResolvedTable(ins.Destination)
+	table := getResolvedTable(b.ctx, ins.Destination)
 	if table == nil {
 		return
 	}
@@ -43,7 +43,7 @@ func (b *Builder) validateInsert(ins *plan.InsertInto) {
 		}
 	}
 
-	if len(ins.OnDupExprs) > 0 {
+	if ins.OnDupExprs.HasUpdates() {
 		var ok bool
 		_, ok = insertable.(sql.UpdatableTable)
 		if !ok {
@@ -53,7 +53,7 @@ func (b *Builder) validateInsert(ins *plan.InsertInto) {
 	}
 
 	// normalize the column name
-	dstSchema := insertable.Schema()
+	dstSchema := insertable.Schema(b.ctx)
 	columnNames := make([]string, len(ins.ColumnNames))
 	for i, name := range ins.ColumnNames {
 		columnNames[i] = strings.ToLower(name)
@@ -74,7 +74,7 @@ func (b *Builder) validateInsert(ins *plan.InsertInto) {
 		}
 	}
 
-	err = validateValueCount(columnNames, ins.Source)
+	err = validateValueCount(b.ctx, columnNames, ins.Source)
 	if err != nil {
 		b.handleErr(err)
 	}
@@ -165,7 +165,12 @@ func validGeneratedColumnValue(idx int, source sql.Node) bool {
 				if _, ok := val.Unwrap().(*sql.ColumnDefaultValue); ok {
 					return true
 				}
+				if _, ok := val.Unwrap().(*expression.DefaultColumn); ok {
+					return true
+				}
 				return false
+			case *expression.DefaultColumn: // handle unwrapped DefaultColumn
+				return true
 			default:
 				return false
 			}
@@ -176,11 +181,7 @@ func validGeneratedColumnValue(idx int, source sql.Node) bool {
 	}
 }
 
-func validateValueCount(columnNames []string, values sql.Node) error {
-	if exchange, ok := values.(*plan.Exchange); ok {
-		values = exchange.Child
-	}
-
+func validateValueCount(ctx *sql.Context, columnNames []string, values sql.Node) error {
 	switch node := values.(type) {
 	case *plan.Values:
 		for _, exprTuple := range node.ExpressionTuples {
@@ -189,16 +190,16 @@ func validateValueCount(columnNames []string, values sql.Node) error {
 			}
 		}
 	case *plan.LoadData:
-		dataColLen := len(node.ColumnNames)
+		dataColLen := len(node.ColNames)
 		if dataColLen == 0 {
-			dataColLen = len(node.Schema())
+			dataColLen = len(node.Schema(ctx))
 		}
 		if len(columnNames) != dataColLen {
 			return sql.ErrInsertIntoMismatchValueCount.New()
 		}
 	default:
 		// Parser assures us that this will be some form of SelectStatement, so no need to type check it
-		if len(columnNames) != len(values.Schema()) {
+		if len(columnNames) != len(values.Schema(ctx)) {
 			return sql.ErrInsertIntoMismatchValueCount.New()
 		}
 	}

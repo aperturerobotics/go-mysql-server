@@ -1,6 +1,10 @@
 package memo
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/dolthub/go-mysql-server/sql"
+)
 
 var HaltErr = errors.New("halt dfs")
 
@@ -11,34 +15,33 @@ var HaltErr = errors.New("halt dfs")
 // walk to expression group leaves, and then traverse every execution plan in leaf
 // groups before working upwards back to the root group. Returning a HaltErr
 // short circuits the walk.
-func DfsRel(grp *ExprGroup, cb func(rel RelExpr) error) error {
+func DfsRel(ctx *sql.Context, grp *ExprGroup, cb func(ctx *sql.Context, rel RelExpr) error) error {
 	seen := make(map[GroupId]struct{})
-	err := dfsRelHelper(grp, seen, cb)
+	err := dfsRelHelper(ctx, grp, seen, cb)
 	if errors.Is(err, HaltErr) {
 		return nil
 	}
 	return err
 }
 
-func dfsRelHelper(grp *ExprGroup, seen map[GroupId]struct{}, cb func(rel RelExpr) error) error {
+func dfsRelHelper(ctx *sql.Context, grp *ExprGroup, seen map[GroupId]struct{}, cb func(ctx *sql.Context, rel RelExpr) error) error {
 	if _, ok := seen[grp.Id]; ok {
 		return nil
 	} else {
 		seen[grp.Id] = struct{}{}
 	}
-	n := grp.First
-	for n != nil {
+
+	for n := range grp.Iter() {
 		for _, c := range n.Children() {
-			err := dfsRelHelper(c, seen, cb)
+			err := dfsRelHelper(ctx, c, seen, cb)
 			if err != nil {
 				return err
 			}
 		}
-		err := cb(n)
+		err := cb(ctx, n)
 		if err != nil {
 			return err
 		}
-		n = n.Next()
 	}
 	return nil
 }

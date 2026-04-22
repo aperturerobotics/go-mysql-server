@@ -36,13 +36,13 @@ func NewValues(tuples [][]sql.Expression) *Values {
 	return &Values{ExpressionTuples: tuples}
 }
 
-// NewValuesWithAliasName creates a Values node with the given row and column aliases.
+// NewValuesWithAlias creates a Values node with the given row and column aliases.
 func NewValuesWithAlias(tableName string, columnNames map[string]string, tuples [][]sql.Expression) *Values {
 	return &Values{ExpressionTuples: tuples, AliasName: tableName, ColumnNames: columnNames}
 }
 
 // Schema implements the Node interface.
-func (p *Values) Schema() sql.Schema {
+func (p *Values) Schema(ctx *sql.Context) sql.Schema {
 	if len(p.ExpressionTuples) == 0 {
 		return nil
 	}
@@ -58,8 +58,8 @@ func (p *Values) Schema() sql.Schema {
 		}
 		s[i] = &sql.Column{
 			Name:     name,
-			Type:     e.Type(),
-			Nullable: e.IsNullable(),
+			Type:     e.Type(ctx),
+			Nullable: e.IsNullable(ctx),
 		}
 	}
 
@@ -86,25 +86,6 @@ func (p *Values) IsReadOnly() bool {
 	return true
 }
 
-// RowIter implements the Node interface.
-func (p *Values) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
-	rows := make([]sql.Row, len(p.ExpressionTuples))
-	for i, et := range p.ExpressionTuples {
-		vals := make([]interface{}, len(et))
-		for j, e := range et {
-			var err error
-			vals[j], err = e.Eval(ctx, row)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		rows[i] = sql.NewRow(vals...)
-	}
-
-	return sql.RowsToRowIter(rows...), nil
-}
-
 func (p *Values) String() string {
 	var sb strings.Builder
 	sb.WriteString("Values(")
@@ -124,7 +105,7 @@ func (p *Values) String() string {
 	return sb.String()
 }
 
-func (p *Values) DebugString() string {
+func (p *Values) DebugString(ctx *sql.Context) string {
 	var sb strings.Builder
 	sb.WriteString("Values(")
 	for i, tuple := range p.ExpressionTuples {
@@ -136,7 +117,7 @@ func (p *Values) DebugString() string {
 			if j > 0 {
 				sb.WriteString(",")
 			}
-			sb.WriteString(sql.DebugString(e))
+			sb.WriteString(sql.DebugString(ctx, e))
 		}
 		sb.WriteRune(']')
 	}
@@ -155,17 +136,12 @@ func (p *Values) Expressions() []sql.Expression {
 }
 
 // WithChildren implements the Node interface.
-func (p *Values) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (p *Values) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(p, len(children), 0)
 	}
 
 	return p, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (p *Values) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -174,7 +150,7 @@ func (*Values) CollationCoercibility(ctx *sql.Context) (collation sql.CollationI
 }
 
 // WithExpressions implements the Expressioner interface.
-func (p *Values) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (p *Values) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	var expected int
 	for _, t := range p.ExpressionTuples {
 		expected += len(t)

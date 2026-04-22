@@ -15,10 +15,13 @@
 package stats
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
 	"time"
+
+	"github.com/dolthub/go-mysql-server/sql/types"
 
 	"github.com/dolthub/go-mysql-server/sql"
 )
@@ -34,15 +37,15 @@ func NewStatsIter(ctx *sql.Context, dStats ...sql.Statistic) (*statsIter, error)
 // todo: make a JSON compatible container for sql.Row w/ types so that we
 // can eagerly convert to sql.Row without sacrificing string printing.
 type statsIter struct {
-	dStats        []sql.Statistic
-	i             int
-	j             int
-	types         []sql.Type
+	createdAt     time.Time
 	qual          sql.StatQualifier
 	typesStr      string
 	colsStr       string
 	lowerBoundStr string
-	createdAt     time.Time
+	dStats        []sql.Statistic
+	types         []sql.Type
+	i             int
+	j             int
 }
 
 var _ sql.RowIter = (*statsIter)(nil)
@@ -80,7 +83,9 @@ func (s *statsIter) updateIndexMeta() {
 	}
 	s.types = dStat.Types()
 	s.typesStr = typesB.String()
-	s.lowerBoundStr = StringifyKey(dStat.LowerBound(), dStat.Types())
+	if len(dStat.LowerBound()) > 0 {
+		s.lowerBoundStr = StringifyKey(dStat.LowerBound(), dStat.Types())
+	}
 	s.colsStr = strings.Join(dStat.Columns(), ",")
 	s.qual = dStat.Qualifier()
 	s.createdAt = dStat.CreatedAt()
@@ -102,7 +107,9 @@ func (s *statsIter) bucketToRow(i int, bucket sql.HistogramBucket) (sql.Row, err
 	mcvs := make([]string, mcvCnt)
 
 	for i, mcv := range bucket.Mcvs() {
-		mcvs[i] = StringifyKey(mcv, s.types)
+		if len(mcv) > 0 {
+			mcvs[i] = StringifyKey(mcv, s.types)
+		}
 	}
 
 	return sql.Row{
@@ -122,24 +129,20 @@ func (s *statsIter) bucketToRow(i int, bucket sql.HistogramBucket) (sql.Row, err
 	}, nil
 }
 
-func ParseRow(rowStr string, types []sql.Type) (sql.Row, error) {
-	var row sql.Row
-	for i, v := range strings.Split(rowStr, ",") {
-		val, _, err := types[i].Convert(v)
-		if err != nil {
-			return nil, err
-		}
-		row = append(row, val)
-	}
-	return row, nil
-}
-
-func StringifyKey(r sql.Row, types []sql.Type) string {
+func StringifyKey(r sql.Row, typs []sql.Type) string {
+	// TODO: Add context parameter
+	ctx := context.Background()
 	b := strings.Builder{}
 	sep := ""
-	for i, v := range r {
+	for i := range typs {
+		v := r[i]
+		typ := typs[i]
+		if _, ok := typ.(sql.StringType); ok {
+			typ = types.LongText
+			v, _, _ = typ.Convert(ctx, v)
+		}
 		if v == nil {
-			v = types[i].Zero()
+			v = typ.Zero()
 		}
 		fmt.Fprintf(&b, "%s%v", sep, v)
 		sep = ","

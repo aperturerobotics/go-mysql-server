@@ -57,8 +57,9 @@ type CollatedDatabaseProvider interface {
 // TableFunctionProvider is an interface that allows custom table functions to be provided. It's usually (but not
 // always) implemented by a DatabaseProvider.
 type TableFunctionProvider interface {
-	// TableFunction returns the table function with the name provided, case-insensitive
-	TableFunction(ctx *Context, name string) (TableFunction, error)
+	// TableFunction returns the table function with the name provided, case-insensitive.
+	// It also returns boolean param for whether the table function was found.
+	TableFunction(ctx *Context, name string) (TableFunction, bool)
 	// WithTableFunctions returns a new provider with (only) the list of table functions arguments
 	WithTableFunctions(fns ...TableFunction) (TableFunctionProvider, error)
 }
@@ -78,6 +79,10 @@ type Database interface {
 // SchemaDatabase is a database comprising multiple schemas that can each be queried for tables.
 type SchemaDatabase interface {
 	Nameable
+	// SupportsDatabaseSchemas returns whether this database supports multiple schemas. This is necessary because some
+	// integrators may use implementations that fulfill the interface without actually supporting multiple schemas in
+	// all configurations.
+	SupportsDatabaseSchemas() bool
 	// GetSchema returns the database with the schema name provided, matched case-insensitive.
 	// If the schema does not exist, the boolean return value should be false.
 	GetSchema(ctx *Context, schemaName string) (DatabaseSchema, bool, error)
@@ -86,10 +91,8 @@ type SchemaDatabase interface {
 	CreateSchema(ctx *Context, schemaName string) error
 	// AllSchemas returns all schemas in the database.
 	AllSchemas(ctx *Context) ([]DatabaseSchema, error)
-	// // GetTable returns the table with the name given in the schema given. The schema name may be empty.
-	// GetTable(ctx *Context, schemaName, tableName string) (Table, bool, error)
-	// // GetTableAsOf returns the table with the name given in the schema given. The schema name may be empty.
-	// GetTableAsOf(ctx *Context, schemaName, tableName string, asOf interface{}) (Table, bool, error)
+	// DropSchema drops the schema with the name given.
+	DropSchema(ctx *Context, schemaName string) error
 }
 
 // DatabaseSchema is a schema that can be queried for tables. It is functionally equivalent to a Database
@@ -222,6 +225,8 @@ type TriggerDefinition struct {
 	// SqlMode holds the SQL_MODE that was in use when this trigger was originally defined. It contains information
 	// needed for how to parse the trigger's SQL, such as whether ANSI_QUOTES mode is enabled.
 	SqlMode string
+	// SchemaName is the name of the schema of the trigger, for databases that support schemas.
+	SchemaName string
 }
 
 // TemporaryTableDatabase is a database that can query the session (which manages the temporary table state) to
@@ -292,6 +297,18 @@ type EventDatabase interface {
 	NeedsToReloadEvents(ctx *Context, token interface{}) (bool, error)
 }
 
+// QuiescableEventDatabase is an optional extension of EventDatabase that indicates events in this database
+// will only be modified through the EventDatabase interface methods (SaveEvent, UpdateEvent, DropEvent),
+// and that the event executor does not need to periodically poll NeedsToReloadEvents when there are no
+// events to execute. When all EventDatabases in the catalog implement this interface and return `true`,
+// the event executor can fully quiesce when no events exist, sleeping indefinitely until an event is
+// created.
+type QuiescableEventDatabase interface {
+	EventDatabase
+	// QuiescableEvents returns true if this database supports event executor quiescing.
+	QuiescableEvents() bool
+}
+
 // ViewDatabase is implemented by databases that persist view definitions
 type ViewDatabase interface {
 	// CreateView persists the definition a view with the name and select statement given. If a view with that name
@@ -315,6 +332,8 @@ type ViewDefinition struct {
 	TextDefinition      string
 	CreateViewStatement string
 	SqlMode             string
+	// SchemaName is the name of the schema of the view, for databases that support schemas.
+	SchemaName string
 }
 
 // GetTableInsensitive implements a case-insensitive map lookup for tables keyed off of the table name.

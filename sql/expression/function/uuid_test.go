@@ -30,7 +30,7 @@ import (
 func TestUUID(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	// Generate a UUID and validate that is a legitimate uuid
-	uuidE := NewUUIDFunc()
+	uuidE := NewUUIDFunc(ctx)
 
 	result, err := uuidE.Eval(ctx, sql.Row{nil})
 	require.NoError(t, err)
@@ -40,7 +40,7 @@ func TestUUID(t *testing.T) {
 	require.NoError(t, err)
 
 	// validate that generated uuid is legitimate for IsUUID
-	val := NewIsUUID(uuidE)
+	val := NewIsUUID(ctx, uuidE)
 	require.Equal(t, true, eval(t, val, sql.Row{nil}))
 
 	// Use a UUID regex as a sanity check
@@ -66,14 +66,17 @@ func TestIsUUID(t *testing.T) {
 	}
 
 	for _, tt := range testCases {
-		f := NewIsUUID(expression.NewLiteral(tt.value, tt.rowType))
+		ctx := sql.NewEmptyContext()
+		f := NewIsUUID(ctx, expression.NewLiteral(tt.value, tt.rowType))
 
 		t.Run(tt.name, func(t *testing.T) {
 			require.Equal(t, tt.expected, eval(t, f, sql.Row{nil}))
 		})
 
 		req := require.New(t)
-		req.False(f.IsNullable())
+		if tt.expected == nil {
+			req.True(f.IsNullable(ctx))
+		}
 	}
 }
 
@@ -97,24 +100,27 @@ func TestUUIDToBinValid(t *testing.T) {
 	for _, tt := range validTestCases {
 		var f sql.Expression
 		var err error
+		ctx := sql.NewEmptyContext()
 
 		if tt.hasSwap {
-			f, err = NewUUIDToBin(expression.NewLiteral(tt.uuid, tt.uuidType), expression.NewLiteral(tt.swapValue, tt.swapType))
+			f, err = NewUUIDToBin(ctx, expression.NewLiteral(tt.uuid, tt.uuidType), expression.NewLiteral(tt.swapValue, tt.swapType))
 		} else {
-			f, err = NewUUIDToBin(expression.NewLiteral(tt.uuid, tt.uuidType))
+			f, err = NewUUIDToBin(ctx, expression.NewLiteral(tt.uuid, tt.uuidType))
 		}
 
 		require.NoError(t, err)
 
 		// Convert to hex to make testing easier
-		h := NewHex(f)
+		h := NewHex(ctx, f)
 
 		t.Run(tt.name, func(t *testing.T) {
 			require.Equal(t, tt.expected, eval(t, h, sql.Row{nil}))
 		})
 
 		req := require.New(t)
-		req.False(f.IsNullable())
+		if tt.expected == nil {
+			req.True(f.IsNullable(ctx))
+		}
 	}
 }
 
@@ -132,11 +138,11 @@ func TestUUIDToBinFailing(t *testing.T) {
 	}
 
 	for _, tt := range failingTestCases {
-		f, err := NewUUIDToBin(expression.NewLiteral(tt.uuid, tt.uuidType), expression.NewLiteral(tt.swapValue, tt.swapType))
+		ctx := sql.NewEmptyContext()
+		f, err := NewUUIDToBin(ctx, expression.NewLiteral(tt.uuid, tt.uuidType), expression.NewLiteral(tt.swapValue, tt.swapType))
 		require.NoError(t, err)
 
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := sql.NewEmptyContext()
 			_, err := f.Eval(ctx, sql.Row{nil})
 			require.Error(t, err)
 		})
@@ -144,13 +150,14 @@ func TestUUIDToBinFailing(t *testing.T) {
 }
 
 func TestBinToUUID(t *testing.T) {
+	ctx := sql.NewEmptyContext()
 	// Test that UUID_TO_BIN to BIN_TO_UUID is reflexive
-	uuidE := eval(t, NewUUIDFunc(), sql.Row{nil})
+	uuidE := eval(t, NewUUIDFunc(ctx), sql.Row{nil})
 
-	f, err := NewUUIDToBin(expression.NewLiteral(uuidE, types.LongText))
+	f, err := NewUUIDToBin(ctx, expression.NewLiteral(uuidE, types.LongText))
 	require.NoError(t, err)
 
-	retUUID, err := NewBinToUUID(f)
+	retUUID, err := NewBinToUUID(ctx, f)
 	require.NoError(t, err)
 
 	require.Equal(t, uuidE, eval(t, retUUID, sql.Row{nil}))
@@ -176,9 +183,9 @@ func TestBinToUUID(t *testing.T) {
 		var err error
 
 		if tt.hasSwap {
-			f, err = NewBinToUUID(expression.NewLiteral(tt.binary, tt.uuidType), expression.NewLiteral(tt.swapValue, tt.swapType))
+			f, err = NewBinToUUID(ctx, expression.NewLiteral(tt.binary, tt.uuidType), expression.NewLiteral(tt.swapValue, tt.swapType))
 		} else {
-			f, err = NewBinToUUID(expression.NewLiteral(tt.binary, tt.uuidType))
+			f, err = NewBinToUUID(ctx, expression.NewLiteral(tt.binary, tt.uuidType))
 		}
 		require.NoError(t, err)
 
@@ -187,7 +194,9 @@ func TestBinToUUID(t *testing.T) {
 		})
 
 		req := require.New(t)
-		req.False(f.IsNullable())
+		if tt.expected == nil {
+			req.True(f.IsNullable(ctx))
+		}
 	}
 }
 
@@ -205,13 +214,141 @@ func TestBinToUUIDFailing(t *testing.T) {
 	}
 
 	for _, tt := range failingTestCases {
-		f, err := NewBinToUUID(expression.NewLiteral(tt.uuid, tt.uuidType), expression.NewLiteral(tt.swapValue, tt.swapType))
+		ctx := sql.NewEmptyContext()
+		f, err := NewBinToUUID(ctx, expression.NewLiteral(tt.uuid, tt.uuidType), expression.NewLiteral(tt.swapValue, tt.swapType))
 		require.NoError(t, err)
 
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := sql.NewEmptyContext()
 			_, err := f.Eval(ctx, sql.Row{nil})
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestUUIDShort(t *testing.T) {
+	ctx := sql.NewEmptyContext()
+	uuidShortE := NewUUIDShortFunc(ctx)
+
+	// Test that UUID_SHORT returns sequential values
+	result1, err := uuidShortE.Eval(ctx, sql.Row{nil})
+	require.NoError(t, err)
+	require.IsType(t, uint64(0), result1)
+
+	result2, err := uuidShortE.Eval(ctx, sql.Row{nil})
+	require.NoError(t, err)
+	require.IsType(t, uint64(0), result2)
+
+	result3, err := uuidShortE.Eval(ctx, sql.Row{nil})
+	require.NoError(t, err)
+	require.IsType(t, uint64(0), result3)
+
+	// Values should be sequential (incrementing by 1)
+	require.Equal(t, result1.(uint64)+1, result2.(uint64))
+	require.Equal(t, result2.(uint64)+1, result3.(uint64))
+
+	// Test that values are 64-bit unsigned integers
+	require.Greater(t, result1.(uint64), uint64(0))
+	require.Greater(t, result2.(uint64), uint64(0))
+	require.Greater(t, result3.(uint64), uint64(0))
+}
+
+func TestUUIDShortMultipleInstances(t *testing.T) {
+	ctx := sql.NewEmptyContext()
+
+	uuidShort1 := NewUUIDShortFunc(ctx)
+	uuidShort2 := NewUUIDShortFunc(ctx)
+
+	result1, err := uuidShort1.Eval(ctx, sql.Row{nil})
+	require.NoError(t, err)
+
+	result2, err := uuidShort2.Eval(ctx, sql.Row{nil})
+	require.NoError(t, err)
+
+	// Both should return sequential values from the global counter
+	require.IsType(t, uint64(0), result1)
+	require.IsType(t, uint64(0), result2)
+	require.Greater(t, result1.(uint64), uint64(0))
+	require.Greater(t, result2.(uint64), uint64(0))
+
+	// Values should be sequential (global counter)
+	require.Equal(t, result1.(uint64)+1, result2.(uint64))
+}
+
+func TestUUIDShortWithChildren(t *testing.T) {
+	ctx := sql.NewEmptyContext()
+	uuidShortE := NewUUIDShortFunc(ctx)
+
+	newExpr, err := uuidShortE.WithChildren(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, newExpr)
+
+	_, err = uuidShortE.WithChildren(ctx, expression.NewLiteral(1, types.Int64))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid children number")
+}
+
+func TestUUIDShortProperties(t *testing.T) {
+	ctx := sql.NewEmptyContext()
+	uuidShortE := NewUUIDShortFunc(ctx).(*UUIDShortFunc)
+
+	require.Equal(t, "UUID_SHORT", uuidShortE.FunctionName())
+	require.Equal(t, "returns a short universal identifier as a 64-bit unsigned integer.", uuidShortE.Description())
+	require.Equal(t, "UUID_SHORT()", uuidShortE.String())
+	require.Equal(t, types.Uint64, uuidShortE.Type(ctx))
+	require.True(t, uuidShortE.Resolved())
+	require.False(t, uuidShortE.IsNullable(ctx))
+	require.True(t, uuidShortE.IsNonDeterministic())
+	require.Nil(t, uuidShortE.Children())
+}
+
+func TestUUIDShortServerIdIntegration(t *testing.T) {
+	ctx := sql.NewEmptyContext()
+	uuidShortE := NewUUIDShortFunc(ctx)
+
+	result1, err := uuidShortE.Eval(ctx, sql.Row{nil})
+	require.NoError(t, err)
+	require.IsType(t, uint64(0), result1)
+
+	serverIDFromResult := (result1.(uint64) & 0xFF00000000000000) >> 56
+	require.Equal(t, uint64(1), serverIDFromResult)
+
+	err = sql.SystemVariables.SetGlobal(ctx, "server_id", uint32(123))
+	require.NoError(t, err)
+
+	result2, err := uuidShortE.Eval(ctx, sql.Row{nil})
+	require.NoError(t, err)
+	require.IsType(t, uint64(0), result2)
+
+	serverIDFromResult2 := (result2.(uint64) & 0xFF00000000000000) >> 56
+	require.Equal(t, uint64(123), serverIDFromResult2)
+
+	err = sql.SystemVariables.SetGlobal(ctx, "server_id", uint32(255))
+	require.NoError(t, err)
+
+	result3, err := uuidShortE.Eval(ctx, sql.Row{nil})
+	require.NoError(t, err)
+	require.IsType(t, uint64(0), result3)
+
+	serverIDFromResult3 := (result3.(uint64) & 0xFF00000000000000) >> 56
+	require.Equal(t, uint64(255), serverIDFromResult3)
+
+	err = sql.SystemVariables.SetGlobal(ctx, "server_id", uint32(256))
+	require.NoError(t, err)
+
+	result4, err := uuidShortE.Eval(ctx, sql.Row{nil})
+	require.NoError(t, err)
+	require.IsType(t, uint64(0), result4)
+
+	serverIDFromResult4 := (result4.(uint64) & 0xFF00000000000000) >> 56
+	require.Equal(t, uint64(0), serverIDFromResult4)
+
+	err = sql.SystemVariables.SetGlobal(ctx, "server_id", uint32(243))
+	require.NoError(t, err)
+
+	result5, err := uuidShortE.Eval(ctx, sql.Row{nil})
+	require.NoError(t, err)
+	require.IsType(t, uint64(0), result5)
+
+	serverIDFromResult5 := (result5.(uint64) & 0xFF00000000000000) >> 56
+	require.Equal(t, uint64(243), serverIDFromResult5)
 }

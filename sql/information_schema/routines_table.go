@@ -28,12 +28,11 @@ import (
 const defaultRoutinesTableRowCount = 10
 
 type routineTable struct {
-	name       string
-	schema     Schema
 	catalog    Catalog
 	procedures map[string][]*plan.Procedure
-	// functions
-	rowIter func(*Context, Catalog, map[string][]*plan.Procedure) (RowIter, error)
+	rowIter    func(*Context, Catalog, map[string][]*plan.Procedure) (RowIter, error)
+	name       string
+	schema     Schema
 }
 
 var (
@@ -58,8 +57,8 @@ func (r *routineTable) Database() string {
 	return InformationSchemaDatabaseName
 }
 
-func (r *routineTable) DataLength(_ *Context) (uint64, error) {
-	return uint64(len(r.Schema()) * int(types.Text.MaxByteLength()) * defaultRoutinesTableRowCount), nil
+func (r *routineTable) DataLength(ctx *Context) (uint64, error) {
+	return uint64(len(r.Schema(ctx)) * int(types.Text.MaxByteLength()) * defaultRoutinesTableRowCount), nil
 }
 
 func (r *routineTable) RowCount(ctx *Context) (uint64, bool, error) {
@@ -72,7 +71,7 @@ func (r *routineTable) Name() string {
 }
 
 // Schema implements the sql.Table interface.
-func (r *routineTable) Schema() Schema {
+func (r *routineTable) Schema(ctx *Context) Schema {
 	return r.schema
 }
 
@@ -82,7 +81,10 @@ func (r *routineTable) Collation() CollationID {
 }
 
 func (r *routineTable) String() string {
-	return printTable(r.Name(), r.Schema())
+	// To maintain compatibility with fmt.Stringer we have to use an empty context, but this will fail in any case that
+	// requires a context to determine a string (such as an integrator using the context to contain type information).
+	ctx := NewEmptyContext()
+	return printTable(r.Name(), r.Schema(ctx))
 }
 
 func (r *routineTable) Partitions(context *Context) (PartitionIter, error) {
@@ -138,6 +140,7 @@ func routinesRowIter(ctx *Context, c Catalog, p map[string][]*plan.Procedure) (R
 	if privSet == nil {
 		privSet = mysql_db.NewPrivilegeSet()
 	}
+
 	for dbName, procedures := range p {
 		if !hasRoutinePrivsOnDB(privSet, dbName) {
 			continue
@@ -154,7 +157,9 @@ func routinesRowIter(ctx *Context, c Catalog, p map[string][]*plan.Procedure) (R
 			}
 
 			// todo shortcircuit routineDef->procedure.CreateProcedureString?
-			parsedProcedure, _, err := planbuilder.Parse(ctx, c, procedure.CreateProcedureString)
+			// TODO: figure out how auth works in this case
+			builder := planbuilder.New(ctx, c, nil)
+			parsedProcedure, _, _, _, err := builder.Parse(procedure.CreateProcedureString, nil, false)
 			if err != nil {
 				continue
 			}
@@ -276,7 +281,7 @@ func parametersRowIter(ctx *Context, c Catalog, p map[string][]*plan.Procedure) 
 				charName, collName, charMaxLen, charOctetLen := getCharAndCollNamesAndCharMaxAndOctetLens(ctx, param.Type)
 				numericPrecision, numericScale := getColumnPrecisionAndScale(param.Type)
 				// float types get nil for numericScale, but it gets 0 for this table
-				if _, ok := param.Type.(NumberType); ok {
+				if IsNumberType(param.Type) {
 					numericScale = 0
 				}
 

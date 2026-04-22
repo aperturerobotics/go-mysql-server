@@ -23,16 +23,40 @@ import (
 	querypb "github.com/dolthub/vitess/go/vt/proto/query"
 	"github.com/dolthub/vitess/go/vt/sqlparser"
 	ast "github.com/dolthub/vitess/go/vt/sqlparser"
+
+	sqle "github.com/dolthub/go-mysql-server"
 )
 
-func Intercept(h Interceptor) {
-	inters = append(inters, h)
-	sort.Slice(inters, func(i, j int) bool { return inters[i].Priority() < inters[j].Priority() })
+// InterceptorChain allows an integrator to build a chain of
+// |Interceptor| instances which will wrap and intercept the server's
+// mysql.Handler.
+//
+// Example usage:
+//
+// var ic InterceptorChain
+// ic.WithInterceptor(metricsInterceptor)
+// ic.WithInterceptor(authInterceptor)
+// server, err := NewServer(Config{ ..., Options: []Option{ic.Option()}, ...}, ...)
+type InterceptorChain struct {
+	inters []Interceptor
 }
 
-var inters []Interceptor
+func (ic *InterceptorChain) WithInterceptor(h Interceptor) {
+	ic.inters = append(ic.inters, h)
+}
 
-func buildChain(h mysql.Handler) mysql.Handler {
+func (ic *InterceptorChain) Option() Option {
+	return func(e *sqle.Engine, sm *SessionManager, handler mysql.Handler) (*sqle.Engine, *SessionManager, mysql.Handler) {
+		chainHandler := buildChain(handler, ic.inters)
+		return e, sm, chainHandler
+	}
+}
+
+func buildChain(h mysql.Handler, inters []Interceptor) mysql.Handler {
+	// XXX: Mutates |inters|
+	sort.Slice(inters, func(i, j int) bool {
+		return inters[i].Priority() < inters[j].Priority()
+	})
 	var last Chain = h
 	for i := len(inters) - 1; i >= 0; i-- {
 		filter := inters[i]
@@ -43,7 +67,6 @@ func buildChain(h mysql.Handler) mysql.Handler {
 }
 
 type Interceptor interface {
-
 	// Priority returns the priority of the interceptor.
 	Priority() int
 
@@ -76,7 +99,6 @@ type Interceptor interface {
 }
 
 type Chain interface {
-
 	// ComQuery is called when a connection receives a query.
 	// Note the contents of the query slice may change after
 	// the first call to callback. So the Handler should not
@@ -132,6 +154,10 @@ func (ih *interceptorHandler) NewConnection(c *mysql.Conn) {
 
 func (ih *interceptorHandler) ConnectionClosed(c *mysql.Conn) {
 	ih.h.ConnectionClosed(c)
+}
+
+func (ih *interceptorHandler) ConnectionAuthenticated(c *mysql.Conn) error {
+	return ih.h.ConnectionAuthenticated(c)
 }
 
 func (ih *interceptorHandler) ConnectionAborted(c *mysql.Conn, reason string) error {

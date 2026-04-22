@@ -22,7 +22,6 @@ import (
 	"sort"
 	"strings"
 
-	gmstime "github.com/dolthub/go-mysql-server/internal/time"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/mysql_db"
 	"github.com/dolthub/go-mysql-server/sql/plan"
@@ -74,14 +73,33 @@ func (b *BaseBuilder) buildDescribeQuery(ctx *sql.Context, n *plan.DescribeQuery
 	}
 
 	var rows []sql.Row
-	formatString := sql.Describe(n.Child, n.Format)
-
-	for _, l := range strings.Split(formatString, "\n") {
-		if strings.TrimSpace(l) != "" {
-			rows = append(rows, sql.NewRow(l))
+	if n.Format.Plan {
+		formatString := sql.Describe(ctx, n.Child, n.Format)
+		formatString = strings.Replace(formatString, "\r", "", -1)
+		for _, l := range strings.Split(formatString, "\n") {
+			if strings.TrimSpace(l) != "" {
+				rows = append(rows, sql.NewRow(l))
+			}
 		}
+		return sql.RowsToRowIter(rows...), nil
 	}
-	return sql.RowsToRowIter(rows...), nil
+
+	ctx.Warn(0, "EXPLAIN Output is currently a placeholder; use EXPLAIN PLAN for old behavior")
+	dummyRow := sql.Row{
+		1,        // id
+		"SELECT", // select_type
+		"NULL",   // table
+		"NULL",   // partitions
+		"NULL",   // type
+		"NULL",   // possible_keys
+		"NULL",   // key
+		"NULL",   // key_len
+		"NULL",   // ref
+		"NULL",   // rows
+		"NULL",   // filtered
+		"",       // Extra
+	}
+	return sql.RowsToRowIter(dummyRow), nil
 }
 
 func (b *BaseBuilder) buildShowWarnings(ctx *sql.Context, n plan.ShowWarnings, row sql.Row) (sql.RowIter, error) {
@@ -108,7 +126,7 @@ func (b *BaseBuilder) buildShowProcessList(ctx *sql.Context, n *plan.ShowProcess
 			progress := proc.Progress[name]
 
 			printer := sql.NewTreePrinter()
-			_ = printer.WriteNode("\n" + progress.String())
+			_ = printer.WriteNode("%s", "\n"+progress.String())
 			children := []string{}
 			for _, partitionProgress := range progress.PartitionsProgress {
 				children = append(children, partitionProgress.String())
@@ -152,22 +170,10 @@ func (b *BaseBuilder) buildShowTableStatus(ctx *sql.Context, n *plan.ShowTableSt
 			return nil, err
 		}
 
-		var numRows uint64
-		var dataLength uint64
-
-		if st, ok := table.(sql.StatisticsTable); ok {
-			numRows, _, err = st.RowCount(ctx)
-			if err != nil {
-				return nil, err
-			}
-
-			dataLength, err = st.DataLength(ctx)
-			if err != nil {
-				return nil, err
-			}
+		rows[i], err = tableToStatusRow(ctx, table)
+		if err != nil {
+			return nil, err
 		}
-
-		rows[i] = tableToStatusRow(tName, numRows, dataLength, table.Collation())
 	}
 
 	return sql.RowsToRowIter(rows...), nil
@@ -451,20 +457,16 @@ func (b *BaseBuilder) buildShowColumns(ctx *sql.Context, n *plan.ShowColumns, ro
 			null = "YES"
 		}
 
-		node := n.Child
-		if exchange, ok := node.(*plan.Exchange); ok {
-			node = exchange.Child
-		}
 		key := ""
-		switch table := node.(type) {
+		switch table := n.Child.(type) {
 		case *plan.ResolvedTable:
 			if col.PrimaryKey {
 				key = "PRI"
-			} else if isPriCol(n, col, table) {
+			} else if isPriCol(ctx, n, col, table) {
 				key = "PRI"
-			} else if isUnqCol(n, col, table) {
+			} else if isUnqCol(ctx, n, col, table) {
 				key = "UNI"
-			} else if isMulCol(n, col, table) {
+			} else if isMulCol(ctx, n, col, table) {
 				key = "MUL"
 			}
 		case *plan.SubqueryAlias:
@@ -534,16 +536,29 @@ func (b *BaseBuilder) buildShowVariables(ctx *sql.Context, n *plan.ShowVariables
 			if err != nil {
 				return nil, err
 			}
-			res, _, err = types.Boolean.Convert(res)
+			res, _, err = types.Boolean.Convert(ctx, res)
 			if err != nil {
-				ctx.Warn(1292, err.Error())
+				ctx.Warn(1292, "%s", err.Error())
 				continue
 			}
 			if res.(int8) == 0 {
 				continue
 			}
 		}
-		rows = append(rows, sql.NewRow(k, v))
+
+		// SHOW VARIABLES displays boolean values as "ON" or "OFF".
+		if boolVal, isBoolVal := v.(int8); isBoolVal {
+			switch boolVal {
+			case 0:
+				rows = append(rows, sql.NewRow(k, "OFF"))
+			case 1:
+				rows = append(rows, sql.NewRow(k, "ON"))
+			default:
+				rows = append(rows, sql.NewRow(k, v))
+			}
+		} else {
+			rows = append(rows, sql.NewRow(k, v))
+		}
 	}
 
 	sort.Slice(rows, func(i, j int) bool {
@@ -589,7 +604,7 @@ func (b *BaseBuilder) buildShowTriggers(ctx *sql.Context, n *plan.ShowTriggers, 
 }
 
 func (b *BaseBuilder) buildDescribe(ctx *sql.Context, n *plan.Describe, row sql.Row) (sql.RowIter, error) {
-	return &describeIter{schema: n.Child.Schema()}, nil
+	return &describeIter{schema: n.Child.Schema(ctx)}, nil
 }
 
 func (b *BaseBuilder) buildShowDatabases(ctx *sql.Context, n *plan.ShowDatabases, row sql.Row) (sql.RowIter, error) {
@@ -710,12 +725,13 @@ func (b *BaseBuilder) buildShowIndexes(ctx *sql.Context, n *plan.ShowIndexes, ro
 
 func (b *BaseBuilder) buildShowCreateTable(ctx *sql.Context, n *plan.ShowCreateTable, row sql.Row) (sql.RowIter, error) {
 	return &showCreateTablesIter{
-		table:    n.Child,
-		isView:   n.IsView,
-		indexes:  n.Indexes,
-		checks:   n.Checks(),
-		schema:   n.TargetSchema(),
-		pkSchema: n.PrimaryKeySchema,
+		table:     n.Child,
+		isView:    n.IsView,
+		indexes:   n.Indexes,
+		checks:    n.Checks(),
+		schema:    n.TargetSchema(),
+		pkSchema:  n.PrimaryKeySchema,
+		formatter: b.schemaFormatter,
 	}, nil
 }
 
@@ -793,6 +809,11 @@ func (b *BaseBuilder) buildShowReplicaStatus(ctx *sql.Context, n *plan.ShowRepli
 	lastIoErrorTimestamp := formatReplicaStatusTimestamp(status.LastIoErrorTimestamp)
 	lastSqlErrorTimestamp := formatReplicaStatusTimestamp(status.LastSqlErrorTimestamp)
 
+	sslAllowed := "No"
+	if status.SourceSsl {
+		sslAllowed = "Yes"
+	}
+
 	row = sql.Row{
 		"",                       // Replica_IO_State
 		status.SourceHost,        // Source_Host
@@ -820,7 +841,7 @@ func (b *BaseBuilder) buildShowReplicaStatus(ctx *sql.Context, n *plan.ShowRepli
 		"None",                   // Until_Condition
 		nil,                      // Until_Log_File
 		nil,                      // Until_Log_Pos
-		"Ignored",                // Source_SSL_Allowed
+		sslAllowed,               // Source_SSL_Allowed
 		nil,                      // Source_SSL_CA_File
 		nil,                      // Source_SSL_CA_Path
 		nil,                      // Source_SSL_Cert
@@ -869,7 +890,7 @@ func (b *BaseBuilder) buildShowCreateEvent(ctx *sql.Context, n *plan.ShowCreateE
 	}
 
 	// Convert the Event's timestamps into the session's timezone (they are always stored in UTC)
-	newEvent := n.Event.ConvertTimesFromUTCToTz(gmstime.SystemTimezoneOffset())
+	newEvent := n.Event.ConvertTimesFromUTCToTz(sql.SystemTimezoneOffset())
 	n.Event = *newEvent
 
 	// TODO: fill time_zone with appropriate values

@@ -55,15 +55,14 @@ var _ sql.SchemaValidator = (*BaseDatabase)(nil)
 
 // BaseDatabase is an in-memory database that can't store views, only for testing the engine
 type BaseDatabase struct {
-	name              string
-	tables            map[string]MemTable
-	fkColl            *ForeignKeyCollection
-	triggers          []sql.TriggerDefinition
-	storedProcedures  []sql.StoredProcedureDetails
-	events            []sql.EventDefinition
-	primaryKeyIndexes bool
-	collation         sql.CollationID
-	tablesMu          *sync.RWMutex
+	tables           map[string]MemTable
+	fkColl           *ForeignKeyCollection
+	tablesMu         *sync.RWMutex
+	name             string
+	triggers         []sql.TriggerDefinition
+	storedProcedures []sql.StoredProcedureDetails
+	events           []sql.EventDefinition
+	collation        sql.CollationID
 }
 
 var _ MemoryDatabase = (*Database)(nil)
@@ -90,11 +89,6 @@ func NewViewlessDatabase(name string) *BaseDatabase {
 // ValidateSchema implements sql.SchemaValidator
 func (d *BaseDatabase) ValidateSchema(schema sql.Schema) error {
 	return validateMaxRowLength(schema)
-}
-
-// EnablePrimaryKeyIndexes causes every table created in this database to use an index on its primary partitionKeys
-func (d *BaseDatabase) EnablePrimaryKeyIndexes() {
-	d.primaryKeyIndexes = true
 }
 
 func (d *BaseDatabase) Database() *BaseDatabase {
@@ -267,12 +261,9 @@ func (d *BaseDatabase) CreateTable(ctx *sql.Context, name string, schema sql.Pri
 		return sql.ErrTableAlreadyExists.New(name)
 	}
 
-	table := NewTableWithCollation(d, name, schema, d.fkColl, collation)
+	table := NewTableWithCollation(ctx, d, name, schema, d.fkColl, collation)
 	table.db = d
 	table.data.comment = comment
-	if d.primaryKeyIndexes {
-		table.EnablePrimaryKeyIndexes()
-	}
 
 	d.AddTable(name, table)
 	sess := SessionFromContext(ctx)
@@ -290,11 +281,8 @@ func (d *BaseDatabase) CreateIndexedTable(ctx *sql.Context, name string, sch sql
 		return sql.ErrTableAlreadyExists.New(name)
 	}
 
-	table := NewTableWithCollation(d, name, sch, d.fkColl, collation)
+	table := NewTableWithCollation(ctx, d, name, sch, d.fkColl, collation)
 	table.db = d
-	if d.primaryKeyIndexes {
-		table.EnablePrimaryKeyIndexes()
-	}
 
 	for _, idxCol := range idxDef.Columns {
 		idx := sch.Schema.IndexOfColName(idxCol.Name)
@@ -360,7 +348,7 @@ func (d *BaseDatabase) RenameTable(ctx *sql.Context, oldName, newName string) er
 		memIndex := index.(*Index)
 		for i, expr := range memIndex.Exprs {
 			getField := expr.(*expression.GetField)
-			memIndex.Exprs[i] = expression.NewGetFieldWithTable(i, 0, getField.Type(), d.name, newName, getField.Name(), getField.IsNullable())
+			memIndex.Exprs[i] = expression.NewGetFieldWithTable(i, 0, getField.Type(ctx), d.name, newName, getField.Name(), getField.IsNullable(ctx))
 		}
 	}
 	memTbl.data.tableName = newName
@@ -555,7 +543,7 @@ func (d *Database) Database() *BaseDatabase {
 func (d *Database) CreateView(ctx *sql.Context, name string, selectStatement, createViewStmt string) error {
 	_, ok := d.views[strings.ToLower(name)]
 	if ok {
-		return sql.ErrExistingView.New(name)
+		return sql.ErrExistingView.New(d.Name(), name)
 	}
 
 	sqlMode := sql.LoadSqlMode(ctx)

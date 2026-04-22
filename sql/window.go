@@ -33,11 +33,11 @@ func NewWindowDefinition(partitionBy []Expression, orderBy SortFields, frame Win
 
 // A WindowDefinition specifies the window parameters of a window function
 type WindowDefinition struct {
-	PartitionBy []Expression
-	OrderBy     SortFields
 	Frame       WindowFrame
 	Ref         string
 	Name        string
+	PartitionBy []Expression
+	OrderBy     SortFields
 	id          uint64
 }
 
@@ -52,7 +52,7 @@ func (w *WindowDefinition) ToExpressions() []Expression {
 
 // FromExpressions returns copy of this window with the given expressions taken to stand in for the partition and order
 // by fields. An error is returned if the lengths or types of these expressions are incompatible with this window.
-func (w *WindowDefinition) FromExpressions(children []Expression) (*WindowDefinition, error) {
+func (w *WindowDefinition) FromExpressions(ctx *Context, children []Expression) (*WindowDefinition, error) {
 	if w == nil {
 		return nil, nil
 	}
@@ -62,7 +62,7 @@ func (w *WindowDefinition) FromExpressions(children []Expression) (*WindowDefini
 	}
 
 	nw := *w
-	nw.OrderBy = nw.OrderBy.FromExpressions(children[:len(nw.OrderBy)]...)
+	nw.OrderBy = nw.OrderBy.FromExpressions(ctx, children[:len(nw.OrderBy)]...)
 	nw.PartitionBy = children[len(nw.OrderBy):]
 	return &nw, nil
 }
@@ -125,7 +125,7 @@ func (w *WindowDefinition) PartitionId() (uint64, error) {
 	return w.id, nil
 }
 
-func (w *WindowDefinition) DebugString() string {
+func (w *WindowDefinition) DebugString(ctx *Context) string {
 	if w == nil {
 		return ""
 	}

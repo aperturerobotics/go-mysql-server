@@ -37,13 +37,14 @@ var (
 
 // CreateIndex is a node to create an index.
 type CreateIndex struct {
+	Table   sql.Node
+	Catalog sql.Catalog
+	Config  map[string]string
+
 	Name            string
-	Table           sql.Node
-	Exprs           []sql.Expression
 	Driver          string
-	Config          map[string]string
-	Catalog         sql.Catalog
 	CurrentDatabase string
+	Exprs           []sql.Expression
 }
 
 var _ sql.Node = (*CreateIndex)(nil)
@@ -92,7 +93,7 @@ func (c *CreateIndex) IsReadOnly() bool {
 }
 
 // Schema implements the Node interface.
-func (c *CreateIndex) Schema() sql.Schema { return nil }
+func (c *CreateIndex) Schema(ctx *sql.Context) sql.Schema { return nil }
 
 func (c *CreateIndex) String() string {
 	var exprs = make([]string, len(c.Exprs))
@@ -116,7 +117,7 @@ func (c *CreateIndex) Expressions() []sql.Expression {
 }
 
 // WithExpressions implements the Expressioner interface.
-func (c *CreateIndex) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (c *CreateIndex) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != len(c.Exprs) {
 		return nil, sql.ErrInvalidChildrenNumber.New(c, len(exprs), len(c.Exprs))
 	}
@@ -127,7 +128,7 @@ func (c *CreateIndex) WithExpressions(exprs ...sql.Expression) (sql.Node, error)
 }
 
 // WithChildren implements the Node interface.
-func (c *CreateIndex) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (c *CreateIndex) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(c, len(children), 1)
 	}
@@ -135,17 +136,6 @@ func (c *CreateIndex) WithChildren(children ...sql.Node) (sql.Node, error) {
 	nc := *c
 	nc.Table = children[0]
 	return &nc, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (c *CreateIndex) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: CheckPrivilegeNameForDatabase(GetDatabase(c.Table)),
-		Table:    getTableName(c.Table),
-	}
-
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Index))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

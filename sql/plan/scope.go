@@ -21,42 +21,31 @@ import (
 
 // Scope of the analysis being performed, used when analyzing subqueries to give such analysis access to outer scope.
 type Scope struct {
+	// corr is the aggregated set of correlated columns tracked by the subquery
+	// chain that produced this scope.
+	corr       sql.ColSet
+	Procedures *ProcedureCache
+
 	// Stack of nested node scopes, with innermost scope first. A scope node is the node in which the subquery is
 	// defined, or an appropriate sibling, NOT the child node of the Subquery node.
 	nodes []sql.Node
 	// Memo nodes are nodes in the execution context that shouldn't be considered for name resolution, but are still
-	// important for analysis.
-	Memos []sql.Node
+	Memos        []sql.Node
+	joinSiblings []sql.Node
+	JoinTrees    []string
+
 	// recursionDepth tracks how many times we've recursed with analysis, to avoid stack overflows from infinite recursion
 	recursionDepth int
+
 	// CurrentNodeIsFromSubqueryExpression is true when the last scope (i.e. the most inner of the outer scope levels) has been
 	// created by a subquery expression. This is needed in order to calculate outer scope visibility for derived tables.
 	CurrentNodeIsFromSubqueryExpression bool
 	// EnforceReadOnly causes analysis to block all modification operations, as though a database is read only.
 	EnforceReadOnly bool
 
-	Procedures *ProcedureCache
-
-	// corr is the aggregated set of correlated columns tracked by the subquery
-	// chain that produced this scope.
-	corr          sql.ColSet
-	inJoin        bool
-	inLateralJoin bool
-	joinSiblings  []sql.Node
-}
-
-func (s *Scope) SetJoin(b bool) {
-	if s == nil {
-		return
-	}
-	s.inJoin = b
-}
-
-func (s *Scope) SetLateralJoin(b bool) {
-	if s == nil {
-		return
-	}
-	s.inLateralJoin = b
+	inJoin         bool
+	inLateralJoin  bool
+	inInsertSource bool
 }
 
 func (s *Scope) IsEmpty() bool {
@@ -71,8 +60,8 @@ func (s *Scope) EnforcesReadOnly() bool {
 // outer scope are not qualified and resolved.
 // note: a subquery in the outer scope is itself a scope,
 // and by definition not an outer relation
-func (s *Scope) OuterRelUnresolved() bool {
-	return !s.IsEmpty() && s.Schema() == nil && len(s.nodes[0].Children()) > 0
+func (s *Scope) OuterRelUnresolved(ctx *sql.Context) bool {
+	return !s.IsEmpty() && s.Schema(ctx) == nil && len(s.nodes[0].Children()) > 0
 }
 
 // NewScope creates a new Scope object with the additional innermost Node context. When constructing with a subquery,
@@ -101,6 +90,7 @@ func (s *Scope) NewScopeFromSubqueryExpression(node sql.Node, corr sql.ColSet) *
 	subScope := s.NewScope(node)
 	subScope.CurrentNodeIsFromSubqueryExpression = true
 	subScope.corr = corr
+	subScope.recursionDepth = s.RecursionDepth() + 1
 	if s != nil {
 		subScope.corr = s.corr.Union(corr)
 	}
@@ -110,18 +100,6 @@ func (s *Scope) NewScopeFromSubqueryExpression(node sql.Node, corr sql.ColSet) *
 // NewScopeFromSubqueryExpression returns a new subscope created from a subquery expression contained by the specified
 // node.
 func (s *Scope) NewScopeInJoin(node sql.Node) *Scope {
-	for {
-		var done bool
-		switch n := node.(type) {
-		case *StripRowNode:
-			node = n.Child
-		default:
-			done = true
-		}
-		if done {
-			break
-		}
-	}
 	if s == nil {
 		return &Scope{joinSiblings: []sql.Node{node}}
 	}
@@ -130,12 +108,13 @@ func (s *Scope) NewScopeInJoin(node sql.Node) *Scope {
 	newNodes = append(newNodes, node)
 	newNodes = append(newNodes, s.joinSiblings...)
 	return &Scope{
-		nodes:          s.nodes,
-		Memos:          s.Memos,
-		recursionDepth: s.recursionDepth + 1,
-		Procedures:     s.Procedures,
-		joinSiblings:   newNodes,
-		corr:           s.corr,
+		nodes:                               s.nodes,
+		Memos:                               s.Memos,
+		recursionDepth:                      s.recursionDepth + 1,
+		Procedures:                          s.Procedures,
+		joinSiblings:                        newNodes,
+		corr:                                s.corr,
+		CurrentNodeIsFromSubqueryExpression: s.CurrentNodeIsFromSubqueryExpression,
 	}
 }
 
@@ -277,12 +256,12 @@ func (s *Scope) OuterToInner() []sql.Node {
 // Schema returns the equivalent schema of this scope, which consists of the schemas of all constituent scope nodes
 // concatenated from outer to inner. Because we can only calculate the Schema() of nodes that are Resolved(), this
 // method fills in place holder columns as necessary.
-func (s *Scope) Schema() sql.Schema {
+func (s *Scope) Schema(ctx *sql.Context) sql.Schema {
 	var schema sql.Schema
 	for _, n := range s.OuterToInner() {
 		for _, n := range n.Children() {
 			if n.Resolved() {
-				schema = append(schema, n.Schema()...)
+				schema = append(schema, n.Schema(ctx)...)
 				continue
 			}
 
@@ -293,7 +272,7 @@ func (s *Scope) Schema() sql.Schema {
 				for _, expr := range n.Projections {
 					var col *sql.Column
 					if expr.Resolved() {
-						col = transform.ExpressionToColumn(expr, AliasSubqueryString(expr))
+						col = transform.ExpressionToColumn(ctx, expr, AliasSubqueryString(expr))
 					} else {
 						// TODO: a new type here?
 						col = &sql.Column{
@@ -311,30 +290,55 @@ func (s *Scope) Schema() sql.Schema {
 	}
 	if s != nil && s.inJoin {
 		for _, n := range s.joinSiblings {
-			schema = append(schema, n.Schema()...)
+			schema = append(schema, n.Schema(ctx)...)
 		}
 	}
 	return schema
 }
 
-func (s *Scope) InJoin() bool {
+func (s *Scope) SetJoin(b bool) {
 	if s == nil {
-		return false
+		return
 	}
-	return s.inJoin
+	s.inJoin = b
+}
+
+func (s *Scope) SetLateralJoin(b bool) {
+	if s == nil {
+		return
+	}
+	s.inLateralJoin = b
+}
+
+func (s *Scope) SetInInsertSource(b bool) {
+	if s == nil {
+		return
+	}
+	s.inInsertSource = b
+}
+
+func (s *Scope) InJoin() bool {
+	return s != nil && s.inJoin
 }
 
 func (s *Scope) InLateralJoin() bool {
-	if s == nil {
-		return false
-	}
-	return s.inLateralJoin
+	return s != nil && s.inLateralJoin
+}
+
+func (s *Scope) InInsertSource() bool {
+	return s != nil && s.inInsertSource
 }
 
 func (s *Scope) JoinSiblings() []sql.Node {
+	if s == nil {
+		return nil
+	}
 	return s.joinSiblings
 }
 
 func (s *Scope) Correlated() sql.ColSet {
+	if s == nil {
+		return sql.ColSet{}
+	}
 	return s.corr
 }

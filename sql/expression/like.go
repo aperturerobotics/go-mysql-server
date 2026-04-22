@@ -39,14 +39,14 @@ var _ sql.Expression = (*Like)(nil)
 var _ sql.CollationCoercible = (*Like)(nil)
 
 type likeMatcherErrTuple struct {
-	matcher LikeMatcher
 	err     error
+	matcher LikeMatcher
 }
 
 // NewLike creates a new LIKE expression.
 func NewLike(left, right, escape sql.Expression) sql.Expression {
 	var cached = true
-	sql.Inspect(right, func(e sql.Expression) bool {
+	sql.Inspect(nil /*ctx isn't used here*/, right, func(_ *sql.Context, e sql.Expression) bool {
 		if _, ok := e.(*GetField); ok {
 			cached = false
 		}
@@ -63,7 +63,7 @@ func NewLike(left, right, escape sql.Expression) sql.Expression {
 }
 
 // Type implements the sql.Expression interface.
-func (l *Like) Type() sql.Type { return types.Boolean }
+func (l *Like) Type(ctx *sql.Context) sql.Type { return types.Boolean }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (l *Like) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
@@ -81,11 +81,17 @@ func (l *Like) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	if err != nil || left == nil {
 		return nil, err
 	}
+	left, err = sql.UnwrapAny(ctx, left)
+	if err != nil {
+		return nil, err
+	}
 	if _, ok := left.(string); !ok {
-		left, _, err = types.LongText.Convert(left)
+		// Use type-aware conversion for enum types
+		leftStr, _, err := types.ConvertToCollatedString(ctx, left, l.Left().Type(ctx))
 		if err != nil {
 			return nil, err
 		}
+		left = leftStr
 	}
 
 	var lm LikeMatcher
@@ -106,7 +112,7 @@ func (l *Like) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 				New: func() interface{} {
 					collation, _ := l.CollationCoercibility(ctx)
 					m, e := ConstructLikeMatcher(collation, *right, escape)
-					return likeMatcherErrTuple{m, e}
+					return likeMatcherErrTuple{matcher: m, err: e}
 				},
 			}
 		})
@@ -116,13 +122,10 @@ func (l *Like) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	if lm.collation == sql.Collation_Unspecified {
-		return false, nil
-	}
 
 	ok := lm.Match(left.(string))
 	if l.cached {
-		l.pool.Put(likeMatcherErrTuple{lm, nil})
+		l.pool.Put(likeMatcherErrTuple{matcher: lm})
 	}
 	return ok, nil
 }
@@ -132,11 +135,17 @@ func (l *Like) evalRight(ctx *sql.Context, row sql.Row) (right *string, escape r
 	if err != nil || rightVal == nil {
 		return nil, 0, err
 	}
+	rightVal, err = sql.UnwrapAny(ctx, rightVal)
+	if err != nil {
+		return nil, 0, err
+	}
 	if _, ok := rightVal.(string); !ok {
-		rightVal, _, err = types.LongText.Convert(rightVal)
+		// Use type-aware conversion for enum types
+		rightStr, _, err := types.ConvertToCollatedString(ctx, rightVal, l.Right().Type(ctx))
 		if err != nil {
 			return nil, 0, err
 		}
+		rightVal = rightStr
 	}
 
 	var escapeVal interface{}
@@ -149,7 +158,7 @@ func (l *Like) evalRight(ctx *sql.Context, row sql.Row) (right *string, escape r
 			escapeVal = `\`
 		}
 		if _, ok := escapeVal.(string); !ok {
-			escapeVal, _, err = types.LongText.Convert(escapeVal)
+			escapeVal, _, err = types.LongText.Convert(ctx, escapeVal)
 			if err != nil {
 				return nil, 0, err
 			}
@@ -170,7 +179,7 @@ func (l *Like) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (l *Like) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (l *Like) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(l, len(children), 2)
 	}
@@ -370,8 +379,6 @@ func (l LikeMatcher) Match(s string) bool {
 			continue
 		}
 	}
-	// Must return something here to compile, but the above loop will handle all return cases
-	return false
 }
 
 // String returns the string form of this LIKE expression. If an Escape character was provided, it is used instead of

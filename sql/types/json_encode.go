@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/dolthub/go-mysql-server/sql"
+
 	"github.com/shopspring/decimal"
 )
 
@@ -142,6 +144,18 @@ func marshalToMySqlString(val interface{}) (string, error) {
 	return b.String(), nil
 }
 
+// marshalToMySqlBytes is a helper function to marshal a JSONDocument to a byte slice that is
+// compatible with MySQL's JSON output, including spaces.
+func marshalToMySqlBytes(val interface{}) ([]byte, error) {
+	b := NewNoCopyBuilder(1024)
+	err := writeMarshalledValue(b, val)
+	if err != nil {
+		return nil, err
+	}
+
+	return b.Bytes(), nil
+}
+
 func sortKeys[T any](m map[string]T) []string {
 	var keys []string
 	for k := range m {
@@ -198,10 +212,12 @@ func writeMarshalledValue(writer io.Writer, val interface{}) error {
 
 		writer.Write([]byte{'{'})
 		for i, k := range keys {
-			writer.Write([]byte{'"'})
-			writer.Write([]byte(k))
-			writer.Write([]byte(`": `))
-			err := writeMarshalledValue(writer, val[k])
+			err := writeMarshalledValue(writer, k)
+			if err != nil {
+				return err
+			}
+			writer.Write([]byte(`: `))
+			err = writeMarshalledValue(writer, val[k])
 			if err != nil {
 				return err
 			}
@@ -312,7 +328,7 @@ func writeMarshalledValue(writer io.Writer, val interface{}) error {
 
 	case time.Time:
 		writer.Write([]byte{'"'})
-		writer.Write([]byte(val.Format(time.RFC3339)))
+		writer.Write([]byte(val.Format(sql.DatetimeLayoutNoTrim)))
 		writer.Write([]byte{'"'})
 		return nil
 	case decimal.Decimal:

@@ -43,16 +43,16 @@ import (
 // projection count and types. [Init] will be resolved before
 // [Rec] or [RecursiveCte] to share schema types.
 type RecursiveCte struct {
-	union *SetOp
-	// ColumnNames used to name lazily-loaded schema fields
-	ColumnNames []string
-	// schema will match the types of [Init.Schema()], names of [Columns]
-	schema sql.Schema
-	// Working is a handle to our refreshable intermediate table
+	cols sql.ColSet
+
+	union   *SetOp
 	Working *RecursiveTable
-	name    string
-	id      sql.TableId
-	cols    sql.ColSet
+
+	name        string
+	ColumnNames []string
+
+	schema sql.Schema
+	id     sql.TableId
 }
 
 var _ sql.Node = (*RecursiveCte)(nil)
@@ -144,14 +144,14 @@ func (r *RecursiveCte) WithWorking(t *RecursiveTable) *RecursiveCte {
 }
 
 // Schema implements sql.Node
-func (r *RecursiveCte) Schema() sql.Schema {
+func (r *RecursiveCte) Schema(ctx *sql.Context) sql.Schema {
 	return r.schema
 }
 
 // WithChildren implements sql.Node
-func (r *RecursiveCte) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (r *RecursiveCte) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	ret := *r
-	s, err := r.union.WithChildren(children...)
+	s, err := r.union.WithChildren(ctx, children...)
 	if err != nil {
 		return nil, err
 	}
@@ -171,10 +171,6 @@ func (r *RecursiveCte) Children() []sql.Node {
 	return r.union.Children()
 }
 
-func (r *RecursiveCte) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return r.union.CheckPrivileges(ctx, opChecker)
-}
-
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (*RecursiveCte) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.Collation_binary, 7
@@ -184,9 +180,9 @@ func (r *RecursiveCte) Expressions() []sql.Expression {
 	return r.union.Expressions()
 }
 
-func (r *RecursiveCte) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (r *RecursiveCte) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	ret := *r
-	s, err := r.union.WithExpressions(exprs...)
+	s, err := r.union.WithExpressions(ctx, exprs...)
 	if err != nil {
 		return nil, err
 	}
@@ -203,15 +199,15 @@ func (r *RecursiveCte) String() string {
 }
 
 // DebugString implements sql.Node
-func (r *RecursiveCte) DebugString() string {
+func (r *RecursiveCte) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("RecursiveCTE")
-	pr.WriteChildren(sql.DebugString(r.union))
+	pr.WriteChildren(sql.DebugString(ctx, r.union))
 	return pr.String()
 }
 
 // Type implements sql.Node
-func (r *RecursiveCte) Type() sql.Type {
+func (r *RecursiveCte) Type(ctx *sql.Context) sql.Type {
 	cols := r.schema
 	if len(cols) == 1 {
 		return cols[0].Type
@@ -224,7 +220,7 @@ func (r *RecursiveCte) Type() sql.Type {
 }
 
 // IsNullable implements sql.Node
-func (r *RecursiveCte) IsNullable() bool {
+func (r *RecursiveCte) IsNullable(ctx *sql.Context) bool {
 	return true
 }
 
@@ -238,11 +234,11 @@ func NewRecursiveTable(n string, s sql.Schema) *RecursiveTable {
 // RecursiveTable is a thin wrapper around an in memory
 // buffer for use with recursiveCteIter.
 type RecursiveTable struct {
+	cols   sql.ColSet
 	name   string
 	schema sql.Schema
 	Buf    []sql.Row
 	id     sql.TableId
-	cols   sql.ColSet
 }
 
 var _ sql.Node = (*RecursiveTable)(nil)
@@ -297,7 +293,7 @@ func (r *RecursiveTable) String() string {
 	return fmt.Sprintf("RecursiveTable(%s)", r.name)
 }
 
-func (r *RecursiveTable) Schema() sql.Schema {
+func (r *RecursiveTable) Schema(ctx *sql.Context) sql.Schema {
 	return r.schema
 }
 
@@ -305,13 +301,8 @@ func (r *RecursiveTable) Children() []sql.Node {
 	return nil
 }
 
-func (r *RecursiveTable) WithChildren(node ...sql.Node) (sql.Node, error) {
+func (r *RecursiveTable) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return r, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (r *RecursiveTable) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

@@ -66,7 +66,7 @@ func (t *LockTables) Resolved() bool {
 }
 
 // Schema implements the sql.Node interface.
-func (t *LockTables) Schema() sql.Schema { return nil }
+func (t *LockTables) Schema(ctx *sql.Context) sql.Schema { return nil }
 
 func (t *LockTables) String() string {
 	var children = make([]string, len(t.Locks))
@@ -85,7 +85,7 @@ func (t *LockTables) String() string {
 }
 
 // WithChildren implements the Node interface.
-func (t *LockTables) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (t *LockTables) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != len(t.Locks) {
 		return nil, sql.ErrInvalidChildrenNumber.New(t, len(children), len(t.Locks))
 	}
@@ -99,19 +99,6 @@ func (t *LockTables) WithChildren(children ...sql.Node) (sql.Node, error) {
 	}
 
 	return &LockTables{t.Catalog, locks}, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (t *LockTables) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	operations := make([]sql.PrivilegedOperation, len(t.Locks))
-	for i, tableLock := range t.Locks {
-		subject := sql.PrivilegeCheckSubject{
-			Database: GetDatabaseName(tableLock.Table),
-			Table:    getTableName(tableLock.Table),
-		}
-		operations[i] = sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Select, sql.PrivilegeType_LockTables)
-	}
-	return opChecker.UserHasPrivileges(ctx, operations...)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -142,19 +129,7 @@ func (t *UnlockTables) Resolved() bool { return true }
 func (t *UnlockTables) IsReadOnly() bool { return true }
 
 // Schema implements the sql.Node interface.
-func (t *UnlockTables) Schema() sql.Schema { return nil }
-
-// RowIter implements the sql.Node interface.
-func (t *UnlockTables) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
-	span, ctx := ctx.Span("plan.UnlockTables")
-	defer span.End()
-
-	if err := t.Catalog.UnlockTables(ctx, ctx.ID()); err != nil {
-		return nil, err
-	}
-
-	return sql.RowsToRowIter(), nil
-}
+func (t *UnlockTables) Schema(ctx *sql.Context) sql.Schema { return nil }
 
 func (t *UnlockTables) String() string {
 	p := sql.NewTreePrinter()
@@ -163,18 +138,12 @@ func (t *UnlockTables) String() string {
 }
 
 // WithChildren implements the Node interface.
-func (t *UnlockTables) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (t *UnlockTables) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(t, len(children), 0)
 	}
 
 	return t, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (t *UnlockTables) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	//TODO: Can't quite figure out the privileges for this one, needs more testing
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

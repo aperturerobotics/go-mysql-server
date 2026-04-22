@@ -20,6 +20,7 @@ import (
 	"gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/transform"
 )
 
@@ -61,17 +62,26 @@ type InsertInto struct {
 	db          sql.Database
 	Destination sql.Node
 	Source      sql.Node
+	// DeferredDefaults marks which columns in the destination schema are expected to have default values.
+	DeferredDefaults sql.FastIntSet
+
 	ColumnNames []string
-	IsReplace   bool
-	OnDupExprs  []sql.Expression
-	checks      sql.CheckConstraints
-	Ignore      bool
-	// LiteralValueSource is set to |true| when |Source| is
-	// a |Values| node with only literal expressions.
-	LiteralValueSource bool
+
+	checks     sql.CheckConstraints
+	OnDupExprs *UpdateExprs
+	// Returning is a list of expressions to return after the insert operation. This feature is not supported
+	// in MySQL's syntax, but is exposed through PostgreSQL's and MariaDB's syntax.
+	Returning []sql.Expression
 
 	// FirstGenerateAutoIncRowIdx is the index of the first row inserted that increments last_insert_id.
 	FirstGeneratedAutoIncRowIdx int
+
+	IsReplace bool
+	Ignore    bool
+	// LiteralValueSource is set to |true| when |Source| is
+	// a |Values| node with only literal expressions.
+	LiteralValueSource bool
+	HasAfterTrigger    bool
 }
 
 var _ sql.Databaser = (*InsertInto)(nil)
@@ -81,7 +91,7 @@ var _ sql.CollationCoercible = (*InsertInto)(nil)
 var _ DisjointedChildrenNode = (*InsertInto)(nil)
 
 // NewInsertInto creates an InsertInto node.
-func NewInsertInto(db sql.Database, dst, src sql.Node, isReplace bool, cols []string, onDupExprs []sql.Expression, ignore bool) *InsertInto {
+func NewInsertInto(db sql.Database, dst, src sql.Node, isReplace bool, cols []string, onDupExprs *UpdateExprs, ignore bool) *InsertInto {
 	return &InsertInto{
 		db:          db,
 		Destination: dst,
@@ -108,18 +118,31 @@ func (ii *InsertInto) WithChecks(checks sql.CheckConstraints) sql.Node {
 }
 
 // Dispose implements the sql.Disposable interface.
-func (ii *InsertInto) Dispose() {
-	disposeNode(ii.Source)
+func (ii *InsertInto) Dispose(ctx *sql.Context) {
+	disposeNode(ctx, ii.Source)
 }
 
 // Schema implements the sql.Node interface.
 // Insert nodes return rows that are inserted. Replaces return a concatenation of the deleted row and the inserted row.
 // If no row was deleted, the value of those columns is nil.
-func (ii *InsertInto) Schema() sql.Schema {
+func (ii *InsertInto) Schema(ctx *sql.Context) sql.Schema {
 	if ii.IsReplace {
-		return append(ii.Destination.Schema(), ii.Destination.Schema()...)
+		return append(ii.Destination.Schema(ctx), ii.Destination.Schema(ctx)...)
 	}
-	return ii.Destination.Schema()
+
+	// Postgres allows the returned values of the insert statement to be controlled, so if returning expressions
+	// were specified, then we return a different schema.
+	if ii.Returning != nil {
+		// We know that returning exprs are resolved here, because you can't call Schema() safely until Resolved() is true.
+		returningSchema := sql.Schema{}
+		for _, expr := range ii.Returning {
+			returningSchema = append(returningSchema, transform.ExpressionToColumn(ctx, expr, ""))
+		}
+
+		return returningSchema
+	}
+
+	return ii.Destination.Schema(ctx)
 }
 
 // Children implements the sql.Node interface.
@@ -152,7 +175,7 @@ func (ii *InsertInto) WithColumnNames(cols []string) *InsertInto {
 }
 
 // WithChildren implements the Node interface.
-func (ii *InsertInto) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (ii *InsertInto) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(ii, len(children), 1)
 	}
@@ -160,22 +183,6 @@ func (ii *InsertInto) WithChildren(children ...sql.Node) (sql.Node, error) {
 	np := *ii
 	np.Destination = children[0]
 	return &np, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (ii *InsertInto) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: CheckPrivilegeNameForDatabase(ii.db),
-		Table:    getTableName(ii.Destination),
-	}
-
-	if ii.IsReplace {
-		return opChecker.UserHasPrivileges(ctx,
-			sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Insert, sql.PrivilegeType_Delete))
-	} else {
-		return opChecker.UserHasPrivileges(ctx,
-			sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Insert))
-	}
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -217,6 +224,14 @@ func (ii *InsertInto) WithAutoIncrementIdx(firstGeneratedAutoIncRowIdx int) *Ins
 	return &np
 }
 
+// WithDeferredDefaults sets the flags for the insert destination columns, which mark which of the columns are expected
+// to be filled with the DEFAULT or GENERATED value.
+func (ii *InsertInto) WithDeferredDefaults(deferredDefaults sql.FastIntSet) *InsertInto {
+	np := *ii
+	np.DeferredDefaults = deferredDefaults
+	return &np
+}
+
 // String implements the fmt.Stringer interface.
 func (ii *InsertInto) String() string {
 	pr := sql.NewTreePrinter()
@@ -230,56 +245,56 @@ func (ii *InsertInto) String() string {
 }
 
 // DebugString implements the sql.Node interface.
-func (ii *InsertInto) DebugString() string {
+func (ii *InsertInto) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	if ii.IsReplace {
 		_ = pr.WriteNode("Replace(%s)", strings.Join(ii.ColumnNames, ", "))
 	} else {
 		_ = pr.WriteNode("Insert(%s)", strings.Join(ii.ColumnNames, ", "))
 	}
-	_ = pr.WriteChildren(sql.DebugString(ii.Destination), sql.DebugString(ii.Source))
+	_ = pr.WriteChildren(sql.DebugString(ctx, ii.Destination), sql.DebugString(ctx, ii.Source))
 	return pr.String()
 }
 
 // Expressions implements the sql.Expressioner interface.
 func (ii *InsertInto) Expressions() []sql.Expression {
-	return append(ii.OnDupExprs, ii.checks.ToExpressions()...)
+	exprs := append(ii.OnDupExprs.AllExpressions(), ii.checks.ToExpressions()...)
+	return append(exprs, ii.Returning...)
 }
 
 // WithExpressions implements the sql.Expressioner interface.
-func (ii *InsertInto) WithExpressions(newExprs ...sql.Expression) (sql.Node, error) {
-	if len(newExprs) != len(ii.OnDupExprs)+len(ii.checks) {
-		return nil, sql.ErrInvalidChildrenNumber.New(ii, len(newExprs), len(ii.OnDupExprs)+len(ii.checks))
+func (ii *InsertInto) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
+	numOnDupExprs := len(ii.OnDupExprs.AllExpressions())
+	expectedLen := numOnDupExprs + len(ii.checks) + len(ii.Returning)
+	if len(exprs) != expectedLen {
+		return nil, sql.ErrInvalidExpressionNumber.New(ii, len(exprs), expectedLen)
 	}
 
 	nii := *ii
-	nii.OnDupExprs = newExprs[:len(nii.OnDupExprs)]
-
 	var err error
-	nii.checks, err = nii.checks.FromExpressions(newExprs[len(nii.OnDupExprs):])
+	nii.OnDupExprs, err = ii.OnDupExprs.WithExpressions(exprs[:numOnDupExprs])
 	if err != nil {
 		return nil, err
 	}
+	exprs = exprs[numOnDupExprs:]
+
+	nii.checks, err = nii.checks.FromExpressions(exprs[:len(nii.checks)])
+	if err != nil {
+		return nil, err
+	}
+
+	exprs = exprs[len(nii.checks):]
+	nii.Returning = exprs
 
 	return &nii, nil
 }
 
 // Resolved implements the Resolvable interface.
 func (ii *InsertInto) Resolved() bool {
-	if !ii.Destination.Resolved() || !ii.Source.Resolved() {
-		return false
-	}
-	for _, updateExpr := range ii.OnDupExprs {
-		if !updateExpr.Resolved() {
-			return false
-		}
-	}
-	for _, checkExpr := range ii.checks {
-		if !checkExpr.Expr.Resolved() {
-			return false
-		}
-	}
-	return true
+	return ii.Destination.Resolved() && ii.Source.Resolved() &&
+		expression.ExpressionsResolved(ii.checks.ToExpressions()...) &&
+		ii.OnDupExprs.Resolved() &&
+		expression.ExpressionsResolved(ii.Returning...)
 }
 
 // InsertDestination is a wrapper for a table to be used with InsertInto.Destination that allows the schema to be
@@ -308,7 +323,7 @@ func (id *InsertDestination) Expressions() []sql.Expression {
 	return transform.WrappedColumnDefaults(id.Sch)
 }
 
-func (id InsertDestination) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (id InsertDestination) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != len(id.Sch) {
 		return nil, sql.ErrInvalidChildrenNumber.New(id, len(exprs), len(id.Sch))
 	}
@@ -334,21 +349,21 @@ func (id *InsertDestination) String() string {
 	return id.UnaryNode.Child.String()
 }
 
-func (id *InsertDestination) DebugString() string {
+func (id *InsertDestination) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	pr.WriteNode("InsertDestination")
 	var children []string
 	for _, col := range id.Sch {
-		children = append(children, sql.DebugString(col.Default))
+		children = append(children, sql.DebugString(ctx, col.Default))
 	}
-	children = append(children, sql.DebugString(id.Child))
+	children = append(children, sql.DebugString(ctx, id.Child))
 
 	pr.WriteChildren(children...)
 
 	return pr.String()
 }
 
-func (id *InsertDestination) Schema() sql.Schema {
+func (id *InsertDestination) Schema(ctx *sql.Context) sql.Schema {
 	return id.Sch
 }
 
@@ -366,18 +381,13 @@ func (id *InsertDestination) Resolved() bool {
 	return true
 }
 
-func (id InsertDestination) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (id InsertDestination) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(id, len(children), 1)
 	}
 
 	id.UnaryNode.Child = children[0]
 	return &id, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (id *InsertDestination) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return id.Child.CheckPrivileges(ctx, opChecker)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -387,8 +397,6 @@ func (id *InsertDestination) CollationCoercibility(ctx *sql.Context) (collation 
 
 func GetInsertable(node sql.Node) (sql.InsertableTable, error) {
 	switch node := node.(type) {
-	case *Exchange:
-		return GetInsertable(node.Child)
 	case sql.InsertableTable:
 		return node, nil
 	case *ResolvedTable:

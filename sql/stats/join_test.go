@@ -25,6 +25,7 @@ import (
 )
 
 func TestBinMerge(t *testing.T) {
+	ctx := sql.NewEmptyContext()
 	tests := []struct {
 		inp []sql.HistogramBucket
 		exp []sql.HistogramBucket
@@ -70,7 +71,7 @@ func TestBinMerge(t *testing.T) {
 	}
 	for i, tt := range tests {
 		t.Run(fmt.Sprintf("bin merge %d", i), func(t *testing.T) {
-			cmp, err := MergeOverlappingBuckets(tt.inp, []sql.Type{types.Int64}, NewHistogramBucket)
+			cmp, err := MergeOverlappingBuckets(ctx, tt.inp, []sql.Type{types.Int64}, NewHistogramBucket)
 			require.NoError(t, err)
 			compareHist(t, tt.exp, cmp)
 		})
@@ -103,6 +104,7 @@ func TestEuclideanDistance(t *testing.T) {
 }
 
 func TestBinAlignment(t *testing.T) {
+	ctx := sql.NewEmptyContext()
 	tests := []struct {
 		left     []sql.HistogramBucket
 		right    []sql.HistogramBucket
@@ -288,7 +290,7 @@ func TestBinAlignment(t *testing.T) {
 	}
 
 	cmp := func(i, j sql.Row) (int, error) {
-		return types.Int64.Compare(i[0], j[0])
+		return types.Int64.Compare(ctx, i[0], j[0])
 	}
 
 	for i, tt := range tests {
@@ -302,6 +304,7 @@ func TestBinAlignment(t *testing.T) {
 }
 
 func TestJoin(t *testing.T) {
+	ctx := sql.NewEmptyContext()
 	tests := []struct {
 		left  sql.Histogram
 		right sql.Histogram
@@ -439,7 +442,7 @@ func TestJoin(t *testing.T) {
 	}
 
 	cmp := func(i, j sql.Row) (int, error) {
-		return types.Int64.Compare(i[0], j[0])
+		return types.Int64.Compare(ctx, i[0], j[0])
 	}
 
 	for i, tt := range tests {
@@ -456,19 +459,20 @@ func TestJoin(t *testing.T) {
 }
 
 func compareHist(t *testing.T, exp, cmp sql.Histogram) {
+	ctx := sql.NewEmptyContext()
 	if len(exp) != len(cmp) {
-		t.Errorf("histograms not same length: %d != %d\n%s\n%s\n", len(exp), len(cmp), exp.DebugString(), cmp.DebugString())
+		t.Errorf("histograms not same length: %d != %d\n%s\n%s\n", len(exp), len(cmp), exp.DebugString(ctx), cmp.DebugString(ctx))
 	}
 	for i, b := range exp {
-		require.Equalf(t, b.UpperBound(), cmp[i].UpperBound(), "bound not equal: %v != %v\n%s\n%s", b.UpperBound(), cmp[i].UpperBound(), exp.DebugString(), cmp.DebugString())
+		require.Equalf(t, b.UpperBound(), cmp[i].UpperBound(), "bound not equal: %v != %v\n%s\n%s", b.UpperBound(), cmp[i].UpperBound(), exp.DebugString(ctx), cmp.DebugString(ctx))
 		if b.RowCount() != cmp[i].RowCount() {
-			t.Errorf("histograms row count not equal: %d != %d\n%s\n%s", b.RowCount(), cmp[i].RowCount(), exp.DebugString(), cmp.DebugString())
+			t.Errorf("histograms row count not equal: %d != %d\n%s\n%s", b.RowCount(), cmp[i].RowCount(), exp.DebugString(ctx), cmp.DebugString(ctx))
 		}
 		if b.DistinctCount() != cmp[i].DistinctCount() {
-			t.Errorf("histograms distinct not equal: %d != %d\n%s\n%s", b.DistinctCount(), cmp[i].DistinctCount(), exp.DebugString(), cmp.DebugString())
+			t.Errorf("histograms distinct not equal: %d != %d\n%s\n%s", b.DistinctCount(), cmp[i].DistinctCount(), exp.DebugString(ctx), cmp.DebugString(ctx))
 		}
 		if b.NullCount() != cmp[i].NullCount() {
-			t.Errorf("histograms null not equal: %d != %d\n%s\n%s", b.NullCount(), cmp[i].NullCount(), exp.DebugString(), cmp.DebugString())
+			t.Errorf("histograms null not equal: %d != %d\n%s\n%s", b.NullCount(), cmp[i].NullCount(), exp.DebugString(ctx), cmp.DebugString(ctx))
 		}
 	}
 }

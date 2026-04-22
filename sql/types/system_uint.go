@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"reflect"
 	"strconv"
 
@@ -36,6 +37,7 @@ type systemUintType struct {
 
 var _ sql.SystemVariableType = systemUintType{}
 var _ sql.CollationCoercible = systemUintType{}
+var _ sql.NumberType = systemUintType{}
 
 // NewSystemUintType returns a new systemUintType.
 func NewSystemUintType(varName string, lowerbound, upperbound uint64) sql.SystemVariableType {
@@ -43,12 +45,12 @@ func NewSystemUintType(varName string, lowerbound, upperbound uint64) sql.System
 }
 
 // Compare implements Type interface.
-func (t systemUintType) Compare(a interface{}, b interface{}) (int, error) {
-	as, _, err := t.Convert(a)
+func (t systemUintType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+	as, _, err := t.Convert(ctx, a)
 	if err != nil {
 		return 0, err
 	}
-	bs, _, err := t.Convert(b)
+	bs, _, err := t.Convert(ctx, b)
 	if err != nil {
 		return 0, err
 	}
@@ -65,59 +67,50 @@ func (t systemUintType) Compare(a interface{}, b interface{}) (int, error) {
 }
 
 // Convert implements Type interface.
-func (t systemUintType) Convert(v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t systemUintType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
 	// Float, string, nor nil values are accepted
 	switch value := v.(type) {
 	case int:
-		return t.Convert(uint64(value))
+		return t.Convert(ctx, uint64(value))
 	case uint:
-		return t.Convert(uint64(value))
+		return t.Convert(ctx, uint64(value))
 	case int8:
-		return t.Convert(uint64(value))
+		return t.Convert(ctx, uint64(value))
 	case uint8:
-		return t.Convert(uint64(value))
+		return t.Convert(ctx, uint64(value))
 	case int16:
-		return t.Convert(uint64(value))
+		return t.Convert(ctx, uint64(value))
 	case uint16:
-		return t.Convert(uint64(value))
+		return t.Convert(ctx, uint64(value))
 	case int32:
-		return t.Convert(uint64(value))
+		return t.Convert(ctx, uint64(value))
 	case uint32:
-		return t.Convert(uint64(value))
+		return t.Convert(ctx, uint64(value))
 	case int64:
-		return t.Convert(uint64(value))
+		return t.Convert(ctx, uint64(value))
 	case uint64:
 		if value >= t.lowerbound && value <= t.upperbound {
 			return value, sql.InRange, nil
 		}
 	case float32:
-		return t.Convert(float64(value))
+		return t.Convert(ctx, float64(value))
 	case float64:
 		// Float values aren't truly accepted, but the engine will give them when it should give ints.
 		// Therefore, if the float doesn't have a fractional portion, we treat it as an int.
 		if value == float64(uint64(value)) {
-			return t.Convert(uint64(value))
+			return t.Convert(ctx, uint64(value))
 		}
 	case decimal.Decimal:
 		f, _ := value.Float64()
-		return t.Convert(f)
+		return t.Convert(ctx, f)
 	case decimal.NullDecimal:
 		if value.Valid {
 			f, _ := value.Decimal.Float64()
-			return t.Convert(f)
+			return t.Convert(ctx, f)
 		}
 	}
 
-	return nil, sql.OutOfRange, sql.ErrInvalidSystemVariableValue.New(t.varName, v)
-}
-
-// MustConvert implements the Type interface.
-func (t systemUintType) MustConvert(v interface{}) interface{} {
-	value, _, err := t.Convert(v)
-	if err != nil {
-		panic(err)
-	}
-	return value
+	return nil, sql.InRange, sql.ErrInvalidSystemVariableValue.New(t.varName, v)
 }
 
 // Equals implements the Type interface.
@@ -144,7 +137,7 @@ func (t systemUintType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqlty
 		return sqltypes.NULL, nil
 	}
 
-	v, _, err := t.Convert(v)
+	v, _, err := t.Convert(ctx, v)
 	if err != nil {
 		return sqltypes.Value{}, err
 	}
@@ -174,6 +167,21 @@ func (t systemUintType) ValueType() reflect.Type {
 // Zero implements Type interface.
 func (t systemUintType) Zero() interface{} {
 	return uint64(0)
+}
+
+// IsNumericType implements the sql.NumberType interface.
+func (t systemUintType) IsNumericType() bool {
+	return true
+}
+
+// IsFloat implements the sql.NumberType interface.
+func (t systemUintType) IsFloat() bool {
+	return false
+}
+
+// DisplayWidth implements the sql.NumberType interface.
+func (t systemUintType) DisplayWidth() int {
+	return t.UnderlyingType().(sql.NumberType).DisplayWidth()
 }
 
 // CollationCoercibility implements sql.CollationCoercible interface.

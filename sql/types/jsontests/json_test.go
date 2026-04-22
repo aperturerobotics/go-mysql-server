@@ -28,6 +28,34 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
+type mockStringWrapper struct {
+	val string
+}
+
+func (m mockStringWrapper) Unwrap(ctx context.Context) (string, error) {
+	return m.val, nil
+}
+
+func (m mockStringWrapper) UnwrapAny(ctx context.Context) (interface{}, error) {
+	return m.val, nil
+}
+
+func (m mockStringWrapper) IsExactLength() bool {
+	return false
+}
+
+func (m mockStringWrapper) MaxByteLength() int64 {
+	return int64(len(m.val))
+}
+
+func (m mockStringWrapper) Compare(ctx context.Context, other interface{}) (int, bool, error) {
+	return 0, false, nil
+}
+
+func (m mockStringWrapper) Hash() interface{} {
+	return m.val
+}
+
 func TestJsonCompare(t *testing.T) {
 	RunJsonCompareTests(t, JsonCompareTests, func(t *testing.T, left, right interface{}) (interface{}, interface{}) {
 		return ConvertToJson(t, left), ConvertToJson(t, right)
@@ -41,6 +69,7 @@ func TestJsonCompareNulls(t *testing.T) {
 }
 
 func TestJsonConvert(t *testing.T) {
+	ctx := sql.NewEmptyContext()
 	type testStruct struct {
 		Field string `json:"field"`
 	}
@@ -57,11 +86,12 @@ func TestJsonConvert(t *testing.T) {
 		{types.MustJSON(`{"field":"test"}`), types.MustJSON(`{"field":"test"}`), false},
 		{[]string{}, types.MustJSON(`[]`), false},
 		{[]string{`555-555-5555`}, types.MustJSON(`["555-555-5555"]`), false},
+		{mockStringWrapper{val: `{"c": 1}`}, types.MustJSON(`{"c":1}`), false},
 	}
 
 	for _, test := range tests {
 		t.Run(fmt.Sprintf("%v %v", test.val, test.expectedVal), func(t *testing.T) {
-			val, _, err := types.JSON.Convert(test.val)
+			val, _, err := types.JSON.Convert(ctx, test.val)
 			if test.expectedErr {
 				assert.Error(t, err)
 			} else {
@@ -143,14 +173,14 @@ func TestLazyJsonDocument(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.s, func(t *testing.T) {
 			doc := types.NewLazyJSONDocument([]byte(testCase.s))
-			val, err := doc.ToInterface()
+			val, err := doc.ToInterface(context.Background())
 			require.NoError(t, err)
 			require.Equal(t, testCase.json, val)
 		})
 	}
 	t.Run("lazy docs only error when deserialized", func(t *testing.T) {
 		doc := types.NewLazyJSONDocument([]byte("not valid json"))
-		_, err := doc.ToInterface()
+		_, err := doc.ToInterface(context.Background())
 		require.Error(t, err)
 	})
 }
@@ -365,7 +395,7 @@ func TestJsonInsertErrors(t *testing.T) {
 
 	for _, test := range JsonArrayInsertErrors {
 		t.Run("JSON Path: "+test.desc, func(t *testing.T) {
-			_, changed, err := doc.ArrayInsert(test.path, types.MustJSON(`{"a": 42}`))
+			_, changed, err := doc.ArrayInsert(t.Context(), test.path, types.MustJSON(`{"a": 42}`))
 			assert.Equal(t, false, changed)
 			require.Error(t, err)
 			assert.Equal(t, test.expectErrStr, err.Error())

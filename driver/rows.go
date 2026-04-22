@@ -26,10 +26,10 @@ import (
 
 // Rows is an iterator over an executed query's results.
 type Rows struct {
+	rows    sql.RowIter
 	options *Options
 	ctx     *sql.Context
 	cols    sql.Schema
-	rows    sql.RowIter
 }
 
 // Columns returns the names of the columns. The number of
@@ -114,7 +114,7 @@ func (r *Rows) convert(col int, v driver.Value) interface{} {
 			}
 		}
 
-		sqlValue, _, err := r.cols[col].Type.Convert(v)
+		sqlValue, _, err := r.cols[col].Type.Convert(r.ctx, v)
 		if err != nil {
 			break
 		}

@@ -1,4 +1,4 @@
-// Copyright 2021 Dolthub, Inc.
+// Copyright 2021-2025 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,18 +15,16 @@
 package plan
 
 import (
-	"fmt"
-	"time"
-
 	"github.com/dolthub/go-mysql-server/sql/types"
 
 	"github.com/dolthub/go-mysql-server/sql"
 )
 
 type CreateProcedure struct {
-	*Procedure
-	ddlNode
-	BodyString string
+	ddlNode ddlNode
+
+	StoredProcDetails sql.StoredProcedureDetails
+	BodyString        string
 }
 
 var _ sql.Node = (*CreateProcedure)(nil)
@@ -37,48 +35,31 @@ var _ sql.CollationCoercible = (*CreateProcedure)(nil)
 // NewCreateProcedure returns a *CreateProcedure node.
 func NewCreateProcedure(
 	db sql.Database,
-	name,
-	definer string,
-	params []ProcedureParam,
-	createdAt, modifiedAt time.Time,
-	securityContext ProcedureSecurityContext,
-	characteristics []Characteristic,
-	body sql.Node,
-	comment, createString, bodyString string,
+	storedProcDetails sql.StoredProcedureDetails,
+	bodyString string,
 ) *CreateProcedure {
-	procedure := NewProcedure(
-		name,
-		definer,
-		params,
-		securityContext,
-		comment,
-		characteristics,
-		createString,
-		body,
-		createdAt,
-		modifiedAt)
 	return &CreateProcedure{
-		Procedure:  procedure,
-		BodyString: bodyString,
-		ddlNode:    ddlNode{db},
+		ddlNode:           ddlNode{db},
+		StoredProcDetails: storedProcDetails,
+		BodyString:        bodyString,
 	}
 }
 
 // Database implements the sql.Databaser interface.
 func (c *CreateProcedure) Database() sql.Database {
-	return c.Db
+	return c.ddlNode.Db
 }
 
 // WithDatabase implements the sql.Databaser interface.
 func (c *CreateProcedure) WithDatabase(database sql.Database) (sql.Node, error) {
 	cp := *c
-	cp.Db = database
+	cp.ddlNode.Db = database
 	return &cp, nil
 }
 
 // Resolved implements the sql.Node interface.
 func (c *CreateProcedure) Resolved() bool {
-	return c.ddlNode.Resolved() && c.Procedure.Resolved()
+	return c.ddlNode.Resolved()
 }
 
 func (c *CreateProcedure) IsReadOnly() bool {
@@ -86,37 +67,21 @@ func (c *CreateProcedure) IsReadOnly() bool {
 }
 
 // Schema implements the sql.Node interface.
-func (c *CreateProcedure) Schema() sql.Schema {
+func (c *CreateProcedure) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
 // Children implements the sql.Node interface.
 func (c *CreateProcedure) Children() []sql.Node {
-	return []sql.Node{c.Procedure}
+	return []sql.Node{}
 }
 
 // WithChildren implements the sql.Node interface.
-func (c *CreateProcedure) WithChildren(children ...sql.Node) (sql.Node, error) {
-	if len(children) != 1 {
-		return nil, sql.ErrInvalidChildrenNumber.New(c, len(children), 1)
+func (c *CreateProcedure) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
+	if len(children) != 0 {
+		return nil, sql.ErrInvalidChildrenNumber.New(c, len(children), 0)
 	}
-	procedure, ok := children[0].(*Procedure)
-	if !ok {
-		return nil, fmt.Errorf("expected `*Procedure` but got `%T`", children[0])
-	}
-
-	nc := *c
-	nc.Procedure = procedure
-	return &nc, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (c *CreateProcedure) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: c.Db.Name(),
-	}
-
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_CreateRoutine))
+	return c, nil
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -126,50 +91,10 @@ func (*CreateProcedure) CollationCoercibility(ctx *sql.Context) (collation sql.C
 
 // String implements the sql.Node interface.
 func (c *CreateProcedure) String() string {
-	definer := ""
-	if c.Definer != "" {
-		definer = fmt.Sprintf(" DEFINER = %s", c.Definer)
-	}
-	params := ""
-	for i, param := range c.Params {
-		if i > 0 {
-			params += ", "
-		}
-		params += param.String()
-	}
-	comment := ""
-	if c.Comment != "" {
-		comment = fmt.Sprintf(" COMMENT '%s'", c.Comment)
-	}
-	characteristics := ""
-	for _, characteristic := range c.Characteristics {
-		characteristics += fmt.Sprintf(" %s", characteristic.String())
-	}
-	return fmt.Sprintf("CREATE%s PROCEDURE %s (%s) %s%s%s %s",
-		definer, c.Name, params, c.SecurityContext.String(), comment, characteristics, c.Procedure.String())
+	return c.StoredProcDetails.CreateStatement
 }
 
 // DebugString implements the sql.DebugStringer interface.
-func (c *CreateProcedure) DebugString() string {
-	definer := ""
-	if c.Definer != "" {
-		definer = fmt.Sprintf(" DEFINER = %s", c.Definer)
-	}
-	params := ""
-	for i, param := range c.Params {
-		if i > 0 {
-			params += ", "
-		}
-		params += param.String()
-	}
-	comment := ""
-	if c.Comment != "" {
-		comment = fmt.Sprintf(" COMMENT '%s'", c.Comment)
-	}
-	characteristics := ""
-	for _, characteristic := range c.Characteristics {
-		characteristics += fmt.Sprintf(" %s", characteristic.String())
-	}
-	return fmt.Sprintf("CREATE%s PROCEDURE %s (%s) %s%s%s %s",
-		definer, c.Name, params, c.SecurityContext.String(), comment, characteristics, sql.DebugString(c.Procedure))
+func (c *CreateProcedure) DebugString(ctx *sql.Context) string {
+	return c.StoredProcDetails.CreateStatement
 }

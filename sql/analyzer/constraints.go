@@ -26,7 +26,7 @@ import (
 // resolveDropConstraint replaces DropConstraint nodes with a concrete type of alter table node as appropriate, or
 // throws a constraint not found error if the named constraint isn't found on the table given.
 func resolveDropConstraint(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
-	return transform.Node(n, func(n sql.Node) (sql.Node, transform.TreeIdentity, error) {
+	return transform.Node(ctx, n, func(ctx *sql.Context, n sql.Node) (sql.Node, transform.TreeIdentity, error) {
 		dropConstraint, ok := n.(*plan.DropConstraint)
 		if !ok {
 			return n, transform.SameTree, nil
@@ -74,6 +74,30 @@ func resolveDropConstraint(ctx *sql.Context, a *Analyzer, n sql.Node, scope *pla
 			}
 		}
 
+		if dropConstraint.IfExists {
+			newAlterDropCheck := plan.NewAlterDropCheck(rt, dropConstraint.Name)
+			newAlterDropCheck.IfExists = true
+			return newAlterDropCheck, transform.NewTree, nil
+		}
+
+		if ia, ok := table.(sql.IndexAddressable); ok {
+			indexes, err := ia.GetIndexes(ctx)
+			if err != nil {
+				return nil, transform.SameTree, err
+			}
+
+			for _, index := range indexes {
+				if index.IsUnique() {
+					if index.ID() == dropConstraint.Name {
+						newDropIndex := plan.NewDropIndex(dropConstraint.Name, rt)
+						newDropIndex.Catalog = a.Catalog
+						newDropIndex.CurrentDatabase = rt.Database().Name()
+						return newDropIndex, transform.NewTree, nil
+					}
+				}
+			}
+		}
+
 		return nil, transform.SameTree, sql.ErrUnknownConstraint.New(dropConstraint.Name)
 	})
 }
@@ -82,6 +106,11 @@ func resolveDropConstraint(ctx *sql.Context, a *Analyzer, n sql.Node, scope *pla
 func validateDropConstraint(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
 	switch n := n.(type) {
 	case *plan.DropCheck:
+		// Don't bother validating that the constraint exists if the IfExists flag is set
+		if n.IfExists {
+			return n, transform.SameTree, nil
+		}
+
 		rt := n.Table
 
 		ct, ok := rt.Table.(sql.CheckTable)

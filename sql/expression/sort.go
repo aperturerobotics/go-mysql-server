@@ -22,29 +22,26 @@ import (
 
 // Sorter is a sorter implementation for Row slices using SortFields for the comparison
 type Sorter struct {
-	SortFields []sql.SortField
-	Rows       []sql.Row
 	LastError  error
 	Ctx        *sql.Context
+	SortFields []sql.SortField
+	Rows       []sql.Row
 }
 
+// Len implements the sort.Interface interface.
 func (s *Sorter) Len() int {
 	return len(s.Rows)
 }
 
+// Swap implements the sort.Interface interface.
 func (s *Sorter) Swap(i, j int) {
 	s.Rows[i], s.Rows[j] = s.Rows[j], s.Rows[i]
 }
 
-func (s *Sorter) Less(i, j int) bool {
-	if s.LastError != nil {
-		return false
-	}
-
-	a := s.Rows[i]
-	b := s.Rows[j]
+// IsLesserRow determines if sql.Row `a` is less than sql.Row `b` based off s.SortFields.
+func (s *Sorter) IsLesserRow(a, b sql.Row) bool {
 	for _, sf := range s.SortFields {
-		typ := sf.Column.Type()
+		typ := sf.Column.Type(s.Ctx)
 		av, err := sf.Column.Eval(s.Ctx, a)
 		if err != nil {
 			s.LastError = sql.ErrUnableSort.Wrap(err)
@@ -69,7 +66,7 @@ func (s *Sorter) Less(i, j int) bool {
 			return sf.NullOrdering != sql.NullsFirst
 		}
 
-		cmp, err := typ.Compare(av, bv)
+		cmp, err := typ.Compare(s.Ctx, av, bv)
 		if err != nil {
 			s.LastError = err
 			return false
@@ -82,74 +79,31 @@ func (s *Sorter) Less(i, j int) bool {
 			return false
 		}
 	}
-
 	return false
 }
 
-// Sorter2 is a version of Sorter that operates on Row2
-type Sorter2 struct {
-	SortFields []sql.SortField
-	Rows       []sql.Row2
-	LastError  error
-	Ctx        *sql.Context
-}
-
-func (s *Sorter2) Len() int {
-	return len(s.Rows)
-}
-
-func (s *Sorter2) Swap(i, j int) {
-	s.Rows[i], s.Rows[j] = s.Rows[j], s.Rows[i]
-}
-
-func (s *Sorter2) Less(i, j int) bool {
+// Less implements the sort.Interface interface.
+func (s *Sorter) Less(i, j int) bool {
 	if s.LastError != nil {
 		return false
 	}
+	return s.IsLesserRow(s.Rows[i], s.Rows[j])
+}
 
-	a := s.Rows[i]
-	b := s.Rows[j]
-	for _, sf := range s.SortFields {
-		typ := sf.Column2.Type2()
-		av, err := sf.Column2.Eval2(s.Ctx, a)
-		if err != nil {
-			s.LastError = sql.ErrUnableSort.Wrap(err)
-			return false
-		}
+// ValueRowSorter is a version of Sorter that operates on ValueRow
+type ValueRowSorter struct {
+	LastError  error
+	Ctx        *sql.Context
+	SortFields []sql.SortField
+	Rows       []sql.ValueRow
+}
 
-		bv, err := sf.Column2.Eval2(s.Ctx, b)
-		if err != nil {
-			s.LastError = sql.ErrUnableSort.Wrap(err)
-			return false
-		}
+func (s *ValueRowSorter) Len() int {
+	return len(s.Rows)
+}
 
-		if sf.Order == sql.Descending {
-			av, bv = bv, av
-		}
-
-		if av.IsNull() && bv.IsNull() {
-			continue
-		} else if av.IsNull() {
-			return sf.NullOrdering == sql.NullsFirst
-		} else if bv.IsNull() {
-			return sf.NullOrdering != sql.NullsFirst
-		}
-
-		cmp, err := typ.Compare2(av, bv)
-		if err != nil {
-			s.LastError = err
-			return false
-		}
-
-		switch cmp {
-		case -1:
-			return true
-		case 1:
-			return false
-		}
-	}
-
-	return false
+func (s *ValueRowSorter) Swap(i, j int) {
+	s.Rows[i], s.Rows[j] = s.Rows[j], s.Rows[i]
 }
 
 // TopRowsHeap implements heap.Interface based on Sorter. It inverts the Less()
@@ -171,18 +125,21 @@ func (h *TopRowsHeap) Push(x interface{}) {
 }
 
 func (h *TopRowsHeap) Pop() interface{} {
-	old := h.Sorter.Rows
-	n := len(old)
-	res := old[n-1]
-	h.Sorter.Rows = old[0 : n-1]
+	n := len(h.Sorter.Rows)
+	res := h.Sorter.Rows[n-1]
+	h.Sorter.Rows = h.Sorter.Rows[:n-1]
 	return res
 }
 
 func (h *TopRowsHeap) Rows() ([]sql.Row, error) {
+	if h.LastError != nil {
+		return nil, h.LastError
+	}
+
 	l := h.Len()
 	res := make([]sql.Row, l)
 	for i := l - 1; i >= 0; i-- {
-		res[i] = heap.Pop(h).(sql.Row)
+		res[i] = heap.Pop(h).(sql.Row) // TODO: this is slow
 	}
-	return res, h.LastError
+	return res, nil
 }

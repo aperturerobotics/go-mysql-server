@@ -35,7 +35,7 @@ const (
 // TODO: look over all of the "invalid type" tests later, ignoring them for now since they're unlikely to be hit
 func TestTime_Year(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewYear(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewYear(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 
 	testCases := []struct {
 		name     string
@@ -44,8 +44,8 @@ func TestTime_Year(t *testing.T) {
 		err      bool
 	}{
 		{"invalid type", sql.NewRow([]byte{0, 1, 2}), nil, false},
-		{"date as string", sql.NewRow(stringDate), int32(2007), false},
-		{"date as time", sql.NewRow(time.Now()), int32(time.Now().UTC().Year()), false},
+		{"date as string", sql.NewRow(stringDate), 2007, false},
+		{"date as time", sql.NewRow(time.Now()), time.Now().UTC().Year(), false},
 	}
 
 	for _, tt := range testCases {
@@ -64,7 +64,7 @@ func TestTime_Year(t *testing.T) {
 
 func TestTime_Month(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewMonth(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewMonth(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 
 	testCases := []struct {
 		name     string
@@ -74,8 +74,8 @@ func TestTime_Month(t *testing.T) {
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
 		{"invalid type", sql.NewRow([]byte{0, 1, 2}), nil, false},
-		{"date as string", sql.NewRow(stringDate), int32(1), false},
-		{"date as time", sql.NewRow(time.Now()), int32(time.Now().UTC().Month()), false},
+		{"date as string", sql.NewRow(stringDate), 1, false},
+		{"date as time", sql.NewRow(time.Now()), int(time.Now().UTC().Month()), false},
 	}
 
 	for _, tt := range testCases {
@@ -94,7 +94,7 @@ func TestTime_Month(t *testing.T) {
 
 func TestTime_Quarter(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewQuarter(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewQuarter(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 
 	testCases := []struct {
 		name     string
@@ -125,77 +125,77 @@ func TestTime_Quarter(t *testing.T) {
 		{
 			name:     "date as string",
 			row:      sql.NewRow(stringDate),
-			expected: int32(1),
+			expected: 1,
 		},
 		{
 			name:     "another date as string",
 			row:      sql.NewRow("2008-08-01"),
-			expected: int32(3),
+			expected: 3,
 		},
 		{
 			name:     "january",
 			row:      sql.NewRow("2008-01-01"),
-			expected: int32(1),
+			expected: 1,
 		},
 		{
 			name:     "february",
 			row:      sql.NewRow("2008-02-01"),
-			expected: int32(1),
+			expected: 1,
 		},
 		{
 			name:     "march",
 			row:      sql.NewRow("2008-03-01"),
-			expected: int32(1),
+			expected: 1,
 		},
 		{
 			name:     "april",
 			row:      sql.NewRow("2008-04-01"),
-			expected: int32(2),
+			expected: 2,
 		},
 		{
 			name:     "may",
 			row:      sql.NewRow("2008-05-01"),
-			expected: int32(2),
+			expected: 2,
 		},
 		{
 			name:     "june",
 			row:      sql.NewRow("2008-06-01"),
-			expected: int32(2),
+			expected: 2,
 		},
 		{
 			name:     "july",
 			row:      sql.NewRow("2008-07-01"),
-			expected: int32(3),
+			expected: 3,
 		},
 		{
 			name:     "august",
 			row:      sql.NewRow("2008-08-01"),
-			expected: int32(3),
+			expected: 3,
 		},
 		{
 			name:     "septemeber",
 			row:      sql.NewRow("2008-09-01"),
-			expected: int32(3),
+			expected: 3,
 		},
 		{
 			name:     "october",
 			row:      sql.NewRow("2008-10-01"),
-			expected: int32(4),
+			expected: 4,
 		},
 		{
 			name:     "november",
 			row:      sql.NewRow("2008-11-01"),
-			expected: int32(4),
+			expected: 4,
 		},
 		{
 			name:     "december",
 			row:      sql.NewRow("2008-12-01"),
-			expected: int32(4),
+			expected: 4,
 		},
 		{
 			name:     "date as time",
 			row:      sql.NewRow(time.Now()),
-			expected: int32((time.Now().UTC().Month()-1)/3 + 1),
+			expected: (int(time.Now().UTC().Month())-1)/3 + 1,
 		},
 	}
 
@@ -215,7 +215,7 @@ func TestTime_Quarter(t *testing.T) {
 
 func TestTime_Day(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewDay(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewDay(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 
 	testCases := []struct {
 		name     string
@@ -225,8 +225,8 @@ func TestTime_Day(t *testing.T) {
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
 		{"invalid type", sql.NewRow([]byte{0, 1, 2}), nil, false},
-		{"date as string", sql.NewRow(stringDate), int32(2), false},
-		{"date as time", sql.NewRow(time.Now()), int32(time.Now().UTC().Day()), false},
+		{"date as string", sql.NewRow(stringDate), 2, false},
+		{"date as time", sql.NewRow(time.Now()), time.Now().UTC().Day(), false},
 	}
 
 	for _, tt := range testCases {
@@ -245,7 +245,7 @@ func TestTime_Day(t *testing.T) {
 
 func TestTime_Weekday(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewWeekday(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewWeekday(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 
 	testCases := []struct {
 		name     string
@@ -255,8 +255,8 @@ func TestTime_Weekday(t *testing.T) {
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
 		{"invalid type", sql.NewRow([]byte{0, 1, 2}), nil, false},
-		{"date as string", sql.NewRow(stringDate), int32(1), false},
-		{"date as time", sql.NewRow(time.Now()), int32(time.Now().UTC().Weekday()+6) % 7, false},
+		{"date as string", sql.NewRow(stringDate), 1, false},
+		{"date as time", sql.NewRow(time.Now()), int(time.Now().UTC().Weekday()+6) % 7, false},
 	}
 
 	for _, tt := range testCases {
@@ -275,7 +275,7 @@ func TestTime_Weekday(t *testing.T) {
 
 func TestTime_Hour(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewHour(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewHour(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 
 	testCases := []struct {
 		name     string
@@ -285,8 +285,8 @@ func TestTime_Hour(t *testing.T) {
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
 		{"invalid type", sql.NewRow([]byte{0, 1, 2}), nil, false},
-		{"date as string", sql.NewRow(stringDate), int32(14), false},
-		{"date as time", sql.NewRow(time.Now()), int32(time.Now().UTC().Hour()), false},
+		{"date as string", sql.NewRow(stringDate), 14, false},
+		{"date as time", sql.NewRow(time.Now()), time.Now().UTC().Hour(), false},
 	}
 
 	for _, tt := range testCases {
@@ -305,7 +305,7 @@ func TestTime_Hour(t *testing.T) {
 
 func TestTime_Minute(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewMinute(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewMinute(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 
 	testCases := []struct {
 		name     string
@@ -315,8 +315,8 @@ func TestTime_Minute(t *testing.T) {
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
 		{"invalid type", sql.NewRow([]byte{0, 1, 2}), nil, false},
-		{"date as string", sql.NewRow(stringDate), int32(15), false},
-		{"date as time", sql.NewRow(time.Now()), int32(time.Now().UTC().Minute()), false},
+		{"date as string", sql.NewRow(stringDate), 15, false},
+		{"date as time", sql.NewRow(time.Now()), time.Now().UTC().Minute(), false},
 	}
 
 	for _, tt := range testCases {
@@ -335,7 +335,7 @@ func TestTime_Minute(t *testing.T) {
 
 func TestTime_Second(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewSecond(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewSecond(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 
 	testCases := []struct {
 		name     string
@@ -345,8 +345,8 @@ func TestTime_Second(t *testing.T) {
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
 		{"invalid type", sql.NewRow([]byte{0, 1, 2}), nil, false},
-		{"date as string", sql.NewRow(stringDate), int32(16), false},
-		{"date as time", sql.NewRow(time.Now()), int32(time.Now().UTC().Second()), false},
+		{"date as string", sql.NewRow(stringDate), 16, false},
+		{"date as time", sql.NewRow(time.Now()), time.Now().UTC().Second(), false},
 	}
 
 	for _, tt := range testCases {
@@ -365,7 +365,7 @@ func TestTime_Second(t *testing.T) {
 
 func TestTime_Microsecond(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewMicrosecond(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewMicrosecond(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 	currTime := time.Now()
 
 	testCases := []struct {
@@ -375,7 +375,7 @@ func TestTime_Microsecond(t *testing.T) {
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
-		{"invalid type", sql.NewRow([]byte{0, 1, 2}), nil, true},
+		{"invalid type", sql.NewRow([]byte{0, 1, 2}), nil, false},
 		{"date as string", sql.NewRow(stringDate), uint64(0), false},
 		{"date as time", sql.NewRow(currTime), uint64(currTime.Nanosecond()) / uint64(time.Microsecond), false},
 	}
@@ -396,7 +396,7 @@ func TestTime_Microsecond(t *testing.T) {
 
 func TestTime_DayOfWeek(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewDayOfWeek(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewDayOfWeek(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 
 	testCases := []struct {
 		name     string
@@ -406,8 +406,8 @@ func TestTime_DayOfWeek(t *testing.T) {
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
 		{"invalid type", sql.NewRow([]byte{0, 1, 2}), nil, false},
-		{"date as string", sql.NewRow(stringDate), int32(3), false},
-		{"date as time", sql.NewRow(time.Now()), int32(time.Now().UTC().Weekday() + 1), false},
+		{"date as string", sql.NewRow(stringDate), 3, false},
+		{"date as time", sql.NewRow(time.Now()), int(time.Now().UTC().Weekday() + 1), false},
 	}
 
 	for _, tt := range testCases {
@@ -426,7 +426,7 @@ func TestTime_DayOfWeek(t *testing.T) {
 
 func TestTime_DayOfYear(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewDayOfYear(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewDayOfYear(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 
 	testCases := []struct {
 		name     string
@@ -436,8 +436,8 @@ func TestTime_DayOfYear(t *testing.T) {
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
 		{"invalid type", sql.NewRow([]byte{0, 1, 2}), nil, false},
-		{"date as string", sql.NewRow(stringDate), int32(2), false},
-		{"date as time", sql.NewRow(time.Now()), int32(time.Now().UTC().YearDay()), false},
+		{"date as string", sql.NewRow(stringDate), 2, false},
+		{"date as time", sql.NewRow(time.Now()), time.Now().UTC().YearDay(), false},
 	}
 
 	for _, tt := range testCases {
@@ -456,7 +456,7 @@ func TestTime_DayOfYear(t *testing.T) {
 
 func TestTime_WeekOfYear(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewWeekOfYear(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewWeekOfYear(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 	currTime := time.Now()
 	_, week := currTime.ISOWeek()
 
@@ -467,7 +467,7 @@ func TestTime_WeekOfYear(t *testing.T) {
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
-		{"invalid type", sql.NewRow([]byte{0, 1, 2}), int32(1), true},
+		{"invalid type", sql.NewRow([]byte{0, 1, 2}), nil, false},
 		{"date as string", sql.NewRow(stringDate), 1, false},
 		{"date as time", sql.NewRow(currTime), week, false},
 	}
@@ -488,7 +488,7 @@ func TestTime_WeekOfYear(t *testing.T) {
 
 func TestYearWeek(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f, err := NewYearWeek(expression.NewGetField(0, types.LongText, "foo", false))
+	f, err := NewYearWeek(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 	require.NoError(t, err)
 
 	testCases := []struct {
@@ -592,7 +592,7 @@ func TestUTCTimestamp(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(fmt.Sprint(test.args), func(t *testing.T) {
-			ut, err := NewUTCTimestamp(test.args...)
+			ut, err := NewUTCTimestamp(ctx, test.args...)
 			if !test.expectErr {
 				require.NoError(t, err)
 				val, err := ut.Eval(ctx, nil)
@@ -607,7 +607,7 @@ func TestUTCTimestamp(t *testing.T) {
 
 func TestDate(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewDate(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewDate(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 
 	testCases := []struct {
 		name     string
@@ -636,7 +636,7 @@ func TestDate(t *testing.T) {
 }
 
 func TestNow(t *testing.T) {
-	f, _ := NewNow(expression.NewGetField(0, types.LongText, "foo", false))
+	f, _ := NewNow(sql.NewEmptyContext(), expression.NewGetField(0, types.LongText, "foo", false))
 	date := time.Date(
 		2021,      // year
 		1,         // month
@@ -692,7 +692,7 @@ func TestNow(t *testing.T) {
 // SYSDATE() should always return the exact current time, and not the cached query start time. That behavior is
 // tested in the enginetests, instead of these unit tests.
 func TestSysdate(t *testing.T) {
-	f, _ := NewSysdate(expression.NewGetField(0, types.LongText, "foo", false))
+	f, _ := NewSysdate(sql.NewEmptyContext(), expression.NewGetField(0, types.LongText, "foo", false))
 	date := time.Date(
 		2021,      // year
 		1,         // month
@@ -746,7 +746,7 @@ func TestSysdate(t *testing.T) {
 
 func TestTime(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewTime(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewTime(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 
 	testCases := []struct {
 		name     string
@@ -779,7 +779,7 @@ func TestTime(t *testing.T) {
 
 func TestTime_DayName(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewDayName(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewDayName(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 
 	testCases := []struct {
 		name     string
@@ -812,7 +812,7 @@ func TestTime_DayName(t *testing.T) {
 
 func TestTime_MonthName(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	f := NewMonthName(expression.NewGetField(0, types.LongText, "foo", false))
+	f := NewMonthName(ctx, expression.NewGetField(0, types.LongText, "foo", false))
 
 	testCases := []struct {
 		name     string
@@ -821,7 +821,7 @@ func TestTime_MonthName(t *testing.T) {
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
-		{"invalid type", sql.NewRow([]byte{0, 1, 2}), nil, true},
+		{"invalid type", sql.NewRow([]byte{0, 1, 2}), nil, false},
 		{"time as string", sql.NewRow(stringDate), "January", false},
 	}
 

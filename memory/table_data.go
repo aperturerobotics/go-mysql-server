@@ -24,6 +24,7 @@ import (
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
+	"github.com/dolthub/go-mysql-server/sql/hash"
 	"github.com/dolthub/go-mysql-server/sql/transform"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
@@ -32,29 +33,20 @@ import (
 // freely as needed for different views on a table (column projections, index lookups, filters, etc.) but the
 // storage of underlying data lives here.
 type TableData struct {
-	dbName    string
-	tableName string
-	comment   string
-
-	// Schema / config data
-	schema                  sql.PrimaryKeySchema
 	indexes                 map[string]sql.Index
 	fkColl                  *ForeignKeyCollection
-	checks                  []sql.CheckDefinition
-	collation               sql.CollationID
-	autoColIdx              int
-	primaryKeyIndexes       bool
+	secondaryIndexStorage   map[indexName][]sql.Row
+	partitions              map[string][]sql.Row
 	fullTextConfigTableName string
-
-	// Data storage
-	partitions    map[string][]sql.Row
-	partitionKeys [][]byte
-	autoIncVal    uint64
-
-	// Indexes are implemented as an unordered slice of rows. The first N elements in the row are the values of the
-	// indexed columns, and the final value is the location of the row in the primary storage.
-	// TODO: we could make these much more performant by using a tree or other ordered collection
-	secondaryIndexStorage map[indexName][]sql.Row
+	tableName               string
+	comment                 string
+	dbName                  string
+	schema                  sql.PrimaryKeySchema
+	checks                  []sql.CheckDefinition
+	partitionKeys           [][]byte
+	autoColIdx              int
+	autoIncVal              uint64
+	collation               sql.CollationID
 }
 
 type indexName string
@@ -69,10 +61,9 @@ type primaryRowLocation struct {
 // Table returns a table with this data
 func (td TableData) Table(database *BaseDatabase) *Table {
 	return &Table{
-		db:               database,
-		name:             td.tableName,
-		data:             &td,
-		pkIndexesEnabled: td.primaryKeyIndexes,
+		db:   database,
+		name: td.tableName,
+		data: &td,
 	}
 }
 
@@ -115,7 +106,7 @@ func (td TableData) copy() *TableData {
 
 // partition returns the partition for the row given. Uses the primary key columns if they exist, or all columns
 // otherwise
-func (td TableData) partition(row sql.Row) (int, error) {
+func (td TableData) partition(ctx *sql.Context, row sql.Row) (int, error) {
 	var keyColumns []int
 	if len(td.schema.PkOrdinals) > 0 {
 		keyColumns = td.schema.PkOrdinals
@@ -139,7 +130,7 @@ func (td TableData) partition(row sql.Row) (int, error) {
 
 		t, isStringType := td.schema.Schema[keyColumns[i]].Type.(sql.StringType)
 		if isStringType && v != nil {
-			v, err = types.ConvertToString(v, t)
+			v, err = types.ConvertToString(ctx, v, t, nil)
 			if err == nil {
 				err = t.Collation().WriteWeightString(hash, v.(string))
 			}
@@ -155,7 +146,7 @@ func (td TableData) partition(row sql.Row) (int, error) {
 	return int(sum64 % uint64(len(td.partitionKeys))), nil
 }
 
-func (td *TableData) truncate(schema sql.PrimaryKeySchema) *TableData {
+func (td *TableData) truncate(ctx *sql.Context, schema sql.PrimaryKeySchema) *TableData {
 	var keys [][]byte
 	var partitions = map[string][]sql.Row{}
 	numParts := len(td.partitionKeys)
@@ -170,7 +161,7 @@ func (td *TableData) truncate(schema sql.PrimaryKeySchema) *TableData {
 	td.partitions = partitions
 	td.schema = schema
 
-	td.indexes = rewriteIndexes(td.indexes, schema)
+	td.indexes = rewriteIndexes(ctx, td.indexes, schema)
 	td.secondaryIndexStorage = make(map[indexName][]sql.Row)
 
 	td.autoIncVal = 0
@@ -189,10 +180,10 @@ func (td *TableData) truncate(schema sql.PrimaryKeySchema) *TableData {
 
 // rewriteIndexes returns a new set of indexes appropriate for the new schema provided. Index expressions are adjusted
 // as necessary, and any indexes for columns that no longer exist are removed from the set.
-func rewriteIndexes(indexes map[string]sql.Index, schema sql.PrimaryKeySchema) map[string]sql.Index {
+func rewriteIndexes(ctx *sql.Context, indexes map[string]sql.Index, schema sql.PrimaryKeySchema) map[string]sql.Index {
 	newIdxes := make(map[string]sql.Index)
 	for name, idx := range indexes {
-		newIdx := rewriteIndex(idx.(*Index), schema)
+		newIdx := rewriteIndex(ctx, idx.(*Index), schema)
 		if newIdx != nil {
 			newIdxes[name] = newIdx
 		}
@@ -202,10 +193,10 @@ func rewriteIndexes(indexes map[string]sql.Index, schema sql.PrimaryKeySchema) m
 
 // rewriteIndex returns a new index appropriate for the new schema provided, or nil if no columns remain to be indexed
 // in the schema
-func rewriteIndex(idx *Index, schema sql.PrimaryKeySchema) *Index {
+func rewriteIndex(ctx *sql.Context, idx *Index, schema sql.PrimaryKeySchema) *Index {
 	var newExprs []sql.Expression
 	for _, expr := range idx.Exprs {
-		newE, _, _ := transform.Expr(expr, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+		newE, _, _ := transform.Expr(ctx, expr, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 			if gf, ok := e.(*expression.GetField); ok {
 				newIdx := schema.IndexOfColName(gf.Name())
 				if newIdx < 0 {
@@ -274,8 +265,18 @@ func (td *TableData) numRows(ctx *sql.Context) (uint64, error) {
 }
 
 // throws an error if any two or more rows share the same |cols| values.
-func (td *TableData) errIfDuplicateEntryExist(cols []string, idxName string) error {
+func (td *TableData) errIfDuplicateEntryExist(ctx *sql.Context, cols []string, idxName string) error {
 	columnMapping, err := td.columnIndexes(cols)
+
+	// We currently skip validating duplicates on unique virtual columns.
+	// Right now trying to validate them would just trigger a panic.
+	// See https://github.com/dolthub/go-mysql-server/issues/2643
+	for _, i := range columnMapping {
+		if td.schema.Schema[i].Virtual {
+			return nil
+		}
+	}
+
 	if err != nil {
 		return err
 	}
@@ -286,7 +287,7 @@ func (td *TableData) errIfDuplicateEntryExist(cols []string, idxName string) err
 			if hasNulls(idxPrefixKey) {
 				continue
 			}
-			h, err := sql.HashOf(idxPrefixKey)
+			h, err := hash.HashOf(ctx, td.schema.Schema, idxPrefixKey)
 			if err != nil {
 				return err
 			}
@@ -358,12 +359,12 @@ func (td *TableData) indexColsForTableEditor() ([][]int, [][]uint16) {
 }
 
 // Sorts the rows in the partitions of the table to be in primary key order.
-func (td *TableData) sortRows() {
+func (td *TableData) sortRows(ctx *sql.Context) {
 	var pk []pkfield
 	for _, column := range td.schema.Schema {
 		if column.PrimaryKey {
 			idx, col := td.getColumnOrdinal(column.Name)
-			pk = append(pk, pkfield{idx, col})
+			pk = append(pk, pkfield{i: idx, c: col})
 		}
 	}
 
@@ -380,12 +381,13 @@ func (td *TableData) sortRows() {
 		ps:      td.partitions,
 		allRows: flattenedRows,
 		indexes: td.secondaryIndexStorage,
+		ctx:     ctx,
 	})
 
-	td.sortSecondaryIndexes()
+	td.sortSecondaryIndexes(ctx)
 }
 
-func (td *TableData) sortSecondaryIndexes() {
+func (td *TableData) sortSecondaryIndexes(ctx *sql.Context) {
 	for idxName, idxStorage := range td.secondaryIndexStorage {
 		idx := td.indexes[strings.ToLower(string(idxName))].(*Index)
 		fieldIndexes := idx.columnIndexes(td.schema.Schema)
@@ -409,7 +411,7 @@ func (td *TableData) sortSecondaryIndexes() {
 					return false
 				}
 
-				compare, err := typ.Compare(left, right)
+				compare, err := typ.Compare(ctx, left, right)
 				if err != nil {
 					panic(err)
 				}

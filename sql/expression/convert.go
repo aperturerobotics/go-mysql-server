@@ -15,12 +15,12 @@
 package expression
 
 import (
-	"encoding/hex"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/src-d/go-errors.v1"
 
@@ -64,17 +64,19 @@ const (
 
 // Convert represent a CAST(x AS T) or CONVERT(x, T) operation that casts x expression to type T.
 type Convert struct {
-	UnaryExpression
+	UnaryExpressionStub
+
+	// cachedDecimalType is the cached Decimal type for this convert expression. Because new Decimal types
+	// must be created with their specific scale and precision values, unlike other types, we cache the created
+	// type to avoid re-creating it on every call to Type().
+	cachedDecimalType sql.DecimalType
+
 	// castToType is a string representation of the base type to which we are casting (e.g. "char", "float", "decimal")
 	castToType string
 	// typeLength is the optional length parameter for types that support it (e.g. "char(10)")
 	typeLength int
 	// typeScale is the optional scale parameter for types that support it (e.g. "decimal(10, 2)")
 	typeScale int
-	// cachedDecimalType is the cached Decimal type for this convert expression. Because new Decimal types
-	// must be created with their specific scale and precision values, unlike other types, we cache the created
-	// type to avoid re-creating it on every call to Type().
-	cachedDecimalType sql.DecimalType
 }
 
 var _ sql.Expression = (*Convert)(nil)
@@ -86,8 +88,8 @@ var _ sql.CollationCoercible = (*Convert)(nil)
 func NewConvert(expr sql.Expression, castToType string) *Convert {
 	disableRounding(expr)
 	return &Convert{
-		UnaryExpression: UnaryExpression{Child: expr},
-		castToType:      strings.ToLower(castToType),
+		UnaryExpressionStub: UnaryExpressionStub{Child: expr},
+		castToType:          strings.ToLower(castToType),
 	}
 }
 
@@ -97,10 +99,10 @@ func NewConvert(expr sql.Expression, castToType string) *Convert {
 func NewConvertWithLengthAndScale(expr sql.Expression, castToType string, typeLength, typeScale int) *Convert {
 	disableRounding(expr)
 	return &Convert{
-		UnaryExpression: UnaryExpression{Child: expr},
-		castToType:      strings.ToLower(castToType),
-		typeLength:      typeLength,
-		typeScale:       typeScale,
+		UnaryExpressionStub: UnaryExpressionStub{Child: expr},
+		castToType:          strings.ToLower(castToType),
+		typeLength:          typeLength,
+		typeScale:           typeScale,
 	}
 }
 
@@ -116,11 +118,18 @@ func GetConvertToType(l, r sql.Type) string {
 	}
 
 	if !types.IsNumber(l) || !types.IsNumber(r) {
+		// Special handling for BLOB types - preserve binary data
+		if types.IsBlobType(l) || types.IsBlobType(r) {
+			return ConvertToBinary
+		}
 		return ConvertToChar
 	}
 
 	if types.IsDecimal(l) || types.IsDecimal(r) {
 		return ConvertToDecimal
+	}
+	if types.IsBit(l) || types.IsBit(r) {
+		return ConvertToSigned
 	}
 	if types.IsUnsigned(l) && types.IsUnsigned(r) {
 		return ConvertToUnsigned
@@ -136,17 +145,17 @@ func GetConvertToType(l, r sql.Type) string {
 }
 
 // IsNullable implements the Expression interface.
-func (c *Convert) IsNullable() bool {
+func (c *Convert) IsNullable(ctx *sql.Context) bool {
 	switch c.castToType {
-	case ConvertToDate, ConvertToDatetime:
+	case ConvertToDate, ConvertToDatetime, ConvertToBinary, ConvertToChar, ConvertToNChar:
 		return true
 	default:
-		return c.Child.IsNullable()
+		return c.Child.IsNullable(ctx)
 	}
 }
 
 // Type implements the Expression interface.
-func (c *Convert) Type() sql.Type {
+func (c *Convert) Type(ctx *sql.Context) sql.Type {
 	switch c.castToType {
 	case ConvertToBinary:
 		return types.LongBlob
@@ -155,7 +164,7 @@ func (c *Convert) Type() sql.Type {
 	case ConvertToDate:
 		return types.Date
 	case ConvertToDatetime:
-		return types.DatetimeMaxPrecision
+		return types.MustCreateDatetimeType(sqltypes.Datetime, c.typeLength)
 	case ConvertToDecimal:
 		if c.cachedDecimalType == nil {
 			c.cachedDecimalType = createConvertedDecimalType(c.typeLength, c.typeScale, true)
@@ -224,7 +233,7 @@ func (c *Convert) String() string {
 }
 
 // DebugString implements the Expression interface.
-func (c *Convert) DebugString() string {
+func (c *Convert) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("convert")
 	children := []string{
@@ -239,14 +248,14 @@ func (c *Convert) DebugString() string {
 		children = append(children, fmt.Sprintf("typeScale: %v", c.typeScale))
 	}
 
-	children = append(children, fmt.Sprintf(sql.DebugString(c.Child)))
+	children = append(children, sql.DebugString(ctx, c.Child))
 
 	_ = pr.WriteChildren(children...)
 	return pr.String()
 }
 
 // WithChildren implements the Expression interface.
-func (c *Convert) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (c *Convert) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(c, len(children), 1)
 	}
@@ -265,7 +274,7 @@ func (c *Convert) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	// Should always return nil, and a warning instead
-	casted, err := convertValue(val, c.castToType, c.Child.Type(), c.typeLength, c.typeScale)
+	casted, err := convertValue(ctx, val, c.castToType, c.Child.Type(ctx), c.typeLength, c.typeScale)
 	if err != nil {
 		if c.castToType == ConvertToJSON {
 			return nil, ErrConvertExpression.Wrap(err, c.String(), c.castToType)
@@ -277,15 +286,20 @@ func (c *Convert) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	return casted, nil
 }
 
-// convertValue only returns an error if converting to JSON, Date, and Datetime;
-// the zero value is returned for float types. Nil is returned in all other cases.
+// convertValue converts a value from its current type to the specified target type for CAST/CONVERT operations.
+// It handles type-specific conversion logic and applies length/scale constraints where applicable.
 // If |typeLength| and |typeScale| are 0, they are ignored, otherwise they are used as constraints on the
 // converted type where applicable (e.g. Char conversion supports only |typeLength|, Decimal conversion supports
 // |typeLength| and |typeScale|).
-func convertValue(val interface{}, castTo string, originType sql.Type, typeLength, typeScale int) (interface{}, error) {
+// Only returns an error if converting to JSON, Date, and Datetime; the zero value is returned for float types.
+// Nil is returned in all other cases.
+func convertValue(ctx *sql.Context, val any, castTo string, originType sql.Type, typeLength, typeScale int) (any, error) {
+	if val == nil {
+		return nil, nil
+	}
 	switch strings.ToLower(castTo) {
 	case ConvertToBinary:
-		b, _, err := types.LongBlob.Convert(val)
+		b, _, err := types.TypeAwareConversion(ctx, val, originType, types.LongBlob)
 		if err != nil {
 			return nil, nil
 		}
@@ -303,7 +317,7 @@ func convertValue(val interface{}, castTo string, originType sql.Type, typeLengt
 		}
 		return truncateConvertedValue(b, typeLength)
 	case ConvertToChar, ConvertToNChar:
-		s, _, err := types.LongText.Convert(val)
+		s, _, err := types.TypeAwareConversion(ctx, val, originType, types.LongText)
 		if err != nil {
 			return nil, nil
 		}
@@ -315,9 +329,12 @@ func convertValue(val interface{}, castTo string, originType sql.Type, typeLengt
 		if !(isTime || isString || isBinary) {
 			return nil, nil
 		}
-		d, _, err := types.Date.Convert(val)
+		d, _, err := types.Date.Convert(ctx, val)
 		if err != nil {
-			return nil, err
+			if !sql.ErrTruncatedIncorrect.Is(err) {
+				return nil, err
+			}
+			ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 		}
 		return d, nil
 	case ConvertToDatetime:
@@ -327,91 +344,106 @@ func convertValue(val interface{}, castTo string, originType sql.Type, typeLengt
 		if !(isTime || isString || isBinary) {
 			return nil, nil
 		}
-		d, _, err := types.DatetimeMaxPrecision.Convert(val)
+		d, _, err := types.MustCreateDatetimeType(sqltypes.Datetime, typeLength).Convert(ctx, val)
 		if err != nil {
-			return nil, err
+			if !sql.ErrTruncatedIncorrect.Is(err) {
+				return nil, err
+			}
+			ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 		}
 		return d, nil
 	case ConvertToDecimal:
-		value, err := convertHexBlobToDecimalForNumericContext(val, originType)
+		value, err := types.ConvertHexBlobToDecimalForNumericContext(val, originType)
 		if err != nil {
 			return nil, err
 		}
 		dt := createConvertedDecimalType(typeLength, typeScale, false)
-		d, _, err := dt.Convert(value)
+		d, _, err := dt.Convert(ctx, value)
 		if err != nil {
-			return dt.Zero(), nil
+			if !sql.ErrTruncatedIncorrect.Is(err) {
+				return dt.Zero(), nil
+			}
+			ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 		}
 		return d, nil
 	case ConvertToFloat:
-		value, err := convertHexBlobToDecimalForNumericContext(val, originType)
+		value, err := types.ConvertHexBlobToDecimalForNumericContext(val, originType)
 		if err != nil {
 			return nil, err
 		}
-		d, _, err := types.Float32.Convert(value)
+		d, _, err := types.Float32.Convert(ctx, value)
 		if err != nil {
-			return types.Float32.Zero(), nil
+			if !sql.ErrTruncatedIncorrect.Is(err) {
+				return types.Float64.Zero(), nil
+			}
+			ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 		}
 		return d, nil
 	case ConvertToDouble, ConvertToReal:
-		value, err := convertHexBlobToDecimalForNumericContext(val, originType)
+		value, err := types.ConvertHexBlobToDecimalForNumericContext(val, originType)
 		if err != nil {
 			return nil, err
 		}
-		d, _, err := types.Float64.Convert(value)
+		d, _, err := types.Float64.Convert(ctx, value)
 		if err != nil {
-			return types.Float64.Zero(), nil
+			if !sql.ErrTruncatedIncorrect.Is(err) {
+				return types.Float64.Zero(), nil
+			}
+			ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 		}
 		return d, nil
 	case ConvertToJSON:
-		js, _, err := types.JSON.Convert(val)
+		js, _, err := types.JSON.Convert(ctx, val)
 		if err != nil {
 			return nil, err
 		}
 		return js, nil
 	case ConvertToSigned:
-		value, err := convertHexBlobToDecimalForNumericContext(val, originType)
+		value, err := types.ConvertHexBlobToDecimalForNumericContext(val, originType)
 		if err != nil {
 			return nil, err
 		}
-		num, _, err := types.Int64.Convert(value)
+		num, _, err := types.Int64.Convert(ctx, value)
 		if err != nil {
-			return types.Int64.Zero(), nil
+			if !sql.ErrTruncatedIncorrect.Is(err) {
+				return types.Int64.Zero(), nil
+			}
+			ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 		}
-
 		return num, nil
 	case ConvertToTime:
-		t, _, err := types.Time.Convert(val)
+		t, _, err := types.Time.Convert(ctx, val)
 		if err != nil {
 			return nil, nil
 		}
 		return t, nil
 	case ConvertToUnsigned:
-		value, err := convertHexBlobToDecimalForNumericContext(val, originType)
+		value, err := types.ConvertHexBlobToDecimalForNumericContext(val, originType)
 		if err != nil {
 			return nil, err
 		}
-		num, _, err := types.Uint64.Convert(value)
+		num, inRange, err := types.Uint64.Convert(ctx, value)
 		if err != nil {
-			num, _, err = types.Int64.Convert(value)
-			if err != nil {
+			if !sql.ErrTruncatedIncorrect.Is(err) {
 				return types.Uint64.Zero(), nil
 			}
-			return uint64(num.(int64)), nil
+			ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
+		}
+		if inRange != sql.InRange {
+			ctx.Warn(1105, "Cast to unsigned converted negative integer to its positive complement")
 		}
 		return num, nil
 	case ConvertToYear:
-		value, err := convertHexBlobToDecimalForNumericContext(val, originType)
+		value, err := types.ConvertHexBlobToDecimalForNumericContext(val, originType)
 		if err != nil {
 			return nil, err
 		}
-		num, _, err := types.Uint64.Convert(value)
+		num, _, err := types.Uint64.Convert(ctx, value)
 		if err != nil {
-			num, _, err = types.Int64.Convert(value)
-			if err != nil {
-				return types.Uint64.Zero(), nil
+			if !sql.ErrTruncatedIncorrect.Is(err) {
+				return types.Float64.Zero(), nil
 			}
-			return uint64(num.(int64)), nil
+			ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 		}
 		return num, nil
 	default:
@@ -448,7 +480,7 @@ func truncateConvertedValue(val interface{}, typeLength int) (interface{}, error
 // type cannot be created from the values specified, the internal Decimal type is returned. If |logErrors| is true,
 // an error will also logged to the standard logger. (Setting |logErrors| to false, allows the caller to prevent
 // spurious error message from being logged multiple times for the same error.) This function is intended to be
-// used in places where an error cannot be returned (e.g. Node.Type() implementations), hence why it logs an error
+// used in places where an error cannot be returned (e.g. Node.Type(ctx) implementations), hence why it logs an error
 // instead of returning one.
 func createConvertedDecimalType(length, scale int, logErrors bool) sql.DecimalType {
 	if length > 0 && scale > 0 {
@@ -462,20 +494,4 @@ func createConvertedDecimalType(length, scale int, logErrors bool) sql.DecimalTy
 		return dt
 	}
 	return types.InternalDecimalType
-}
-
-// convertHexBlobToDecimalForNumericContext converts byte array value to unsigned int value if originType is BLOB type.
-// This function is called when convertTo type is number type only. The hex literal values are parsed into blobs as
-// binary string as default, but for numeric context, the value should be a number.
-// Byte arrays of other SQL types are not handled here.
-func convertHexBlobToDecimalForNumericContext(val interface{}, originType sql.Type) (interface{}, error) {
-	if bin, isBinary := val.([]byte); isBinary && types.IsBlobType(originType) {
-		stringVal := hex.EncodeToString(bin)
-		decimalNum, err := strconv.ParseUint(stringVal, 16, 64)
-		if err != nil {
-			return nil, errors.NewKind("failed to convert hex blob value to unsigned int").New()
-		}
-		val = decimalNum
-	}
-	return val, nil
 }

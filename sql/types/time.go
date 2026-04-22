@@ -15,7 +15,7 @@
 package types
 
 import (
-	"fmt"
+	"context"
 	"math"
 	"reflect"
 	"strconv"
@@ -28,6 +28,7 @@ import (
 	"gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/values"
 )
 
 var (
@@ -82,7 +83,7 @@ func (t TimespanType_) MaxTextResponseByteLength(*sql.Context) uint32 {
 type Timespan int64
 
 // Compare implements Type interface.
-func (t TimespanType_) Compare(a interface{}, b interface{}) (int, error) {
+func (t TimespanType_) Compare(s context.Context, a interface{}, b interface{}) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -99,21 +100,17 @@ func (t TimespanType_) Compare(a interface{}, b interface{}) (int, error) {
 	return as.Compare(bs), nil
 }
 
-func (t TimespanType_) Convert(v interface{}) (interface{}, sql.ConvertInRange, error) {
+// CompareValue implements the ValueType interface
+func (t TimespanType_) CompareValue(ctx *sql.Context, a, b sql.Value) (int, error) {
+	panic("TODO: implement CompareValue for TimespanType")
+}
+
+func (t TimespanType_) Convert(c context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
 	if v == nil {
 		return nil, sql.InRange, nil
 	}
 	ret, err := t.ConvertToTimespan(v)
 	return ret, sql.InRange, err
-}
-
-// MustConvert implements the Type interface.
-func (t TimespanType_) MustConvert(v interface{}) interface{} {
-	value, _, err := t.Convert(v)
-	if err != nil {
-		panic(err)
-	}
-	return value
 }
 
 // ConvertToTimespan converts the given interface value to a Timespan. This follows the conversion rules of MySQL, which
@@ -263,18 +260,29 @@ func (t TimespanType_) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t TimespanType_) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t TimespanType_) SQL(_ *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
+
 	ti, err := t.ConvertToTimespan(v)
 	if err != nil {
 		return sqltypes.Value{}, err
 	}
 
-	val := AppendAndSliceString(dest, ti.String())
+	dest = ti.AppendBytes(dest)
+	return sqltypes.MakeTrusted(sqltypes.Time, dest), nil
+}
 
-	return sqltypes.MakeTrusted(sqltypes.Time, val), nil
+// SQLValue implements ValueType interface.
+func (t TimespanType_) SQLValue(ctx *sql.Context, v sql.Value, dest []byte) (sqltypes.Value, error) {
+	if v.IsNull() {
+		return sqltypes.NULL, nil
+	}
+
+	x := values.ReadInt64(v.Val)
+	dest = Timespan(x).AppendBytes(dest)
+	return sqltypes.MakeTrusted(sqltypes.Time, dest), nil
 }
 
 // String implements Type interface.
@@ -463,15 +471,112 @@ func (t Timespan) timespanToUnits() (isNegative bool, hours int16, minutes int8,
 
 // String returns the Timespan formatted as a string (such as for display purposes).
 func (t Timespan) String() string {
+	return string(t.Bytes())
+}
+
+func (t Timespan) Bytes() []byte {
 	isNegative, hours, minutes, seconds, microseconds := t.timespanToUnits()
-	sign := ""
+	sz := 10
+	if microseconds > 0 {
+		sz += 7
+	}
+	ret := make([]byte, sz)
+	i := 0
 	if isNegative {
-		sign = "-"
+		ret[0] = '-'
+		i++
 	}
-	if microseconds == 0 {
-		return fmt.Sprintf("%v%02d:%02d:%02d", sign, hours, minutes, seconds)
+
+	i = appendDigit(int64(hours), 2, ret, i)
+	ret[i] = ':'
+	i++
+	i = appendDigit(int64(minutes), 2, ret, i)
+	ret[i] = ':'
+	i++
+	i = appendDigit(int64(seconds), 2, ret, i)
+	if microseconds > 0 {
+		ret[i] = '.'
+		i++
+		i = appendDigit(int64(microseconds), 6, ret, i)
 	}
-	return fmt.Sprintf("%v%02d:%02d:%02d.%06d", sign, hours, minutes, seconds, microseconds)
+
+	return ret[:i]
+}
+
+// precision is the number of digits of sub-second precision.
+// For the timespan type, this is currently always 6 (microsecond precision)
+// See https://github.com/dolthub/dolt/issues/10661
+func (t Timespan) precision() int {
+	return 6
+}
+
+func (t Timespan) AppendBytes(dest []byte) []byte {
+	isNeg, h, m, s, ms := t.timespanToUnits()
+	if isNeg {
+		dest = append(dest, '-')
+	}
+	dest = appendTimeFormat(dest, int64(h), int64(m), int64(s), int64(ms), t.precision())
+	return dest
+}
+
+func appendTimeFormat(dest []byte, h, m, s, ms int64, msPrecision int) []byte {
+	if h < 10 {
+		dest = append(dest, '0')
+	}
+	dest = strconv.AppendInt(dest, h, 10)
+	dest = append(dest, ':')
+
+	if m < 10 {
+		dest = append(dest, '0')
+	}
+	dest = strconv.AppendInt(dest, m, 10)
+	dest = append(dest, ':')
+
+	if s < 10 {
+		dest = append(dest, '0')
+	}
+	dest = strconv.AppendInt(dest, s, 10)
+
+	if msPrecision > 0 {
+		dest = appendMicroseconds(dest, ms, msPrecision)
+	}
+
+	return dest
+}
+
+// appendDigit format prints 0-extended integer into buffer
+func appendDigit(v int64, extend int, buf []byte, i int) int {
+	cmp := int64(1)
+	for _ = range extend - 1 {
+		cmp *= 10
+	}
+	for cmp > 0 && v < cmp {
+		buf[i] = '0'
+		i++
+		cmp /= 10
+	}
+	if v == 0 {
+		return i
+	}
+	tmpBuf := strconv.AppendInt(buf[i:i], v, 10)
+	return i + len(tmpBuf)
+}
+
+func appendMicroseconds(dest []byte, microseconds int64, precision int) []byte {
+	if precision <= 0 {
+		return dest
+	}
+	powersOfTen := []int64{1, 10, 100, 1000, 10000, 100000, 1000000}
+	subSecondSize := powersOfTen[6-precision]
+	subSeconds := microseconds / subSecondSize
+	dest = append(dest, '.')
+	cmp := powersOfTen[precision-1]
+	for cmp > 1 && subSeconds < cmp {
+		dest = append(dest, '0')
+		cmp /= 10
+	}
+	dest = strconv.AppendInt(dest, subSeconds, 10)
+	return dest
 }
 
 // AsMicroseconds returns the Timespan in microseconds.

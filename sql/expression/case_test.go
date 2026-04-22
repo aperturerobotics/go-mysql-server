@@ -155,14 +155,13 @@ func TestCaseType(t *testing.T) {
 			})
 		}
 		return &Case{
-			nil,
-			branches,
-			values[len(values)-1],
+			Branches: branches,
+			Else:     values[len(values)-1],
 		}
 	}
 
-	decimalType := types.MustCreateDecimalType(65, 10)
-
+	decimalType := types.MustCreateDecimalType(types.DecimalTypeMaxPrecision, types.DecimalTypeMaxScale)
+	uint64DecimalType := types.MustCreateDecimalType(types.DecimalTypeMaxPrecision, 0)
 	testCases := []struct {
 		name string
 		c    *Case
@@ -175,13 +174,13 @@ func TestCaseType(t *testing.T) {
 		},
 		{
 			"unsigned promoted and unsigned",
-			caseExpr(NewLiteral(uint32(0), types.Uint32), NewLiteral(uint32(1), types.Uint32)),
+			caseExpr(NewLiteral(uint32(0), types.Uint32), NewLiteral(uint32(1), types.Uint64)),
 			types.Uint64,
 		},
 		{
 			"signed promoted and signed",
 			caseExpr(NewLiteral(int8(0), types.Int8), NewLiteral(int32(1), types.Int32)),
-			types.Int64,
+			types.Int32,
 		},
 		{
 			"int and float to float",
@@ -216,7 +215,7 @@ func TestCaseType(t *testing.T) {
 		{
 			"uint64 and int8 to decimal",
 			caseExpr(NewLiteral(uint64(10), types.Uint64), NewLiteral(int8(0), types.Int8)),
-			decimalType,
+			uint64DecimalType,
 		},
 		{
 			"int and text to text",
@@ -247,7 +246,7 @@ func TestCaseType(t *testing.T) {
 
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.t, tt.c.Type())
+			require.Equal(t, tt.t, tt.c.Type(sql.NewEmptyContext()))
 		})
 	}
 }

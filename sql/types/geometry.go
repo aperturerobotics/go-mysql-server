@@ -16,6 +16,7 @@ package types
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"math"
 	"reflect"
@@ -45,6 +46,23 @@ type GeometryValue interface {
 	WriteData(buf []byte) int
 	Swap() GeometryValue
 	BBox() (float64, float64, float64, float64)
+}
+
+// UnwrapGeometry unwraps a value that may be a sql.AnyWrapper (e.g. adaptive/out-of-band storage)
+// and returns the underlying GeometryValue. If the value is already a GeometryValue, it is returned
+// directly. Returns ErrNotGeometry if the value cannot be converted.
+func UnwrapGeometry(ctx context.Context, v interface{}) (GeometryValue, error) {
+	if gv, ok := v.(GeometryValue); ok {
+		return gv, nil
+	}
+	unwrapped, err := sql.UnwrapAny(ctx, v)
+	if err != nil {
+		return nil, err
+	}
+	if gv, ok := unwrapped.(GeometryValue); ok {
+		return gv, nil
+	}
+	return nil, ErrNotGeometry.New(v)
 }
 
 var _ sql.Type = GeometryType{}
@@ -387,26 +405,26 @@ func WriteCount(buf []byte, count uint32) {
 }
 
 // Compare implements Type interface.
-func (t GeometryType) Compare(a any, b any) (int, error) {
+func (t GeometryType) Compare(s context.Context, a interface{}, b interface{}) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
 
-	aa, ok := a.(GeometryValue)
-	if !ok {
-		return 0, ErrNotGeometry.New(a)
+	aa, err := UnwrapGeometry(s, a)
+	if err != nil {
+		return 0, err
 	}
 
-	bb, ok := b.(GeometryValue)
-	if !ok {
-		return 0, ErrNotGeometry.New(b)
+	bb, err := UnwrapGeometry(s, b)
+	if err != nil {
+		return 0, err
 	}
 
 	return bytes.Compare(aa.Serialize(), bb.Serialize()), nil
 }
 
 // Convert implements Type interface.
-func (t GeometryType) Convert(v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t GeometryType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
 	if v == nil {
 		return nil, sql.InRange, nil
 	}
@@ -414,7 +432,7 @@ func (t GeometryType) Convert(v interface{}) (interface{}, sql.ConvertInRange, e
 	case []byte:
 		srid, isBig, geomType, err := DeserializeEWKBHeader(val)
 		if err != nil {
-			return nil, sql.OutOfRange, err
+			return nil, sql.InRange, err
 		}
 		val = val[EWKBHeaderSize:]
 
@@ -435,21 +453,27 @@ func (t GeometryType) Convert(v interface{}) (interface{}, sql.ConvertInRange, e
 		case WKBGeomCollID:
 			geom, _, err = DeserializeGeomColl(val, isBig, srid)
 		default:
-			return nil, sql.OutOfRange, sql.ErrInvalidGISData.New("GeometryType.Convert")
+			return nil, sql.InRange, sql.ErrInvalidGISData.New("GeometryType.Convert")
 		}
 		if err != nil {
-			return nil, sql.OutOfRange, err
+			return nil, sql.InRange, err
 		}
 		return geom, sql.InRange, nil
 	case string:
-		return t.Convert([]byte(val))
+		return t.Convert(ctx, []byte(val))
 	case GeometryValue:
 		if err := t.MatchSRID(val); err != nil {
-			return nil, sql.OutOfRange, err
+			return nil, sql.InRange, err
 		}
 		return val, sql.InRange, nil
+	case sql.AnyWrapper:
+		unwrapped, err := val.UnwrapAny(ctx)
+		if err != nil {
+			return nil, sql.InRange, err
+		}
+		return t.Convert(ctx, unwrapped)
 	default:
-		return nil, sql.OutOfRange, sql.ErrSpatialTypeConversion.New()
+		return nil, sql.InRange, sql.ErrSpatialTypeConversion.New()
 	}
 }
 
@@ -475,7 +499,7 @@ func (t GeometryType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltype
 		return sqltypes.NULL, nil
 	}
 
-	v, _, err := t.Convert(v)
+	v, _, err := t.Convert(ctx, v)
 	if err != nil {
 		return sqltypes.Value{}, nil
 	}

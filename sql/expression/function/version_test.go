@@ -1,4 +1,4 @@
-// Copyright 2020-2021 Dolthub, Inc.
+// Copyright 2020-2024 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,16 +28,16 @@ func TestNewVersion(t *testing.T) {
 	require := require.New(t)
 
 	ctx := sql.NewEmptyContext()
-	f, _ := NewVersion(versionPostfix)()
+	f, _ := NewVersion(versionPostfix)(ctx)
 
 	val, err := f.Eval(ctx, nil)
 	require.NoError(err)
-	require.Equal("8.0.11-"+versionPostfix, val)
+	require.Equal("8.0.31-"+versionPostfix, val)
 
-	f, err = NewVersion("")()
+	f, err = NewVersion("")(ctx)
 	require.NoError(err)
 
 	val, err = f.Eval(ctx, nil)
 	require.NoError(err)
-	require.Equal("8.0.11", val)
+	require.Equal("8.0.31", val)
 }

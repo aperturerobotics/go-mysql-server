@@ -69,8 +69,8 @@ func (b *Builder) buildAnalyze(inScope *scope, n *ast.Analyze, query string) (ou
 
 	switch n.Action {
 	case ast.UpdateStr:
-		sch := tableScope.node.Schema()
-		return b.buildAnalyzeUpdate(inScope, n, strings.ToLower(n.Tables[0].DbQualifier.String()), strings.ToLower(n.Tables[0].Name.String()), sch, columns, types)
+		sch := tableScope.node.Schema(b.ctx)
+		return b.buildAnalyzeUpdate(inScope, n, strings.ToLower(n.Tables[0].DbQualifier.String()), strings.ToLower(n.Tables[0].SchemaQualifier.String()), strings.ToLower(n.Tables[0].Name.String()), sch, columns, types)
 	case ast.DropStr:
 		outScope = inScope.push()
 		dbName := n.Tables[0].DbQualifier.String()
@@ -81,7 +81,7 @@ func (b *Builder) buildAnalyze(inScope *scope, n *ast.Analyze, query string) (ou
 			b.handleErr(sql.ErrNoDatabaseSelected.New())
 		}
 
-		outScope.node = plan.NewDropHistogram(strings.ToLower(dbName), strings.ToLower(n.Tables[0].Name.String()), columns).WithProvider(b.cat)
+		outScope.node = plan.NewDropHistogram(strings.ToLower(dbName), strings.ToLower(n.Tables[0].SchemaQualifier.String()), strings.ToLower(n.Tables[0].Name.String()), columns).WithProvider(b.cat)
 	default:
 		err := fmt.Errorf("invalid ANALYZE action: %s, expected UPDATE or DROP", n.Action)
 		b.handleErr(err)
@@ -117,7 +117,7 @@ func (b *Builder) buildAnalyzeTables(inScope *scope, n *ast.Analyze, query strin
 	return
 }
 
-func (b *Builder) buildAnalyzeUpdate(inScope *scope, n *ast.Analyze, dbName, tableName string, sch sql.Schema, columns []string, types []sql.Type) (outScope *scope) {
+func (b *Builder) buildAnalyzeUpdate(inScope *scope, n *ast.Analyze, dbName, schemaName, tableName string, sch sql.Schema, columns []string, types []sql.Type) (outScope *scope) {
 	if dbName == "" {
 		dbName = b.ctx.GetCurrentDatabase()
 	}
@@ -129,8 +129,8 @@ func (b *Builder) buildAnalyzeUpdate(inScope *scope, n *ast.Analyze, dbName, tab
 	statisticJ := new(stats.StatisticJSON)
 	using := b.buildScalar(inScope, n.Using)
 	if l, ok := using.(*expression.Literal); ok {
-		if typ, ok := l.Type().(sql.StringType); ok {
-			val, _, err := typ.Convert(l.Value())
+		if typ, ok := l.Type(b.ctx).(sql.StringType); ok {
+			val, _, err := typ.Convert(b.ctx, l.Value())
 			if err != nil {
 				b.handleErr(err)
 			}
@@ -155,7 +155,7 @@ func (b *Builder) buildAnalyzeUpdate(inScope *scope, n *ast.Analyze, dbName, tab
 
 	statistic := statisticJ.ToStatistic()
 
-	statistic.SetQualifier(sql.NewStatQualifier(strings.ToLower(dbName), tableName, strings.ToLower(indexName)))
+	statistic.SetQualifier(sql.NewStatQualifier(strings.ToLower(dbName), strings.ToLower(schemaName), tableName, strings.ToLower(indexName)))
 	statistic.SetColumns(columns)
 	statistic.SetTypes(types)
 

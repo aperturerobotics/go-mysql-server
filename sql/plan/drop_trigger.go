@@ -25,8 +25,8 @@ import (
 
 type DropTrigger struct {
 	Db          sql.Database
-	IfExists    bool
 	TriggerName string
+	IfExists    bool
 }
 
 var _ sql.Databaser = (*DropTrigger)(nil)
@@ -62,7 +62,7 @@ func (d *DropTrigger) String() string {
 }
 
 // Schema implements the sql.Node interface.
-func (d *DropTrigger) Schema() sql.Schema {
+func (d *DropTrigger) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -72,17 +72,8 @@ func (d *DropTrigger) Children() []sql.Node {
 }
 
 // WithChildren implements the sql.Node interface.
-func (d *DropTrigger) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (d *DropTrigger) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(d, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (d *DropTrigger) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: d.Db.Name(),
-		Table:    d.TriggerName,
-	}
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Trigger))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

@@ -36,7 +36,7 @@ func resolveSubqueries(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Sc
 }
 
 func addLeftTablesToScope(outerScope *plan.Scope, leftNode sql.Node) *plan.Scope {
-	resTbls := getTablesByName(leftNode)
+	resTbls := getNamedChildren(leftNode)
 	subScope := outerScope
 	for _, tbl := range resTbls {
 		subScope = subScope.NewScopeInJoin(tbl)
@@ -47,9 +47,9 @@ func addLeftTablesToScope(outerScope *plan.Scope, leftNode sql.Node) *plan.Scope
 
 // finalizeSubqueryLateral ensures that all SubqueryAliases with IsLateral set to true have their children also set to true.
 func finalizeSubqueryLateral(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
-	return transform.NodeWithOpaque(n, func(n sql.Node) (sql.Node, transform.TreeIdentity, error) {
+	return transform.NodeWithOpaque(ctx, n, func(ctx *sql.Context, n sql.Node) (sql.Node, transform.TreeIdentity, error) {
 		if parentSQA, ok := n.(*plan.SubqueryAlias); ok && parentSQA.IsLateral {
-			newSqaChild, sqaSame, sqaErr := transform.NodeWithOpaque(parentSQA.Child, func(n sql.Node) (sql.Node, transform.TreeIdentity, error) {
+			newSqaChild, sqaSame, sqaErr := transform.NodeWithOpaque(ctx, parentSQA.Child, func(ctx *sql.Context, n sql.Node) (sql.Node, transform.TreeIdentity, error) {
 				if sqa, ok := n.(*plan.SubqueryAlias); ok {
 					sqa.IsLateral = true
 					return sqa, transform.NewTree, nil
@@ -62,7 +62,7 @@ func finalizeSubqueryLateral(ctx *sql.Context, a *Analyzer, n sql.Node, scope *p
 			if sqaSame {
 				return n, transform.SameTree, nil
 			}
-			newSqa, err := parentSQA.WithChildren(newSqaChild)
+			newSqa, err := parentSQA.WithChildren(ctx, newSqaChild)
 			if err != nil {
 				return n, transform.SameTree, err
 			}
@@ -101,52 +101,94 @@ func finalizeSubqueries(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.S
 	return newNode, same1 && same2, nil
 }
 
+// transformTrackingJoinParents walks a node tree, keeping a list of every join node parent.
+func transformTrackingJoinParents(ctx *sql.Context, node sql.Node, joinParents *[]*plan.JoinNode, transformFunc func(n sql.Node) (sql.Node, transform.TreeIdentity, error)) (sql.Node, transform.TreeIdentity, error) {
+	joinParent, ok := node.(*plan.JoinNode)
+	if ok {
+		*joinParents = append(*joinParents, joinParent)
+		defer func() {
+			*joinParents = (*joinParents)[:len(*joinParents)-1]
+		}()
+	}
+
+	_, ok = node.(sql.OpaqueNode)
+	if ok {
+		return transformFunc(node)
+	}
+
+	children := node.Children()
+	if len(children) == 0 {
+		return transformFunc(node)
+	}
+
+	var (
+		newChildren []sql.Node
+		err         error
+	)
+	for i := range children {
+		child := children[i]
+		child, same, err := transformTrackingJoinParents(ctx, child, joinParents, transformFunc)
+		if err != nil {
+			return nil, transform.SameTree, err
+		}
+		if !same {
+			if newChildren == nil {
+				newChildren = make([]sql.Node, len(children))
+				copy(newChildren, children)
+			}
+			newChildren[i] = child
+		}
+
+	}
+
+	sameC := transform.SameTree
+	if len(newChildren) > 0 {
+		sameC = transform.NewTree
+		node, err = node.WithChildren(ctx, newChildren...)
+		if err != nil {
+			return nil, transform.SameTree, err
+		}
+	}
+
+	node, sameN, err := transformFunc(node)
+	if err != nil {
+		return nil, transform.SameTree, err
+	}
+	return node, sameC && sameN, nil
+}
+
 // finalizeSubqueriesHelper finalizes all subqueries and subquery expressions,
 // fixing parent scopes before recursing into child nodes.
 func finalizeSubqueriesHelper(ctx *sql.Context, a *Analyzer, node sql.Node, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
-	var joinParent *plan.JoinNode
-	var selFunc transform.SelectorFunc = func(c transform.Context) bool {
-		if jp, ok := c.Node.(*plan.JoinNode); ok {
-			joinParent = jp
-		}
-		return true
-	}
+	var joinParents []*plan.JoinNode
 
-	var conFunc transform.CtxFunc = func(c transform.Context) (sql.Node, transform.TreeIdentity, error) {
-		n := c.Node
+	transformFunc := func(n sql.Node) (sql.Node, transform.TreeIdentity, error) {
 		if sqa, ok := n.(*plan.SubqueryAlias); ok {
 			var newSqa sql.Node
 			var same2 transform.TreeIdentity
 			var err error
-			// NOTE: this only really fixes one level of subquery with two joins.
-			// This patch will likely not fix cases with more deeply nested joins and subqueries.
-			// A real fix would be to re-examine indexes after everything.
-			if sqa.OuterScopeVisibility && joinParent != nil {
-				if stripChild, ok := joinParent.Right().(*plan.StripRowNode); ok && stripChild.Child == sqa {
-					subScope := scope.NewScopeInJoin(joinParent.Children()[0])
-					subScope.SetLateralJoin(joinParent.Op.IsLateral())
-					newSqa, same2, err = analyzeSubqueryAlias(ctx, a, sqa, subScope, sel, true, qFlags)
+			var subScope *plan.Scope = scope
+			for _, joinParent := range joinParents {
+				if sqa.OuterScopeVisibility && joinParent != nil {
+					if joinParent.Right() == sqa {
+						subScope = scope.NewScopeInJoin(joinParent.Children()[0])
+						subScope.SetLateralJoin(joinParent.Op.IsLateral())
+					} else {
+						// IsLateral means that the subquery should have visibility into the left scope.
+						if sqa.IsLateral {
+							subScope = addLeftTablesToScope(subScope, joinParent.Left())
+							subScope.SetLateralJoin(true)
+						}
+					}
 				} else {
 					// IsLateral means that the subquery should have visibility into the left scope.
-					if sqa.IsLateral {
-						subScope := addLeftTablesToScope(scope, joinParent.Left())
+					if joinParent != nil && sqa.IsLateral {
+						subScope = addLeftTablesToScope(subScope, joinParent.Left())
 						subScope.SetLateralJoin(true)
-						newSqa, same2, err = analyzeSubqueryAlias(ctx, a, sqa, subScope, sel, true, qFlags)
-					} else {
-						newSqa, same2, err = analyzeSubqueryAlias(ctx, a, sqa, scope, sel, true, qFlags)
 					}
 				}
-			} else {
-				// IsLateral means that the subquery should have visibility into the left scope.
-				if joinParent != nil && sqa.IsLateral {
-					subScope := addLeftTablesToScope(scope, joinParent.Left())
-					subScope.SetLateralJoin(true)
-					newSqa, same2, err = analyzeSubqueryAlias(ctx, a, sqa, subScope, sel, true, qFlags)
-				} else {
-					newSqa, same2, err = analyzeSubqueryAlias(ctx, a, sqa, scope, sel, true, qFlags)
-				}
 			}
-
+			newSqa, same2, err = analyzeSubqueryAlias(ctx, a, sqa, subScope, sel, true, qFlags)
 			if err != nil {
 				return n, transform.SameTree, err
 			}
@@ -159,11 +201,11 @@ func finalizeSubqueriesHelper(ctx *sql.Context, a *Analyzer, node sql.Node, scop
 			if same1 && same2 {
 				return n, transform.SameTree, nil
 			} else {
-				newNode, err = newSqa.WithChildren(newNode)
+				newNode, err = newSqa.WithChildren(ctx, newNode)
 				return newNode, transform.NewTree, err
 			}
 		}
-		return transform.OneNodeExprsWithNode(n, func(node sql.Node, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+		return transform.OneNodeExprsWithNode(ctx, n, func(ctx *sql.Context, node sql.Node, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 			if sq, ok := e.(*plan.Subquery); ok {
 				newSq, same2, err := analyzeSubqueryExpression(ctx, a, node, sq, scope, sel, true, qFlags)
 				if err != nil {
@@ -193,11 +235,11 @@ func finalizeSubqueriesHelper(ctx *sql.Context, a *Analyzer, node sql.Node, scop
 		})
 	}
 
-	return transform.NodeWithCtx(node, selFunc, conFunc)
+	return transformTrackingJoinParents(ctx, node, &joinParents, transformFunc)
 }
 
 func resolveSubqueriesHelper(ctx *sql.Context, a *Analyzer, node sql.Node, scope *plan.Scope, sel RuleSelector, finalize bool, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
-	return transform.NodeWithCtx(node, nil, func(c transform.Context) (sql.Node, transform.TreeIdentity, error) {
+	return transform.NodeWithCtx(ctx, node, nil, func(ctx *sql.Context, c transform.Context) (sql.Node, transform.TreeIdentity, error) {
 		n := c.Node
 		if sqa, ok := n.(*plan.SubqueryAlias); ok {
 			// IsLateral means that the subquery should have visibility into the left scope.
@@ -207,37 +249,13 @@ func resolveSubqueriesHelper(ctx *sql.Context, a *Analyzer, node sql.Node, scope
 			}
 			return analyzeSubqueryAlias(ctx, a, sqa, scope, sel, finalize, qFlags)
 		} else {
-			return transform.OneNodeExprsWithNode(n, func(node sql.Node, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+			return transform.OneNodeExprsWithNode(ctx, n, func(ctx *sql.Context, node sql.Node, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 				if sq, ok := e.(*plan.Subquery); ok {
 					return analyzeSubqueryExpression(ctx, a, n, sq, scope, sel, finalize, qFlags)
 				} else {
 					return e, transform.SameTree, nil
 				}
 			})
-		}
-	})
-}
-
-// flattenTableAliases transforms TableAlias nodes that contain a SubqueryAlias or TableAlias node as the immediate
-// child so that the top level TableAlias is removed and the nested SubqueryAlias or nested TableAlias is the new top
-// level node, making sure to capture the alias name and transfer it to the new node. The parser doesn't directly
-// create this nested structure; it occurs as the execution plan is built and altered during analysis, for
-// example with CTEs that get plugged into the execution plan as the analyzer processes it.
-func flattenTableAliases(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
-	span, ctx := ctx.Span("flatten_table_aliases")
-	defer span.End()
-	return transform.Node(n, func(n sql.Node) (sql.Node, transform.TreeIdentity, error) {
-		switch n := n.(type) {
-		case *plan.TableAlias:
-			if sa, isSA := n.Children()[0].(*plan.SubqueryAlias); isSA {
-				return sa.WithName(n.Name()), transform.NewTree, nil
-			}
-			if ta, isTA := n.Children()[0].(*plan.TableAlias); isTA {
-				return ta.WithName(n.Name()), transform.NewTree, nil
-			}
-			return n, transform.SameTree, nil
-		default:
-			return n, transform.SameTree, nil
 		}
 	})
 }
@@ -276,7 +294,7 @@ func analyzeSubqueryExpression(ctx *sql.Context, a *Analyzer, n sql.Node, sq *pl
 	// to the expense of positive errors, where a rule reports a change when the plan
 	// is the same before/after.
 	// .Resolved() might be useful for fixing these bugs.
-	return sq.WithQuery(StripPassthroughNodes(analyzed)).WithExecBuilder(a.ExecBuilder), transform.NewTree, nil
+	return sq.WithQuery(analyzed).WithExecBuilder(a.ExecBuilder), transform.NewTree, nil
 }
 
 // analyzeSubqueryAlias runs analysis on the specified subquery alias, |sqa|. The |finalize| parameter indicates if this is
@@ -298,7 +316,7 @@ func analyzeSubqueryAlias(ctx *sql.Context, a *Analyzer, sqa *plan.SubqueryAlias
 	}
 
 	if len(sqa.ColumnNames) > 0 {
-		schemaLen := schemaLength(child)
+		schemaLen := schemaLength(ctx, child)
 		if schemaLen != len(sqa.ColumnNames) {
 			return nil, transform.SameTree, sql.ErrColumnCountMismatch.New()
 		}
@@ -306,37 +324,17 @@ func analyzeSubqueryAlias(ctx *sql.Context, a *Analyzer, sqa *plan.SubqueryAlias
 	if same {
 		return sqa, transform.SameTree, nil
 	}
-	newn, err := sqa.WithChildren(StripPassthroughNodes(child))
+	newn, err := sqa.WithChildren(ctx, child)
 	return newn, transform.NewTree, err
 }
 
-// StripPassthroughNodes strips all top-level passthrough nodes meant to apply only to top-level queries (query
-// tracking, transaction logic, etc) from the node tree given and return the first non-passthrough child element. This
-// is useful for when we invoke the analyzer recursively when e.g. analyzing subqueries or triggers
-// TODO: instead of stripping this node off after analysis, it would be better to just not add it in the first place.
-func StripPassthroughNodes(n sql.Node) sql.Node {
-	nodeIsPassthrough := true
-	for nodeIsPassthrough {
-		switch tn := n.(type) {
-		case *plan.QueryProcess:
-			n = tn.Child()
-		case *plan.TransactionCommittingNode:
-			n = tn.Child()
-		default:
-			nodeIsPassthrough = false
-		}
-	}
-
-	return n
-}
-
-// cacheSubqueryAlisesInJoins will look for joins against subquery aliases that
+// cacheSubqueryAliasesInJoins will look for joins against subquery aliases that
 // will repeatedly execute the subquery, and will insert a *plan.CachedResults
 // node on top of those nodes. The left-most child of a join root is an exception
 // that cannot be cached.
 func cacheSubqueryAliasesInJoins(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
-	var recurse func(n sql.Node, parentCached, inJoin, rootJoinT1 bool) (sql.Node, transform.TreeIdentity, error)
-	recurse = func(n sql.Node, parentCached, inJoin, foundFirstRel bool) (sql.Node, transform.TreeIdentity, error) {
+	var recurse func(n sql.Node, parentCached, inJoin, leftChild bool) (sql.Node, transform.TreeIdentity, error)
+	recurse = func(n sql.Node, parentCached, inJoin, leftChild bool) (sql.Node, transform.TreeIdentity, error) {
 		_, isOp := n.(sql.OpaqueNode)
 		var isCacheableSq bool
 		var isCachedRs bool
@@ -345,10 +343,10 @@ func cacheSubqueryAliasesInJoins(ctx *sql.Context, a *Analyzer, n sql.Node, scop
 		case *plan.JoinNode:
 			if !inJoin {
 				inJoin = true
-				foundFirstRel = false
+				leftChild = true
 			}
 		case *plan.SubqueryAlias:
-			isCacheableSq = n.CanCacheResults()
+			isCacheableSq = n.CanCacheResults() && !leftChild
 		case *plan.CachedResults:
 			isCachedRs = true
 		case *plan.Max1Row:
@@ -360,19 +358,10 @@ func cacheSubqueryAliasesInJoins(ctx *sql.Context, a *Analyzer, n sql.Node, scop
 		doCache := isCacheableSq && inJoin && !parentCached
 		childInJoin := inJoin && !isOp
 
-		if inJoin && !foundFirstRel {
-			switch n.(type) {
-			case sql.Nameable:
-				doCache = false
-				foundFirstRel = true
-			default:
-			}
-		}
-
 		children := n.Children()
 		var newChildren []sql.Node
 		for i, c := range children {
-			child, same, _ := recurse(c, doCache || isCachedRs || isMax1Row, childInJoin, foundFirstRel)
+			child, same, _ := recurse(c, doCache || isCachedRs || isMax1Row, childInJoin, leftChild)
 			if !same {
 				if newChildren == nil {
 					newChildren = make([]sql.Node, len(children))
@@ -380,6 +369,7 @@ func cacheSubqueryAliasesInJoins(ctx *sql.Context, a *Analyzer, n sql.Node, scop
 				}
 				newChildren[i] = child
 			}
+			leftChild = false
 		}
 
 		if len(newChildren) == 0 && !doCache {
@@ -388,10 +378,10 @@ func cacheSubqueryAliasesInJoins(ctx *sql.Context, a *Analyzer, n sql.Node, scop
 
 		ret := n
 		if len(newChildren) > 0 {
-			ret, _ = ret.WithChildren(newChildren...)
+			ret, _ = ret.WithChildren(ctx, newChildren...)
 		}
 		if doCache {
-			ret = plan.NewCachedResults(n)
+			ret = plan.NewCachedResults(n, a.CachedResultsManager)
 		}
 		return ret, transform.NewTree, nil
 	}

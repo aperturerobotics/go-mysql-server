@@ -44,7 +44,7 @@ type JSONKeys struct {
 var _ sql.FunctionExpression = &JSONKeys{}
 
 // NewJSONKeys creates a new JSONKeys function.
-func NewJSONKeys(args ...sql.Expression) (sql.Expression, error) {
+func NewJSONKeys(ctx *sql.Context, args ...sql.Expression) (sql.Expression, error) {
 	if len(args) == 1 {
 		return &JSONKeys{args[0], expression.NewLiteral("$", types.Text)}, nil
 	}
@@ -75,13 +75,13 @@ func (j *JSONKeys) String() string {
 }
 
 // Type implements sql.Expression
-func (j *JSONKeys) Type() sql.Type {
+func (j *JSONKeys) Type(ctx *sql.Context) sql.Type {
 	return types.JSON
 }
 
 // IsNullable implements sql.Expression
-func (j *JSONKeys) IsNullable() bool {
-	return j.JSON.IsNullable()
+func (j *JSONKeys) IsNullable(ctx *sql.Context) bool {
+	return j.JSON.IsNullable(ctx)
 }
 
 // Eval implements sql.Expression
@@ -105,7 +105,7 @@ func (j *JSONKeys) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	js, err := types.LookupJSONValue(doc, *path)
+	js, err := types.LookupJSONValue(ctx, doc, *path)
 	if err != nil {
 		if errors.Is(err, jsonpath.ErrKeyError) {
 			return nil, nil
@@ -117,7 +117,7 @@ func (j *JSONKeys) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	val, err := js.ToInterface()
+	val, err := js.ToInterface(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +134,7 @@ func (j *JSONKeys) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 			}
 			return res[i] < res[j]
 		})
-		result, _, err := types.JSON.Convert(res)
+		result, _, err := types.JSON.Convert(ctx, res)
 		if err != nil {
 			return nil, err
 		}
@@ -150,6 +150,6 @@ func (j *JSONKeys) Children() []sql.Expression {
 }
 
 // WithChildren implements sql.Expression
-func (j *JSONKeys) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return NewJSONKeys(children...)
+func (j *JSONKeys) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return NewJSONKeys(ctx, children...)
 }

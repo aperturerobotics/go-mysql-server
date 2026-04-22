@@ -34,11 +34,11 @@ const (
 	rPadType padType = 'r'
 )
 
-func NewLeftPad(e ...sql.Expression) (sql.Expression, error) {
+func NewLeftPad(ctx *sql.Context, e ...sql.Expression) (sql.Expression, error) {
 	return NewPad(lPadType, e...)
 }
 
-func NewRightPad(e ...sql.Expression) (sql.Expression, error) {
+func NewRightPad(ctx *sql.Context, e ...sql.Expression) (sql.Expression, error) {
 	return NewPad(rPadType, e...)
 }
 
@@ -96,12 +96,12 @@ func (p *Pad) Resolved() bool {
 }
 
 // IsNullable implements the Expression interface.
-func (p *Pad) IsNullable() bool {
-	return p.str.IsNullable() || p.length.IsNullable() || p.padStr.IsNullable()
+func (p *Pad) IsNullable(ctx *sql.Context) bool {
+	return p.str.IsNullable(ctx) || p.length.IsNullable(ctx) || p.padStr.IsNullable(ctx)
 }
 
 // Type implements the Expression interface.
-func (p *Pad) Type() sql.Type { return types.LongText }
+func (p *Pad) Type(ctx *sql.Context) sql.Type { return types.LongText }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (p *Pad) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
@@ -118,7 +118,7 @@ func (p *Pad) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (p *Pad) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (p *Pad) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	return NewPad(p.padType, children...)
 }
 
@@ -136,7 +136,7 @@ func (p *Pad) Eval(
 		return nil, nil
 	}
 
-	str, _, err = types.LongText.Convert(str)
+	str, _, err = types.LongText.Convert(ctx, str)
 	if err != nil {
 		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str))
 	}
@@ -150,7 +150,7 @@ func (p *Pad) Eval(
 		return nil, nil
 	}
 
-	length, _, err = types.Int64.Convert(length)
+	length, _, err = types.Int64.Convert(ctx, length)
 	if err != nil {
 		return nil, err
 	}
@@ -164,12 +164,24 @@ func (p *Pad) Eval(
 		return nil, nil
 	}
 
-	padStr, _, err = types.LongText.Convert(padStr)
+	padStr, _, err = types.LongText.Convert(ctx, padStr)
 	if err != nil {
 		return nil, err
 	}
 
-	return padString(str.(string), length.(int64), padStr.(string), p.padType)
+	{
+		str, _, err := sql.Unwrap[string](ctx, str)
+		if err != nil {
+			return nil, err
+		}
+
+		padStr, _, err := sql.Unwrap[string](ctx, padStr)
+		if err != nil {
+			return nil, err
+		}
+
+		return padString(str, length.(int64), padStr, p.padType)
+	}
 }
 
 func padString(str string, length int64, padStr string, padType padType) (string, error) {

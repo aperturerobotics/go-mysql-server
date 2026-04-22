@@ -65,19 +65,8 @@ func (p *CreateForeignKey) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (p *CreateForeignKey) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (p *CreateForeignKey) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(p, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (p *CreateForeignKey) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: p.FkDef.ParentDatabase,
-		Table:    p.FkDef.ParentTable,
-	}
-
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewPrivilegedOperation(subject, sql.PrivilegeType_References))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -86,7 +75,7 @@ func (*CreateForeignKey) CollationCoercibility(ctx *sql.Context) (collation sql.
 }
 
 // Schema implements the interface sql.Node.
-func (p *CreateForeignKey) Schema() sql.Schema {
+func (p *CreateForeignKey) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -116,6 +105,9 @@ func (p *CreateForeignKey) String() string {
 	return pr.String()
 }
 
+// ValidateForeignKeyDefinition checks that the foreign key definition is valid for creation
+var ValidateForeignKeyDefinition = validateForeignKeyDefinition
+
 // ResolveForeignKey verifies the foreign key definition and resolves the foreign key, creating indexes and validating
 // data as necessary.
 // fkChecks - whether to check the foreign key against the data in the table
@@ -137,7 +129,7 @@ func ResolveForeignKey(ctx *sql.Context, tbl sql.ForeignKeyTable, refTbl sql.For
 	// Make sure that all columns are valid, in the table, and there are no duplicates
 	cols := make(map[string]*sql.Column)
 	seenCols := make(map[string]struct{})
-	for _, col := range tbl.Schema() {
+	for _, col := range tbl.Schema(ctx) {
 		lowerColName := strings.ToLower(col.Name)
 		cols[lowerColName] = col
 	}
@@ -151,9 +143,13 @@ func ResolveForeignKey(ctx *sql.Context, tbl sql.ForeignKeyTable, refTbl sql.For
 		if ok {
 			return sql.ErrAddForeignKeyDuplicateColumn.New(fkCol)
 		}
-		// Non-nullable columns may not have SET NULL as a reference option
-		if !col.Nullable && (fkDef.OnUpdate == sql.ForeignKeyReferentialAction_SetNull || fkDef.OnDelete == sql.ForeignKeyReferentialAction_SetNull) {
-			return sql.ErrForeignKeySetNullNonNullable.New(col.Name)
+
+		// This is checked for Dolt only. Doltgres must have schema name defined.
+		if fkDef.SchemaName == "" {
+			// Non-nullable columns may not have SET NULL as a reference option
+			if !col.Nullable && (fkDef.OnUpdate == sql.ForeignKeyReferentialAction_SetNull || fkDef.OnDelete == sql.ForeignKeyReferentialAction_SetNull) {
+				return sql.ErrForeignKeySetNullNonNullable.New(col.Name)
+			}
 		}
 		seenCols[lowerFkCol] = struct{}{}
 		fkDef.Columns[i] = col.Name
@@ -163,7 +159,7 @@ func ResolveForeignKey(ctx *sql.Context, tbl sql.ForeignKeyTable, refTbl sql.For
 	if fkChecks {
 		parentCols := make(map[string]*sql.Column)
 		seenCols = make(map[string]struct{})
-		for _, col := range refTbl.Schema() {
+		for _, col := range refTbl.Schema(ctx) {
 			lowerColName := strings.ToLower(col.Name)
 			parentCols[lowerColName] = col
 		}
@@ -182,16 +178,9 @@ func ResolveForeignKey(ctx *sql.Context, tbl sql.ForeignKeyTable, refTbl sql.For
 		}
 
 		// Check that the types align and are valid
-		for i := range fkDef.Columns {
-			col := cols[strings.ToLower(fkDef.Columns[i])]
-			parentCol := parentCols[strings.ToLower(fkDef.ParentColumns[i])]
-			if !foreignKeyComparableTypes(ctx, col.Type, parentCol.Type) {
-				return sql.ErrForeignKeyColumnTypeMismatch.New(fkDef.Columns[i], fkDef.ParentColumns[i])
-			}
-			sqlParserType := col.Type.Type()
-			if sqlParserType == sqltypes.Text || sqlParserType == sqltypes.Blob {
-				return sql.ErrForeignKeyTextBlob.New()
-			}
+		err := ValidateForeignKeyDefinition(ctx, fkDef, cols, parentCols)
+		if err != nil {
+			return err
 		}
 
 		// Ensure that a suitable index exists on the referenced table, and check the declaring table for a suitable index.
@@ -210,19 +199,26 @@ func ResolveForeignKey(ctx *sql.Context, tbl sql.ForeignKeyTable, refTbl sql.For
 		var selfCols map[string]int
 		if fkDef.IsSelfReferential() {
 			selfCols = make(map[string]int)
-			for i, col := range tbl.Schema() {
+			for i, col := range tbl.Schema(ctx) {
 				selfCols[strings.ToLower(col.Name)] = i
 			}
 		}
+
+		typeConversions, err := GetForeignKeyTypeConversions(refTbl.Schema(ctx), tbl.Schema(ctx), fkDef, ChildToParent)
+		if err != nil {
+			return err
+		}
+
 		reference := &ForeignKeyReferenceHandler{
 			ForeignKey: fkDef,
 			SelfCols:   selfCols,
 			RowMapper: ForeignKeyRowMapper{
-				Index:          refTblIndex,
-				Updater:        refTbl.GetForeignKeyEditor(ctx),
-				SourceSch:      tbl.Schema(),
-				IndexPositions: indexPositions,
-				AppendTypes:    appendTypes,
+				Index:                 refTblIndex,
+				Updater:               refTbl.GetForeignKeyEditor(ctx),
+				SourceSch:             tbl.Schema(ctx),
+				TargetTypeConversions: typeConversions,
+				IndexPositions:        indexPositions,
+				AppendTypes:           appendTypes,
 			},
 		}
 
@@ -335,6 +331,22 @@ func ResolveForeignKey(ctx *sql.Context, tbl sql.ForeignKeyTable, refTbl sql.For
 	}
 }
 
+// validateForeignKeyDefinition checks that the foreign key definition is valid for creation
+func validateForeignKeyDefinition(ctx *sql.Context, fkDef sql.ForeignKeyConstraint, cols map[string]*sql.Column, parentCols map[string]*sql.Column) error {
+	for i := range fkDef.Columns {
+		col := cols[strings.ToLower(fkDef.Columns[i])]
+		parentCol := parentCols[strings.ToLower(fkDef.ParentColumns[i])]
+		if !foreignKeyComparableTypes(ctx, col.Type, parentCol.Type) {
+			return sql.ErrForeignKeyColumnTypeMismatch.New(fkDef.Columns[i], fkDef.ParentColumns[i])
+		}
+		sqlParserType := col.Type.Type()
+		if sqlParserType == sqltypes.Text || sqlParserType == sqltypes.Blob {
+			return sql.ErrForeignKeyTextBlob.New()
+		}
+	}
+	return nil
+}
+
 type DropForeignKey struct {
 	// In the cases where we have multiple ALTER statements, we need to resolve the table at execution time rather than
 	// during analysis. Otherwise, you could add a foreign key in the preceding alter and we may have analyzed to a
@@ -364,18 +376,8 @@ func (p *DropForeignKey) Database() string {
 }
 
 // WithChildren implements the interface sql.Node.
-func (p *DropForeignKey) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (p *DropForeignKey) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(p, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (p *DropForeignKey) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: p.database,
-		Table:    p.Table,
-	}
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Alter))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -384,7 +386,7 @@ func (*DropForeignKey) CollationCoercibility(ctx *sql.Context) (collation sql.Co
 }
 
 // Schema implements the interface sql.Node.
-func (p *DropForeignKey) Schema() sql.Schema {
+func (p *DropForeignKey) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -446,17 +448,8 @@ func (p *RenameForeignKey) Database() string {
 }
 
 // WithChildren implements the interface sql.Node.
-func (p *RenameForeignKey) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (p *RenameForeignKey) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(p, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (p *RenameForeignKey) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: p.database,
-		Table:    p.Table,
-	}
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Alter))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -465,7 +458,7 @@ func (p *RenameForeignKey) CollationCoercibility(ctx *sql.Context) (collation sq
 }
 
 // Schema implements the interface sql.Node.
-func (p *RenameForeignKey) Schema() sql.Schema {
+func (p *RenameForeignKey) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -521,7 +514,7 @@ func FindForeignKeyColMapping(
 
 	localSchTypeMap := make(map[string]sql.Type)
 	localSchPositionMap := make(map[string]int)
-	for i, col := range localTbl.Schema() {
+	for i, col := range localTbl.Schema(ctx) {
 		colName := strings.ToLower(col.Name)
 		localSchTypeMap[colName] = col.Type
 		localSchPositionMap[colName] = i
@@ -531,9 +524,9 @@ func FindForeignKeyColMapping(
 	indexColMap := make(map[string]int)
 	var columnExpressionTypes []sql.ColumnExpressionType
 	if extendedIndex, ok := index.(sql.ExtendedIndex); ok {
-		columnExpressionTypes = extendedIndex.ExtendedColumnExpressionTypes()
+		columnExpressionTypes = extendedIndex.ExtendedColumnExpressionTypes(ctx)
 	} else {
-		columnExpressionTypes = index.ColumnExpressionTypes()
+		columnExpressionTypes = index.ColumnExpressionTypes(ctx)
 	}
 	for i, indexCol := range columnExpressionTypes {
 		indexColName := strings.ToLower(indexCol.Expression)
@@ -549,20 +542,16 @@ func FindForeignKeyColMapping(
 		localRowPos, ok := localSchPositionMap[colName]
 		if !ok {
 			// Will happen if a column is renamed that is referenced by a foreign key
-			//TODO: enforce that renaming a column referenced by a foreign key updates that foreign key
+			// TODO: enforce that renaming a column referenced by a foreign key updates that foreign key
 			return nil, nil, fmt.Errorf("column `%s` in foreign key `%s` cannot be found",
 				colName, fkName)
 		}
-		expectedType := localSchTypeMap[colName]
 		destFkCol := destTblName + "." + destFKCols[fkIdx]
 		indexPos, ok := indexColMap[destFkCol]
 		if !ok {
 			// Same as above, renaming a referenced column would cause this error
 			return nil, nil, fmt.Errorf("index column `%s` in foreign key `%s` cannot be found",
 				destFKCols[fkIdx], fkName)
-		}
-		if !foreignKeyComparableTypes(ctx, indexTypeMap[destFkCol], expectedType) {
-			return nil, nil, sql.ErrForeignKeyColumnTypeMismatch.New(colName, destFkCol)
 		}
 		indexPositions[indexPos] = localRowPos
 	}
@@ -622,7 +611,7 @@ func FindFKIndexWithPrefix(ctx *sql.Context, tbl sql.IndexAddressableTable, pref
 		}
 		var indexExprs []string
 		if extendedIdx, ok := idx.(sql.ExtendedIndex); ok && useExtendedIndexes {
-			indexExprs = lowercaseSlice(extendedIdx.ExtendedExpressions())
+			indexExprs = lowercaseSlice(extendedIdx.ExtendedExpressions(ctx))
 		} else {
 			indexExprs = lowercaseSlice(idx.Expressions())
 		}
@@ -659,25 +648,45 @@ func FindFKIndexWithPrefix(ctx *sql.Context, tbl sql.IndexAddressableTable, pref
 // foreignKeyComparableTypes returns whether the two given types are able to be used as parent/child columns in a
 // foreign key.
 func foreignKeyComparableTypes(ctx *sql.Context, type1 sql.Type, type2 sql.Type) bool {
-	if !type1.Equals(type2) {
-		// There seems to be a special case where CHAR/VARCHAR/BINARY/VARBINARY can have unequal lengths.
-		// Have not tested every type nor combination, but this seems specific to those 4 types.
-		if type1.Type() == type2.Type() {
-			switch type1.Type() {
-			case sqltypes.Char, sqltypes.VarChar, sqltypes.Binary, sqltypes.VarBinary:
-				type1String := type1.(sql.StringType)
-				type2String := type2.(sql.StringType)
-				if type1String.Collation().CharacterSet() != type2String.Collation().CharacterSet() {
-					return false
-				}
-			default:
-				return false
-			}
-		} else {
-			return false
+	if type1.Equals(type2) {
+		return true
+	}
+
+	t1 := type1.Type()
+	t2 := type2.Type()
+
+	// MySQL allows time-related types to reference each other in foreign keys
+	if (types.IsTime(type1) || types.IsTimespan(type1)) && (types.IsTime(type2) || types.IsTimespan(type2)) {
+		return true
+	}
+
+	// Handle same-type cases for special types
+	if t1 == t2 {
+		switch t1 {
+		case sqltypes.Enum:
+			// Enum types can reference each other in foreign keys regardless of their string values.
+			// MySQL allows enum foreign keys to match based on underlying numeric values.
+			return true
+		case sqltypes.Decimal:
+			// MySQL allows decimal foreign keys with different precision/scale
+			// The foreign key constraint validation will handle the actual value comparison
+			return true
+		case sqltypes.Set:
+			// MySQL allows set foreign keys to match based on underlying numeric values.
+			return true
 		}
 	}
-	return true
+
+	// Handle string types (both same-type with different lengths and mixed types)
+	if (types.IsTextOnly(type1) && types.IsTextOnly(type2)) ||
+		(types.IsBinaryType(type1) && types.IsBinaryType(type2)) {
+		// String types must have matching character sets
+		type1String := type1.(sql.StringType)
+		type2String := type2.(sql.StringType)
+		return type1String.Collation().CharacterSet() == type2String.Collation().CharacterSet()
+	}
+
+	return false
 }
 
 // exprsAreIndexPrefix returns whether the given expressions are a prefix of the given index expressions

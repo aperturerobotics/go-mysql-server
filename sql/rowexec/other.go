@@ -21,21 +21,8 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/plan"
-	"github.com/dolthub/go-mysql-server/sql/transform"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
-
-func (b *BaseBuilder) buildStripRowNode(ctx *sql.Context, n *plan.StripRowNode, row sql.Row) (sql.RowIter, error) {
-	childIter, err := b.buildNodeExec(ctx, n.Child, row)
-	if err != nil {
-		return nil, err
-	}
-
-	return &stripRowIter{
-		childIter,
-		n.NumCols,
-	}, nil
-}
 
 func (b *BaseBuilder) buildConcat(ctx *sql.Context, n *plan.Concat, row sql.Row) (sql.RowIter, error) {
 	span, ctx := ctx.Span("plan.Concat")
@@ -95,7 +82,7 @@ func (b *BaseBuilder) buildFetch(ctx *sql.Context, n *plan.Fetch, row sql.Row) (
 }
 
 func (b *BaseBuilder) buildSignalName(ctx *sql.Context, n *plan.SignalName, row sql.Row) (sql.RowIter, error) {
-	return nil, fmt.Errorf("%T has no exchange iterator", n)
+	return nil, fmt.Errorf("%T has no execution iterator", n)
 }
 
 func (b *BaseBuilder) buildRepeat(ctx *sql.Context, n *plan.Repeat, row sql.Row) (sql.RowIter, error) {
@@ -108,73 +95,6 @@ func (b *BaseBuilder) buildDeferredFilteredTable(ctx *sql.Context, n *plan.Defer
 
 func (b *BaseBuilder) buildNamedWindows(ctx *sql.Context, n *plan.NamedWindows, row sql.Row) (sql.RowIter, error) {
 	return nil, fmt.Errorf("%T has no execution iterator", n)
-}
-
-func (b *BaseBuilder) buildExchange(ctx *sql.Context, n *plan.Exchange, row sql.Row) (sql.RowIter, error) {
-	var t sql.Table
-	transform.Inspect(n.Child, func(n sql.Node) bool {
-		if table, ok := n.(sql.Table); ok {
-			t = table
-			return false
-		}
-		return true
-	})
-	if t == nil {
-		return nil, plan.ErrNoPartitionable.New()
-	}
-
-	partitions, err := t.Partitions(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// How this is structured is a little subtle. A top-level
-	// errgroup run |iterPartitions| and listens on the shutdown
-	// hook.  A different, dependent, errgroup runs
-	// |e.Parallelism| instances of |iterPartitionRows|. A
-	// goroutine within the top-level errgroup |Wait|s on the
-	// dependent errgroup and closes |rowsCh| once all its
-	// goroutines are completed.
-
-	partitionsCh := make(chan sql.Partition)
-	rowsCh := make(chan sql.Row, n.Parallelism*16)
-
-	eg, egCtx := ctx.NewErrgroup()
-	eg.Go(func() error {
-		defer close(partitionsCh)
-		return iterPartitions(egCtx, partitions, partitionsCh)
-	})
-
-	// Spawn |iterPartitionRows| goroutines in the dependent
-	// errgroup.
-	getRowIter := b.exchangeIterGen(n, row)
-	seg, segCtx := egCtx.NewErrgroup()
-	for i := 0; i < n.Parallelism; i++ {
-		seg.Go(func() error {
-			return iterPartitionRows(segCtx, getRowIter, partitionsCh, rowsCh)
-		})
-	}
-
-	eg.Go(func() error {
-		defer close(rowsCh)
-		err := seg.Wait()
-		if err != nil {
-			return err
-		}
-		// If everything in |seg| returned |nil|,
-		// |iterPartitions| is done, |partitionsCh| is closed,
-		// and every partition RowIter returned |EOF|. That
-		// means we're EOF here.
-		return io.EOF
-	})
-
-	waiter := func() error { return eg.Wait() }
-	shutdownHook := newShutdownHook(eg, egCtx)
-	return &exchangeRowIter{shutdownHook: shutdownHook, waiter: waiter, rows: rowsCh}, nil
-}
-
-func (b *BaseBuilder) buildExchangePartition(ctx *sql.Context, n *plan.ExchangePartition, row sql.Row) (sql.RowIter, error) {
-	return n.Table.PartitionRows(ctx, n.Partition)
 }
 
 func (b *BaseBuilder) buildEmptyTable(ctx *sql.Context, n *plan.EmptyTable, row sql.Row) (sql.RowIter, error) {
@@ -209,13 +129,14 @@ func (b *BaseBuilder) buildCachedResults(ctx *sql.Context, n *plan.CachedResults
 	if err != nil {
 		return nil, err
 	}
-	cache, dispose := ctx.Memory.NewRowsCache()
+	cache, dispose := ctx.Memory.NewRowsCache(ctx)
 	return &cachedResultsIter{n, ci, cache, dispose}, nil
 }
 
 func (b *BaseBuilder) buildBlock(ctx *sql.Context, n *plan.Block, row sql.Row) (sql.RowIter, error) {
 	var returnRows []sql.Row
 	var returnNode sql.Node
+	var returnIter sql.RowIter
 	var returnSch sql.Schema
 
 	selectSeen := false
@@ -227,6 +148,10 @@ func (b *BaseBuilder) buildBlock(ctx *sql.Context, n *plan.Block, row sql.Row) (
 		}
 
 		handleError := func(err error) error {
+			if n.Pref == nil {
+				// alter table blocks do not have a proc reference
+				return err
+			}
 			scope := n.Pref.InnermostScope
 			for i := len(scope.Handlers) - 1; i >= 0; i-- {
 				if !scope.Handlers[i].Cond.Matches(err) {
@@ -262,7 +187,7 @@ func (b *BaseBuilder) buildBlock(ctx *sql.Context, n *plan.Block, row sql.Row) (
 		}
 
 		err = func() error {
-			rowCache, disposeFunc := ctx.Memory.NewRowsCache()
+			rowCache, disposeFunc := ctx.Memory.NewRowsCache(ctx)
 			defer disposeFunc()
 
 			var isSelect bool
@@ -276,18 +201,26 @@ func (b *BaseBuilder) buildBlock(ctx *sql.Context, n *plan.Block, row sql.Row) (
 				return nil
 			}
 			subIterNode := s
-			subIterSch := s.Schema()
+			subIterSch := s.Schema(ctx)
 			if blockSubIter, ok := subIter.(plan.BlockRowIter); ok {
 				subIterNode = blockSubIter.RepresentingNode()
-				subIterSch = blockSubIter.Schema()
+				subIterSch = blockSubIter.Schema(ctx)
 			}
-			if isSelect = plan.NodeRepresentsSelect(subIterNode); isSelect {
+			if isSelect = plan.NodeRepresentsSelect(ctx, subIterNode); isSelect {
 				selectSeen = true
 				returnNode = subIterNode
+				returnIter = subIter
 				returnSch = subIterSch
 			} else if !selectSeen {
 				returnNode = subIterNode
-				returnSch = subIterSch
+				returnIter = subIter
+				switch subIterNode.(type) {
+				case *plan.Set, *plan.Into, *plan.Call:
+					// These nodes return empty schema
+					returnSch = subIterSch
+				default:
+					returnSch = types.OkResultSchema
+				}
 			}
 
 			for {
@@ -326,7 +259,8 @@ func (b *BaseBuilder) buildBlock(ctx *sql.Context, n *plan.Block, row sql.Row) (
 	return &blockIter{
 		internalIter: sql.RowsToRowIter(returnRows...),
 		repNode:      returnNode,
-		sch:          returnSch,
+		repIter:      returnIter,
+		repSch:       returnSch,
 	}, nil
 }
 
@@ -348,7 +282,7 @@ func (b *BaseBuilder) buildTableCopier(ctx *sql.Context, n *plan.TableCopier, ro
 		return nil, fmt.Errorf("TableCopier only accepts CreateTable or TableNode as the destination")
 	}
 
-	return n.CopyTableOver(ctx, n.Source.Schema()[0].Source, drt.Name())
+	return n.CopyTableOver(ctx, n.Source.Schema(ctx)[0].Source, drt.Name())
 }
 
 func (b *BaseBuilder) buildUnresolvedTable(ctx *sql.Context, n *plan.UnresolvedTable, row sql.Row) (sql.RowIter, error) {
@@ -365,21 +299,6 @@ func (b *BaseBuilder) buildPrependNode(ctx *sql.Context, n *plan.PrependNode, ro
 		row:       n.Row,
 		childIter: childIter,
 	}, nil
-}
-
-func (b *BaseBuilder) buildQueryProcess(ctx *sql.Context, n *plan.QueryProcess, row sql.Row) (sql.RowIter, error) {
-	iter, err := b.Build(ctx, n.Child(), row)
-	if err != nil {
-		return nil, err
-	}
-
-	qType := plan.GetQueryType(n.Child())
-
-	trackedIter := plan.NewTrackedRowIter(n.Child(), iter, nil, n.Notify)
-	trackedIter.QueryType = qType
-	trackedIter.ShouldSetFoundRows = qType == plan.QueryTypeSelect && n.ShouldSetFoundRows()
-
-	return trackedIter, nil
 }
 
 func (b *BaseBuilder) buildAnalyzeTable(ctx *sql.Context, n *plan.AnalyzeTable, row sql.Row) (sql.RowIter, error) {
@@ -406,6 +325,7 @@ func (b *BaseBuilder) buildDropHistogram(ctx *sql.Context, n *plan.DropHistogram
 
 	return &dropHistogramIter{
 		db:      n.Db(),
+		schema:  n.SchemaName(),
 		table:   n.Table(),
 		columns: n.Cols(),
 		prov:    n.StatsProvider(),

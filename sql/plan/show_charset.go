@@ -40,18 +40,13 @@ func (sc *ShowCharset) Resolved() bool {
 }
 
 // WithChildren implements the Node interface.
-func (sc *ShowCharset) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (sc *ShowCharset) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	expected := len(sc.Children())
 	if len(children) != expected {
 		return nil, sql.ErrInvalidChildrenNumber.New(sc, len(children), expected)
 	}
 
 	return sc, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (sc *ShowCharset) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 func (sc *ShowCharset) IsReadOnly() bool {
@@ -68,7 +63,7 @@ func (sc *ShowCharset) String() string {
 }
 
 // Note how this Schema differs in order from the information_schema.character_sets table.
-func (sc *ShowCharset) Schema() sql.Schema {
+func (sc *ShowCharset) Schema(ctx *sql.Context) sql.Schema {
 	return sql.Schema{
 		{Name: "Charset", Type: types.MustCreateStringWithDefaults(sqltypes.VarChar, 64), Default: nil, Nullable: false},
 		{Name: "Description", Type: types.MustCreateStringWithDefaults(sqltypes.VarChar, 2048), Default: nil, Nullable: false},
@@ -82,50 +77,4 @@ func (sc *ShowCharset) Children() []sql.Node {
 		return nil
 	}
 	return []sql.Node{sc.CharacterSetTable}
-}
-
-func (sc *ShowCharset) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
-	//TODO: use the information_schema table instead, currently bypassing it to show currently-implemented charsets
-	//ri, err := sc.CharacterSetTable.RowIter(ctx, row)
-	//if err != nil {
-	//	return nil, err
-	//}
-	//return &showCharsetIter{originalIter: ri}, nil
-
-	var rows []sql.Row
-	iter := sql.NewCharacterSetsIterator()
-	for charset, ok := iter.Next(); ok; charset, ok = iter.Next() {
-		if charset.Encoder != nil && charset.BinaryCollation.Sorter() != nil && charset.DefaultCollation.Sorter() != nil {
-			rows = append(rows, sql.Row{
-				charset.Name,
-				charset.Description,
-				charset.DefaultCollation.String(),
-				uint64(charset.MaxLength),
-			})
-		}
-	}
-	return sql.RowsToRowIter(rows...), nil
-}
-
-type showCharsetIter struct {
-	originalIter sql.RowIter
-}
-
-func (sci *showCharsetIter) Next(ctx *sql.Context) (sql.Row, error) {
-	row, err := sci.originalIter.Next(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// switch the ordering (see notes on Schema())
-	defaultCollationName := row[1]
-
-	row[1] = row[2]
-	row[2] = defaultCollationName
-
-	return row, nil
-}
-
-func (sci *showCharsetIter) Close(ctx *sql.Context) error {
-	return sci.originalIter.Close(ctx)
 }

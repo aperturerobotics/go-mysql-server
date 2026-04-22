@@ -15,7 +15,7 @@
 package rowexec
 
 import (
-	"context"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -31,7 +31,8 @@ import (
 // the view that is also returned. The context returned is the one used to
 // create the view.
 func setupView(t *testing.T, db memory.MemoryDatabase) (*sql.Context, *sql.View) {
-	table := memory.NewTable(db.Database(), "mytable", sql.NewPrimaryKeySchema(sql.Schema{
+	ctx := sql.NewEmptyContext()
+	table := memory.NewTable(ctx, db.Database(), "mytable", sql.NewPrimaryKeySchema(sql.Schema{
 		{Name: "i", Source: "mytable", Type: types.Int32},
 		{Name: "s", Source: "mytable", Type: types.Text},
 	}), nil)
@@ -47,9 +48,7 @@ func setupView(t *testing.T, db memory.MemoryDatabase) (*sql.Context, *sql.View)
 		),
 	)
 
-	createView := plan.NewCreateView(db, subqueryAlias.Name(), subqueryAlias, false, "CREATE VIEW myview AS SELECT i FROM mytable", "", "", "")
-
-	ctx := sql.NewContext(context.Background())
+	createView := plan.NewCreateView(db, subqueryAlias.Name(), subqueryAlias, false, false, "CREATE VIEW myview AS SELECT i FROM mytable", "", "", "")
 
 	_, err := DefaultBuilder.Build(ctx, createView, nil)
 	require.NoError(t, err)
@@ -148,4 +147,35 @@ func TestDropNonExistingViewNative(t *testing.T) {
 	err = test(false)
 	require.Error(t, err)
 	require.True(t, sql.ErrViewDoesNotExist.Is(err))
+}
+
+// Tests that DROP VIEW returns an OkResult (not empty set)
+func TestDropViewReturnsOkResult(t *testing.T) {
+	db := memory.NewDatabase("mydb")
+	ctx, view := setupView(t, db)
+
+	singleDropView := plan.NewSingleDropView(db, view.Name())
+	dropView := plan.NewDropView([]sql.Node{singleDropView}, false)
+
+	iter, err := DefaultBuilder.Build(ctx, dropView, nil)
+	require.NoError(t, err)
+
+	// Verify we can read the result and it contains an OkResult with 0 rows affected
+	row, err := iter.Next(ctx)
+	if err != nil {
+		t.Logf("iter.Next returned error: %v", err)
+	}
+	require.NoError(t, err, "Expected to get a row with OkResult, but got error: %v", err)
+	require.NotNil(t, row)
+	require.Equal(t, 1, len(row), "Expected 1 column in result, got %d", len(row))
+
+	okResult, ok := row[0].(types.OkResult)
+	require.True(t, ok, "Expected OkResult, got %T: %v", row[0], row[0])
+	require.Equal(t, uint64(0), okResult.RowsAffected)
+
+	// Verify no more rows (iterator should return io.EOF)
+	_, err = iter.Next(ctx)
+	require.Equal(t, io.EOF, err)
+
+	require.NoError(t, iter.Close(ctx))
 }

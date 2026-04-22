@@ -30,6 +30,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/expression/function/json"
 	"github.com/dolthub/go-mysql-server/sql/fulltext"
 	"github.com/dolthub/go-mysql-server/sql/plan"
+	"github.com/dolthub/go-mysql-server/sql/transform"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
@@ -54,17 +55,17 @@ func (b *Builder) buildScalar(inScope *scope, e ast.Expr) (ex sql.Expression) {
 			left := be.Left()
 			right := be.Right()
 			if leftBindVar, ok := left.(*expression.BindVar); ok {
-				if typ, ok := hasColumnType(right); ok {
+				if typ, ok := hasColumnType(b.ctx, right); ok {
 					leftBindVar.Typ = typ
 					left = leftBindVar
 				}
 			} else if rightBindVar, ok := right.(*expression.BindVar); ok {
-				if typ, ok := hasColumnType(left); ok {
+				if typ, ok := hasColumnType(b.ctx, left); ok {
 					rightBindVar.Typ = typ
 					right = rightBindVar
 				}
 			}
-			ex, _ = be.WithChildren(left, right)
+			ex, _ = be.WithChildren(b.ctx, left, right)
 		}
 	}()
 
@@ -105,40 +106,99 @@ func (b *Builder) buildScalar(inScope *scope, e ast.Expr) (ex sql.Expression) {
 	case *ast.NullVal:
 		return expression.NewLiteral(nil, types.Null)
 	case *ast.ColName:
+		if v.StoredProcVal != nil {
+			switch val := v.StoredProcVal.(type) {
+			case *ast.SQLVal:
+				resVal := b.ConvertVal(val)
+				if lit, isLit := resVal.(*expression.Literal); isLit && val.Type == ast.FloatVal {
+					return expression.NewLiteral(lit.Value(), types.Float64)
+				}
+				return resVal
+			case *ast.NullVal:
+				return expression.NewLiteral(nil, types.Null)
+			}
+		}
 		dbName := strings.ToLower(v.Qualifier.DbQualifier.String())
 		tblName := strings.ToLower(v.Qualifier.Name.String())
 		colName := strings.ToLower(v.Name.String())
 		c, ok := inScope.resolveColumn(dbName, tblName, colName, true, false)
 		if !ok {
-			sysVar, scope, ok := b.buildSysVar(v, ast.SetScope_None)
-			if ok {
-				return sysVar
+			if aliasedExpr, ok := inScope.selectAliases[colName]; ok {
+				return aliasedExpr
 			}
-			var err error
-			if scope == ast.SetScope_User {
-				err = sql.ErrUnknownUserVariable.New(colName)
-			} else if scope == ast.SetScope_Persist || scope == ast.SetScope_PersistOnly {
-				err = sql.ErrUnknownUserVariable.New(colName)
+			// Only try system variable lookup if there's no table qualifier.
+			// Qualified names like "A.timestamp" are always column references, never system variables.
+			var scope ast.SetScope
+			if tblName == "" && dbName == "" {
+				var sysVar sql.Expression
+				sysVar, scope, ok = b.buildSysVar(v, ast.SetScope_None)
+				if ok {
+					return sysVar
+				}
+			}
+			if scope == ast.SetScope_User || scope == ast.SetScope_Persist || scope == ast.SetScope_PersistOnly {
+				err := sql.ErrUnknownUserVariable.New(colName)
+				b.handleErr(err)
 			} else if scope == ast.SetScope_Global || scope == ast.SetScope_Session {
-				err = sql.ErrUnknownSystemVariable.New(colName)
+				err := sql.ErrUnknownSystemVariable.New(colName)
+				b.handleErr(err)
 			} else if tblName != "" && !inScope.hasTable(tblName) {
-				err = sql.ErrTableNotFound.New(tblName)
+				err := sql.ErrTableNotFound.New(tblName)
+				b.handleErr(err)
 			} else if tblName != "" {
-				err = sql.ErrTableColumnNotFound.New(tblName, colName)
+				err := sql.ErrTableColumnNotFound.New(tblName, colName)
+				b.handleErr(err)
+			} else if b.overrides.ParseTableAsColumn != nil && inScope.hasTable(colName) {
+				scopeTableCols := inScope.resolveColumnAsTable(dbName, colName)
+				if len(scopeTableCols) == 0 {
+					err := sql.ErrColumnNotFound.New(v)
+					b.handleErr(err)
+				}
+				astQualifier := ast.TableName{
+					Name:        ast.NewTableIdent(colName), // This must be `colName` due to table aliases
+					DbQualifier: ast.NewTableIdent(scopeTableCols[0].db),
+				}
+				fieldArgs := make([]sql.Expression, len(scopeTableCols))
+				for i := range scopeTableCols {
+					astArg := ast.ColName{
+						StoredProcVal: nil,
+						Qualifier:     astQualifier,
+						Name:          ast.NewColIdent(scopeTableCols[i].col),
+					}
+					fieldArgs[i] = b.buildScalar(inScope, &astArg)
+				}
+				actualTableName := colName
+				if tn, ok := inScope.oldTables[scopeTableCols[0].tableId]; ok {
+					actualTableName = tn
+				}
+				tableExpr, err := b.overrides.ParseTableAsColumn(b.ctx, actualTableName, fieldArgs)
+				if err != nil {
+					b.handleErr(err)
+				}
+				return tableExpr
 			} else {
-				err = sql.ErrColumnNotFound.New(v)
+				err := sql.ErrColumnNotFound.New(v)
+				b.handleErr(err)
 			}
-			b.handleErr(err)
 		}
-		c = c.withOriginal(v.Name.String())
+
+		origTbl := b.getOrigTblName(inScope.node, c.table)
+		c = c.withOriginal(origTbl, v.Name.String())
 		return c.scalarGf()
 	case *ast.FuncExpr:
+		// TODO: support function privileges for gms auth handler
+		if v.Auth.AuthType != "" {
+			if err := b.cat.AuthorizationHandler().HandleAuth(b.ctx, b.authQueryState, v.Auth); err != nil && b.authEnabled {
+				b.handleErr(err)
+			}
+		}
+
 		name := v.Name.Lowered()
 		if name == "name_const" {
 			return b.buildNameConst(inScope, v)
 		} else if name == "icu_version" {
 			return expression.NewLiteral(icuVersion, types.MustCreateString(query.Type_VARCHAR, int64(len(icuVersion)), sql.Collation_Default))
-		} else if isAggregateFunc(name) && v.Over == nil {
+		} else if IsAggregateFunc(name) && v.Over == nil {
 			// TODO this assumes aggregate is in the same scope
 			// also need to avoid nested aggregates
 			return b.buildAggregateFunc(inScope, name, v)
@@ -148,9 +208,16 @@ func (b *Builder) buildScalar(inScope *scope, e ast.Expr) (ex sql.Expression) {
 
 		f, ok := b.cat.Function(b.ctx, name)
 		if !ok {
-			// todo(max): similar names in registry?
-			err := sql.ErrFunctionNotFound.New(name)
-			b.handleErr(err)
+			// check if this a table function accidentally used in a scalar context
+			_, ok := b.cat.TableFunction(b.ctx, name)
+			if ok {
+				err := sql.ErrTableFunctionNotInFrom.New(name)
+				b.handleErr(err)
+			} else {
+				// todo(max): similar names in registry?
+				err := sql.ErrFunctionNotFound.New(name)
+				b.handleErr(err)
+			}
 		}
 
 		args := make([]sql.Expression, len(v.Exprs))
@@ -164,9 +231,14 @@ func (b *Builder) buildScalar(inScope *scope, e ast.Expr) (ex sql.Expression) {
 			}
 		}
 
-		rf, err := f.NewInstance(args)
+		rf, err := f.NewInstance(nil, args)
 		if err != nil {
 			b.handleErr(err)
+		}
+
+		switch rf.(type) {
+		case *function.Sleep, sql.NonDeterministicExpression:
+			b.qFlags.Set(sql.QFlagUndeferrableExprs)
 		}
 
 		// NOTE: Not all aggregate functions support DISTINCT. Fortunately, the vitess parser will throw
@@ -186,6 +258,9 @@ func (b *Builder) buildScalar(inScope *scope, e ast.Expr) (ex sql.Expression) {
 	case *ast.GroupConcatExpr:
 		// TODO this is an aggregation
 		return b.buildGroupConcat(inScope, v)
+	case *ast.OrderedInjectedExpr:
+		// TODO this is an aggregation in practice but is handled differently
+		return b.buildOrderedInjectedExpr(inScope, v)
 	case *ast.ParenExpr:
 		return b.buildScalar(inScope, v.Expr)
 	case *ast.AndExpr:
@@ -213,7 +288,7 @@ func (b *Builder) buildScalar(inScope *scope, e ast.Expr) (ex sql.Expression) {
 			args[i] = b.selectExprToExpression(inScope, e)
 		}
 
-		f, err := function.NewChar(args...)
+		f, err := function.NewChar(b.ctx, args...)
 		if err != nil {
 			b.handleErr(err)
 		}
@@ -246,26 +321,13 @@ func (b *Builder) buildScalar(inScope *scope, e ast.Expr) (ex sql.Expression) {
 			}
 		}
 		expr := b.buildScalar(inScope, v.Expr)
-		ret, err := b.f.buildConvert(expr, v.Type.Type, typeLength, typeScale)
+		ret, err := b.f.buildConvert(b.ctx, expr, v.Type.Type, typeLength, typeScale)
 		if err != nil {
 			b.handleErr(err)
 		}
 		return ret
 	case ast.InjectedExpr:
-		resolvedChildren := make([]any, len(v.Children))
-		for i, child := range v.Children {
-			resolvedChildren[i] = b.buildScalar(inScope, child)
-		}
-		expr, err := v.Expression.WithResolvedChildren(resolvedChildren)
-		if err != nil {
-			b.handleErr(err)
-			return nil
-		}
-		if sqlExpr, ok := expr.(sql.Expression); ok {
-			return sqlExpr
-		}
-		b.handleErr(fmt.Errorf("Injected expression does not resolve to a valid expression"))
-		return nil
+		return b.buildInjectedExpr(inScope, v)
 	case *ast.RangeCond:
 		val := b.buildScalar(inScope, v.Left)
 		lower := b.buildScalar(inScope, v.From)
@@ -348,21 +410,19 @@ func (b *Builder) buildScalar(inScope *scope, e ast.Expr) (ex sql.Expression) {
 				err := sql.ErrFunctionNotFound.New("values")
 				b.handleErr(err)
 			}
-			values, err := fn.NewInstance([]sql.Expression{col})
+			values, err := fn.NewInstance(nil, []sql.Expression{col})
 			if err != nil {
 				b.handleErr(err)
 			}
 			return values
 		}
 	case *ast.ExistsExpr:
-		sqScope := inScope.push()
-		sqScope.initSubquery()
-		selScope := b.buildSelectStmt(sqScope, v.Subquery.Select)
-		selectString := ast.String(v.Subquery.Select)
-		sq := plan.NewSubquery(selScope.node, selectString)
-		sq = sq.WithCorrelated(sqScope.correlated())
-		b.qFlags.Set(sql.QFlagScalarSubquery)
-		return plan.NewExistsSubquery(sq)
+		subquery := b.buildScalar(inScope, v.Subquery)
+		subqueryPlan, ok := subquery.(*plan.Subquery)
+		if !ok {
+			b.handleErr(fmt.Errorf("expected Subquery from ExistsExpr, got %T", subquery))
+		}
+		return plan.NewExistsSubquery(subqueryPlan)
 	case *ast.TimestampFuncExpr:
 		var (
 			unit  sql.Expression
@@ -374,22 +434,84 @@ func (b *Builder) buildScalar(inScope *scope, e ast.Expr) (ex sql.Expression) {
 		expr1 = b.buildScalar(inScope, v.Expr1)
 		expr2 = b.buildScalar(inScope, v.Expr2)
 
-		if v.Name == "timestampdiff" {
-			return function.NewTimestampDiff(unit, expr1, expr2)
-		} else if v.Name == "timestampadd" {
+		switch v.Name {
+		case "timestampadd":
+			dateAddFunc, err := function.NewDateAdd(b.ctx, expr2, expression.NewInterval(expr1, v.Unit))
+			if err != nil {
+				b.handleErr(err)
+			}
+			return dateAddFunc
+		case "timestampdiff":
+			return function.NewTimestampDiff(b.ctx, unit, expr1, expr2)
+		default:
 			return nil
 		}
-		return nil
+
 	case *ast.ExtractFuncExpr:
 		var unit sql.Expression = expression.NewLiteral(strings.ToUpper(v.Unit), types.LongText)
 		expr := b.buildScalar(inScope, v.Expr)
-		return function.NewExtract(unit, expr)
+		return function.NewExtract(b.ctx, unit, expr)
 	case *ast.MatchExpr:
 		return b.buildMatchAgainst(inScope, v)
 	default:
 		b.handleErr(sql.ErrUnsupportedSyntax.New(ast.String(e)))
 	}
 	return nil
+}
+
+func (b *Builder) buildInjectedExpr(inScope *scope, v ast.InjectedExpr) sql.Expression {
+	if err := b.cat.AuthorizationHandler().HandleAuth(b.ctx, b.authQueryState, v.Auth); err != nil && b.authEnabled {
+		b.handleErr(err)
+	}
+
+	var resolvedChildren []any
+	if len(v.Children) > 0 {
+		resolvedChildren = make([]any, len(v.Children))
+		for i, child := range v.Children {
+			resolvedChildren[i] = b.buildScalar(inScope, child)
+		}
+	} else {
+		resolvedChildren = make([]any, len(v.SelectExprChildren))
+		for i, child := range v.SelectExprChildren {
+			resolvedChildren[i] = b.selectExprToExpression(inScope, child)
+		}
+	}
+	return b.buildInjectedExpressionFromResolvedChildren(v, resolvedChildren)
+}
+
+func (b *Builder) buildInjectedExpressionFromResolvedChildren(v ast.InjectedExpr, resolvedChildren []any) sql.Expression {
+	expr, err := v.Expression.WithResolvedChildren(b.ctx, resolvedChildren)
+	if err != nil {
+		b.handleErr(err)
+		return nil
+	}
+	if sqlExpr, ok := expr.(sql.Expression); ok {
+		return sqlExpr
+	}
+	b.handleErr(fmt.Errorf("injected expression should resolve to sql.Expression, got %T", expr))
+	return nil
+}
+
+func (b *Builder) getOrigTblName(node sql.Node, alias string) string {
+	if node == nil {
+		return ""
+	}
+	// Look past table aliases
+	var origTbl string
+	transform.InspectWithOpaque(b.ctx, node, func(ctx *sql.Context, n sql.Node) bool {
+		switch nn := n.(type) {
+		case *plan.TableAlias:
+			if nn.Name() == alias {
+				if child, ok := nn.Child.(sql.Nameable); ok {
+					origTbl = child.Name()
+				}
+			}
+			return false
+		default:
+			return true
+		}
+	})
+	return origTbl
 }
 
 // getJsonValueTypeLiteral converts a type coercion string into a literal
@@ -400,7 +522,7 @@ func (b *Builder) getJsonValueTypeLiteral(e sql.Expression) sql.Expression {
 		err := fmt.Errorf("invalid json_value coercion type: %s", e)
 		b.handleErr(err)
 	}
-	convStr, _, err := types.LongText.Convert(typLit.Value())
+	convStr, _, err := types.LongText.Convert(b.ctx, typLit.Value())
 	if err != nil {
 		err := fmt.Errorf("invalid json_value coercion type: %s; %s", typLit.Value(), err.Error())
 		b.handleErr(err)
@@ -479,7 +601,7 @@ func (b *Builder) buildUnaryScalar(inScope *scope, e *ast.UnaryExpr) sql.Express
 
 			// Character set introducers only work on string literals
 			expr := b.buildScalar(inScope, e.Expr)
-			if _, ok := expr.(*expression.Literal); !ok || !types.IsText(expr.Type()) {
+			if _, ok := expr.(*expression.Literal); !ok || !types.IsText(expr.Type(b.ctx)) {
 				err := sql.ErrCharSetIntroducer.New()
 				b.handleErr(err)
 			}
@@ -503,7 +625,7 @@ func (b *Builder) buildUnaryScalar(inScope *scope, e *ast.UnaryExpr) sql.Express
 			} else {
 				// Should not be possible
 				err := fmt.Errorf("expression literal returned type `%s` but literal value had type `%T`",
-					expr.Type().String(), literal)
+					expr.Type(b.ctx).String(), literal)
 				b.handleErr(err)
 			}
 		}
@@ -548,21 +670,21 @@ func (b *Builder) typeExpandComparisonLiteral(left, right sql.Expression) (sql.E
 	}
 
 	if leftGf != nil && rightLit != nil {
-		if types.IsSigned(left.Type()) && types.IsSigned(right.Type()) ||
-			types.IsUnsigned(left.Type()) && types.IsUnsigned(right.Type()) ||
-			types.IsFloat(left.Type()) && types.IsFloat(right.Type()) ||
-			types.IsDecimal(left.Type()) && types.IsDecimal(right.Type()) ||
-			types.IsText(left.Type()) && types.IsText(right.Type()) {
-			if left.Type().MaxTextResponseByteLength(b.ctx) >= right.Type().MaxTextResponseByteLength(b.ctx) {
+		if types.IsSigned(left.Type(b.ctx)) && types.IsSigned(right.Type(b.ctx)) ||
+			types.IsUnsigned(left.Type(b.ctx)) && types.IsUnsigned(right.Type(b.ctx)) ||
+			types.IsFloat(left.Type(b.ctx)) && types.IsFloat(right.Type(b.ctx)) ||
+			types.IsDecimal(left.Type(b.ctx)) && types.IsDecimal(right.Type(b.ctx)) ||
+			types.IsText(left.Type(b.ctx)) && types.IsText(right.Type(b.ctx)) {
+			if left.Type(b.ctx).MaxTextResponseByteLength(b.ctx) >= right.Type(b.ctx).MaxTextResponseByteLength(b.ctx) {
 				// The types are congruent and the literal does not lose
 				// information casting to the column type. The conditions
 				// should preclude out of range, casting errors, or
 				// correctness missteps.
-				val, _, err := leftGf.Type().Convert(rightLit.Value())
+				val, _, err := leftGf.Type(b.ctx).Convert(b.ctx, rightLit.Value())
 				if err != nil && !expression.ErrNilOperand.Is(err) {
 					b.handleErr(err)
 				}
-				right = expression.NewLiteral(val, leftGf.Type())
+				right = expression.NewLiteral(val, leftGf.Type(b.ctx))
 			}
 		}
 
@@ -586,13 +708,13 @@ func (b *Builder) buildComparison(inScope *scope, c *ast.ComparisonExpr) sql.Exp
 
 	switch strings.ToLower(c.Operator) {
 	case ast.RegexpStr:
-		regexpLike, err := function.NewRegexpLike(left, right)
+		regexpLike, err := function.NewRegexpLike(b.ctx, left, right)
 		if err != nil {
 			b.handleErr(err)
 		}
 		return regexpLike
 	case ast.NotRegexpStr:
-		regexpLike, err := function.NewRegexpLike(left, right)
+		regexpLike, err := function.NewRegexpLike(b.ctx, left, right)
 		if err != nil {
 			b.handleErr(err)
 		}
@@ -651,11 +773,11 @@ func (b *Builder) buildComparison(inScope *scope, c *ast.ComparisonExpr) sql.Exp
 	return nil
 }
 
-func hasColumnType(e sql.Expression) (sql.Type, bool) {
+func hasColumnType(ctx *sql.Context, e sql.Expression) (sql.Type, bool) {
 	var typ sql.Type
-	sql.Inspect(e, func(e sql.Expression) bool {
+	sql.Inspect(ctx, e, func(ctx *sql.Context, e sql.Expression) bool {
 		if col, ok := e.(*expression.GetField); ok {
-			typ = col.Type()
+			typ = col.Type(ctx)
 			return false
 		}
 		return true
@@ -675,10 +797,10 @@ func (b *Builder) buildIsExprToExpression(inScope *scope, c *ast.IsExpr) sql.Exp
 	e := b.buildScalar(inScope, c.Expr)
 	switch strings.ToLower(c.Operator) {
 	case ast.IsNullStr:
-		return expression.NewIsNull(e)
+		return expression.DefaultExpressionFactory.NewIsNull(e)
 	case ast.IsNotNullStr:
 		b.qFlags.Set(sql.QFlgNotExpr)
-		return expression.NewNot(expression.NewIsNull(e))
+		return expression.DefaultExpressionFactory.NewIsNotNull(e)
 	case ast.IsTrueStr:
 		return expression.NewIsTrue(e)
 	case ast.IsFalseStr:
@@ -745,13 +867,13 @@ func (b *Builder) binaryExprToExpression(inScope *scope, be *ast.BinaryExpr) (sq
 		}
 
 	case ast.JSONExtractOp, ast.JSONUnquoteExtractOp:
-		jsonExtract, err := json.NewJSONExtract(l, r)
+		jsonExtract, err := json.NewJSONExtract(b.ctx, l, r)
 		if err != nil {
 			return nil, err
 		}
 
 		if operator == ast.JSONUnquoteExtractOp {
-			return json.NewJSONUnquote(jsonExtract), nil
+			return json.NewJSONUnquote(b.ctx, jsonExtract), nil
 		}
 		return jsonExtract, nil
 
@@ -786,7 +908,20 @@ func (b *Builder) caseExprToExpression(inScope *scope, e *ast.CaseExpr) (sql.Exp
 		elseExpr = b.buildScalar(inScope, e.Else)
 	}
 
-	return expression.NewCase(expr, branches, elseExpr), nil
+	newCase := expression.NewCase(expr, branches, elseExpr)
+	if types.IsText(newCase.Type(b.ctx)) {
+		for _, branch := range branches {
+			if types.IsEnum(branch.Value.Type(b.ctx)) {
+				branch.Value = expression.NewEnumToString(branch.Value)
+			}
+		}
+		if elseExpr != nil && types.IsEnum(elseExpr.Type(b.ctx)) {
+			elseExpr = expression.NewEnumToString(elseExpr)
+		}
+		newCase = expression.NewCase(expr, branches, elseExpr)
+	}
+
+	return newCase, nil
 }
 
 func (b *Builder) intervalExprToExpression(inScope *scope, e *ast.IntervalExpr) *expression.Interval {
@@ -798,32 +933,59 @@ func (b *Builder) intervalExprToExpression(inScope *scope, e *ast.IntervalExpr) 
 // Convert an integer, represented by the specified string in the specified
 // base, to its smallest representation possible, out of:
 // int8, uint8, int16, uint16, int32, uint32, int64 and uint64
-func (b *Builder) convertInt(value string, base int) *expression.Literal {
-	if i8, err := strconv.ParseInt(value, base, 8); err == nil {
-		return expression.NewLiteral(int8(i8), types.Int8)
+func (b *Builder) convertInt(value []byte, base int) *expression.Literal {
+	// For performance reasons, this smallest int representation possible for value.
+	// If zero-ing out (subtracting) the largest representation of the respective integer type results in values
+	// left over, then the value must not fit within that integer type.
+	valStr := encodings.BytesToString(value)
+	if i64, err := strconv.ParseInt(valStr, base, 64); err == nil {
+		if uint64(i64)&0x8000_0000_0000_0000 != 0 {
+			if uint64(^i64)&0xFFFF_FFFF_FFFF_FF80 == 0 {
+				return expression.NewLiteral(int8(i64), types.Int8)
+			}
+			if uint64(^i64)&0xFFFF_FFFF_FFFF_8000 == 0 {
+				return expression.NewLiteral(int16(i64), types.Int16)
+			}
+			if uint64(^i64)&0xFFFF_FFFF_8000_0000 == 0 {
+				return expression.NewLiteral(int32(i64), types.Int32)
+			}
+			return expression.NewLiteral(i64, types.Int64)
+		}
+		if uint64(i64)&0xFFFF_FFFF_FFFF_FF80 == 0 {
+			return expression.NewLiteral(int8(i64), types.Int8)
+		}
+		if uint64(i64)&0xFFFF_FFFF_FFFF_FF00 == 0 {
+			return expression.NewLiteral(uint8(i64), types.Uint8)
+		}
+		if uint64(i64)&0xFFFF_FFFF_FFFF_8000 == 0 {
+			return expression.NewLiteral(int16(i64), types.Int16)
+		}
+		if uint64(i64)&0xFFFF_FFFF_FFFF_0000 == 0 {
+			return expression.NewLiteral(uint16(i64), types.Uint16)
+		}
+		if uint64(i64)&0xFFFF_FFFF_8000_0000 == 0 {
+			return expression.NewLiteral(int32(i64), types.Int32)
+		}
+		if uint64(i64)&0xFFFF_FFFF_0000_0000 == 0 {
+			return expression.NewLiteral(uint32(i64), types.Uint32)
+		}
+		return expression.NewLiteral(i64, types.Int64)
 	}
-	if ui8, err := strconv.ParseUint(value, base, 8); err == nil {
-		return expression.NewLiteral(uint8(ui8), types.Uint8)
+
+	if ui64, err := strconv.ParseUint(valStr, base, 64); err == nil {
+		if ui64&0xFFFF_FFFF_FFFF_FF00 == 0 {
+			return expression.NewLiteral(uint8(ui64), types.Uint8)
+		}
+		if ui64&0xFFFF_FFFF_FFFF_0000 == 0 {
+			return expression.NewLiteral(uint16(ui64), types.Uint16)
+		}
+		if ui64&0xFFFF_0000_0000_0000 == 0 {
+			return expression.NewLiteral(uint32(ui64), types.Uint32)
+		}
+		return expression.NewLiteral(ui64, types.Uint64)
 	}
-	if i16, err := strconv.ParseInt(value, base, 16); err == nil {
-		return expression.NewLiteral(int16(i16), types.Int16)
-	}
-	if ui16, err := strconv.ParseUint(value, base, 16); err == nil {
-		return expression.NewLiteral(uint16(ui16), types.Uint16)
-	}
-	if i32, err := strconv.ParseInt(value, base, 32); err == nil {
-		return expression.NewLiteral(int32(i32), types.Int32)
-	}
-	if ui32, err := strconv.ParseUint(value, base, 32); err == nil {
-		return expression.NewLiteral(uint32(ui32), types.Uint32)
-	}
-	if i64, err := strconv.ParseInt(value, base, 64); err == nil {
-		return expression.NewLiteral(int64(i64), types.Int64)
-	}
-	if ui64, err := strconv.ParseUint(value, base, 64); err == nil {
-		return expression.NewLiteral(uint64(ui64), types.Uint64)
-	}
-	if decimal, _, err := types.InternalDecimalType.Convert(value); err == nil {
+
+	if decimal, _, err := types.InternalDecimalType.Convert(b.ctx, valStr); err == nil {
 		return expression.NewLiteral(decimal, types.InternalDecimalType)
 	}
 
@@ -836,7 +998,7 @@ func (b *Builder) ConvertVal(v *ast.SQLVal) sql.Expression {
 	case ast.StrVal:
 		return expression.NewLiteral(string(v.Val), types.CreateLongText(b.ctx.GetCollation()))
 	case ast.IntVal:
-		return b.convertInt(string(v.Val), 10)
+		return b.convertInt(v.Val, 10)
 	case ast.FloatVal:
 		// any float value is parsed as decimal except when the value has scientific notation
 		ogVal := strings.ToLower(string(v.Val))
@@ -855,17 +1017,17 @@ func (b *Builder) ConvertVal(v *ast.SQLVal) sql.Expression {
 			if err != nil {
 				return expression.NewLiteral(string(v.Val), types.CreateLongText(b.ctx.GetCollation()))
 			}
-			dVal, _, err := dt.Convert(ogVal)
+			dVal, _, err := dt.Convert(b.ctx, ogVal)
 			if err != nil {
 				return expression.NewLiteral(string(v.Val), types.CreateLongText(b.ctx.GetCollation()))
 			}
 			return expression.NewLiteral(dVal, dt)
 		} else {
 			// if the value is not float type - this should not happen
-			return b.convertInt(string(v.Val), 10)
+			return b.convertInt(v.Val, 10)
 		}
 	case ast.HexNum:
-		//TODO: binary collation?
+		// TODO: binary collation?
 		v := strings.ToLower(string(v.Val))
 		if strings.HasPrefix(v, "0x") {
 			v = v[2:]
@@ -884,7 +1046,7 @@ func (b *Builder) ConvertVal(v *ast.SQLVal) sql.Expression {
 		}
 		return expression.NewLiteral(val, types.LongBlob)
 	case ast.HexVal:
-		//TODO: binary collation?
+		// TODO: binary collation?
 		val, err := v.HexDecode()
 		if err != nil {
 			b.handleErr(err)
@@ -896,8 +1058,10 @@ func (b *Builder) ConvertVal(v *ast.SQLVal) sql.Expression {
 			if b.bindCtx.resolveOnly {
 				return expression.NewBindVar(name)
 			}
-			replacement := b.normalizeValArg(v)
-			return b.buildScalar(&scope{}, replacement)
+			replacement, ok := b.normalizeValArg(v)
+			if ok {
+				return replacement
+			}
 		}
 		return expression.NewBindVar(name)
 	case ast.BitVal:
@@ -927,11 +1091,7 @@ func (b *Builder) ConvertVal(v *ast.SQLVal) sql.Expression {
 // filter, since we only need to load the tables once. All steps after this
 // one can assume that the expression has been fully resolved and is valid.
 func (b *Builder) buildMatchAgainst(inScope *scope, v *ast.MatchExpr) *expression.MatchAgainst {
-	//TODO: implement proper scope support and remove this check
-	if (inScope.groupBy != nil && inScope.groupBy.hasAggs()) || inScope.windowFuncs != nil {
-		b.handleErr(fmt.Errorf("aggregate and window functions are not yet supported alongside MATCH expressions"))
-	}
-	rts := getTablesByName(inScope.node)
+	rts := getResolvedTablesByName(b.ctx, inScope.node)
 	var rt *plan.ResolvedTable
 	var matchTable string
 	cols := make([]*expression.GetField, len(v.Columns))
@@ -988,7 +1148,7 @@ func (b *Builder) buildMatchAgainst(inScope *scope, v *ast.MatchExpr) *expressio
 	if err != nil {
 		b.handleErr(err)
 	}
-	ftIndex := findMatchAgainstIndex(cols, indexes)
+	ftIndex := findMatchAgainstIndex(cols, indexes, indexedTbl.Name())
 	if ftIndex == nil {
 		err := sql.ErrNoFullTextIndexFound.New(indexedTbl.Name())
 		b.handleErr(err)
@@ -1034,22 +1194,26 @@ func (b *Builder) buildMatchAgainst(inScope *scope, v *ast.MatchExpr) *expressio
 	matchAgainst := expression.NewMatchAgainst(genericCols, matchExpr, searchModifier)
 	matchAgainst.SetIndex(ftIndex)
 
-	return matchAgainst.WithInfo(indexedTbl, idxTables[0], idxTables[1], idxTables[2], idxTables[3], idxTables[4], keyCols)
+	return matchAgainst.WithInfo(b.ctx, indexedTbl, idxTables[0], idxTables[1], idxTables[2], idxTables[3], idxTables[4], keyCols)
 }
 
-func findMatchAgainstIndex(cols []*expression.GetField, indexes []sql.Index) fulltext.Index {
+// findMatchAgainstIndex returns the [fulltext.Index] from |indexes| whose column expressions match |cols|.
+// |tableName| is the unaliased table name the index was built on. It is substituted for any JOIN
+// alias that may be present in the [expression.GetField] values of |cols| before the comparison is made,
+// because index expressions are always stored using the unaliased table name.
+func findMatchAgainstIndex(cols []*expression.GetField, indexes []sql.Index, tableName string) fulltext.Index {
 	var found fulltext.Index
 	for _, idx := range indexes {
 		idxExprs := idx.Expressions()
 		if !idx.IsFullText() || len(cols) != len(idxExprs) {
 			continue
 		}
-		// check that index expressions match |cols|
 		allMatch := true
 		for _, gf := range cols {
+			colKey := gf.WithTable(tableName).String()
 			var match bool
 			for _, idxExpr := range idxExprs {
-				if gf.String() == idxExpr {
+				if strings.EqualFold(colKey, idxExpr) {
 					match = true
 					break
 				}

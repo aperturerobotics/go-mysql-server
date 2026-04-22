@@ -40,7 +40,7 @@ func (c *ddlNode) Database() sql.Database {
 }
 
 // Schema implements the Node interface.
-func (*ddlNode) Schema() sql.Schema {
+func (*ddlNode) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -49,33 +49,30 @@ func (c *ddlNode) Children() []sql.Node { return nil }
 
 // TableSpec is a node describing the schema of a table.
 type TableSpec struct {
+	TableOpts map[string]interface{}
+	Comment   string
 	Schema    sql.PrimaryKeySchema
 	FkDefs    sql.ForeignKeyConstraints
 	ChDefs    sql.CheckConstraints
 	IdxDefs   sql.IndexDefs
 	Collation sql.CollationID
-	TableOpts map[string]interface{}
-	Comment   string
 }
 
 // CreateTable is a node describing the creation of some table.
 type CreateTable struct {
+	like sql.Node
 	ddlNode
+	selectNode   sql.Node
+	TableOpts    map[string]interface{}
 	name         string
 	pkSch        sql.PrimaryKeySchema
 	fkDefs       sql.ForeignKeyConstraints
-	fkParentTbls sql.ForeignKeyTables
-	checks       sql.CheckConstraints
 	idxDefs      sql.IndexDefs
-
-	ifNotExists bool
-	temporary   bool
-
-	like       sql.Node
-	selectNode sql.Node
-
-	Collation sql.CollationID
-	TableOpts map[string]interface{}
+	checks       sql.CheckConstraints
+	fkParentTbls sql.ForeignKeyTables
+	Collation    sql.CollationID
+	ifNotExists  bool
+	temporary    bool
 }
 
 var _ sql.Databaser = (*CreateTable)(nil)
@@ -133,6 +130,14 @@ func (c *CreateTable) WithDatabase(db sql.Database) (sql.Node, error) {
 	return &nc, nil
 }
 
+// WithIndexDefs returns a copy of this CreateTable instance, with the index definitions
+// set to |idxDefs|.
+func (c *CreateTable) WithIndexDefs(idxDefs sql.IndexDefs) (*CreateTable, error) {
+	nc := *c
+	nc.idxDefs = idxDefs
+	return &nc, nil
+}
+
 // Name implements the Nameable interface.
 func (c *CreateTable) Name() string {
 	return c.name
@@ -175,7 +180,7 @@ func (c *CreateTable) String() string {
 }
 
 // DebugString implements the sql.DebugStringer interface.
-func (c *CreateTable) DebugString() string {
+func (c *CreateTable) DebugString(ctx *sql.Context) string {
 	p := sql.NewTreePrinter()
 
 	ifNotExists := ""
@@ -185,75 +190,75 @@ func (c *CreateTable) DebugString() string {
 
 	if c.selectNode != nil {
 		p.WriteNode("Create table %s%s as", ifNotExists, c.name)
-		p.WriteChildren(sql.DebugString(c.selectNode))
+		p.WriteChildren(sql.DebugString(ctx, c.selectNode))
 		return p.String()
 	}
 
 	p.WriteNode("Create table %s%s", ifNotExists, c.name)
 
 	var children []string
-	children = append(children, c.schemaDebugString())
+	children = append(children, c.schemaDebugString(ctx))
 
 	if len(c.fkDefs) > 0 {
-		children = append(children, c.foreignKeysDebugString())
+		children = append(children, c.foreignKeysDebugString(ctx))
 	}
 	if len(c.idxDefs) > 0 {
-		children = append(children, c.indexesDebugString())
+		children = append(children, c.indexesDebugString(ctx))
 	}
 	if len(c.checks) > 0 {
-		children = append(children, c.checkConstraintsDebugString())
+		children = append(children, c.checkConstraintsDebugString(ctx))
 	}
 
 	p.WriteChildren(children...)
 	return p.String()
 }
 
-func (c *CreateTable) foreignKeysDebugString() string {
+func (c *CreateTable) foreignKeysDebugString(ctx *sql.Context) string {
 	p := sql.NewTreePrinter()
 	p.WriteNode("ForeignKeys")
 	var children []string
 	for _, def := range c.fkDefs {
-		children = append(children, sql.DebugString(def))
+		children = append(children, sql.DebugString(ctx, def))
 	}
 	p.WriteChildren(children...)
 	return p.String()
 }
 
-func (c *CreateTable) indexesDebugString() string {
+func (c *CreateTable) indexesDebugString(ctx *sql.Context) string {
 	p := sql.NewTreePrinter()
 	p.WriteNode("Indexes")
 	var children []string
 	for _, def := range c.idxDefs {
-		children = append(children, sql.DebugString(def))
+		children = append(children, sql.DebugString(ctx, def))
 	}
 	p.WriteChildren(children...)
 	return p.String()
 }
 
-func (c *CreateTable) checkConstraintsDebugString() string {
+func (c *CreateTable) checkConstraintsDebugString(ctx *sql.Context) string {
 	p := sql.NewTreePrinter()
 	p.WriteNode("CheckConstraints")
 	var children []string
 	for _, def := range c.checks {
-		children = append(children, sql.DebugString(def))
+		children = append(children, sql.DebugString(ctx, def))
 	}
 	p.WriteChildren(children...)
 	return p.String()
 }
 
-func (c *CreateTable) schemaDebugString() string {
+func (c *CreateTable) schemaDebugString(ctx *sql.Context) string {
 	p := sql.NewTreePrinter()
 	p.WriteNode("Columns")
 	var children []string
 	for _, col := range c.pkSch.Schema {
-		children = append(children, sql.DebugString(col))
+		children = append(children, sql.DebugString(ctx, col))
 	}
 	p.WriteChildren(children...)
 	return p.String()
 }
 
 // Schema implements the sql.Node interface.
-func (c *CreateTable) Schema() sql.Schema {
+func (c *CreateTable) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -283,7 +288,7 @@ func (c *CreateTable) Children() []sql.Node {
 }
 
 // WithChildren implements the Node interface.
-func (c *CreateTable) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (c *CreateTable) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	nc := *c
 	if len(children) == 0 {
 		return &nc, nil
@@ -297,16 +302,6 @@ func (c *CreateTable) WithChildren(children ...sql.Node) (sql.Node, error) {
 		return &nc, nil
 	}
 	return nil, sql.ErrInvalidChildrenNumber.New(c, len(children), 1)
-}
-
-// CheckPrivileges implements the Node interface.
-func (c *CreateTable) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	priv := sql.PrivilegeType_Create
-	if c.temporary {
-		priv = sql.PrivilegeType_CreateTempTable
-	}
-	subject := sql.PrivilegeCheckSubject{Database: CheckPrivilegeNameForDatabase(c.Db)}
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, priv))
 }
 
 // IsReadOnly implements the Node interface.
@@ -326,7 +321,7 @@ func (c *CreateTable) Expressions() []sql.Expression {
 }
 
 // WithExpressions implements the sql.Expressioner interface.
-func (c *CreateTable) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (c *CreateTable) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	schemaLen := len(c.pkSch.Schema)
 	length := schemaLen + len(c.checks)
 	if len(exprs) != length {
@@ -370,11 +365,6 @@ func (c *CreateTable) CreateForeignKeys(ctx *sql.Context, tableNode sql.Table) e
 	}
 
 	for i, fkDef := range c.fkDefs {
-		if fkDef.OnUpdate == sql.ForeignKeyReferentialAction_SetDefault ||
-			fkDef.OnDelete == sql.ForeignKeyReferentialAction_SetDefault {
-			return sql.ErrForeignKeySetDefault.New()
-		}
-
 		if fkChecks.(int8) == 1 {
 			fkParentTbl := c.fkParentTbls[i]
 			// If a foreign key is self-referential then the analyzer uses a nil since the table does not yet exist
@@ -416,14 +406,14 @@ func (c *CreateTable) WithParentForeignKeyTables(refTbls []sql.ForeignKeyTable) 
 }
 
 // CreateChecks creates the check constraints on the table.
-func (c *CreateTable) CreateChecks(ctx *sql.Context, tableNode sql.Table) error {
+func (c *CreateTable) CreateChecks(ctx *sql.Context, tableNode sql.Table, schemaFormatter sql.SchemaFormatter) error {
 	chAlterable, ok := tableNode.(sql.CheckAlterableTable)
 	if !ok {
 		return ErrNoCheckConstraintSupport.New(c.name)
 	}
 
 	for _, ch := range c.checks {
-		check, err := NewCheckDefinition(ctx, ch)
+		check, err := NewCheckDefinition(ctx, ch, schemaFormatter)
 		if err != nil {
 			return err
 		}
@@ -469,12 +459,12 @@ func (c *CreateTable) Select() sql.Node {
 	return c.selectNode
 }
 
-func (c *CreateTable) ValidateDefaultPosition() error {
+func (c *CreateTable) ValidateDefaultPosition(ctx *sql.Context) error {
 	colsAfterThis := make(map[string]*sql.Column)
 	for i := len(c.pkSch.Schema) - 1; i >= 0; i-- {
 		col := c.pkSch.Schema[i]
 		colsAfterThis[col.Name] = col
-		if err := inspectDefaultForInvalidColumns(col, colsAfterThis); err != nil {
+		if err := inspectDefaultForInvalidColumns(ctx, col, colsAfterThis); err != nil {
 			return err
 		}
 	}
@@ -485,8 +475,8 @@ func (c *CreateTable) ValidateDefaultPosition() error {
 // DropTable is a node describing dropping one or more tables
 type DropTable struct {
 	Tables       []sql.Node
-	ifExists     bool
 	TriggerNames []string
+	ifExists     bool
 }
 
 var _ sql.Node = (*DropTable)(nil)
@@ -549,12 +539,12 @@ func (d *DropTable) IsReadOnly() bool {
 }
 
 // Schema implements the sql.Expression interface.
-func (d *DropTable) Schema() sql.Schema {
+func (d *DropTable) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
 // WithChildren implements the Node interface.
-func (d *DropTable) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (d *DropTable) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	// Number of children can be smaller than original as the non-existent
 	// tables get filtered out in some cases
 	var newChildren = make([]sql.Node, len(children))
@@ -562,21 +552,6 @@ func (d *DropTable) WithChildren(children ...sql.Node) (sql.Node, error) {
 	nd := *d
 	nd.Tables = newChildren
 	return &nd, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (d *DropTable) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	for _, tbl := range d.Tables {
-		subject := sql.PrivilegeCheckSubject{
-			Database: CheckPrivilegeNameForDatabase(GetDatabase(tbl)),
-			Table:    getTableName(tbl),
-		}
-
-		if !opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Drop)) {
-			return false
-		}
-	}
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/encodings"
 )
 
 var (
@@ -37,36 +39,62 @@ var _ sql.CollationCoercible = JsonType{}
 type JsonType struct{}
 
 // Compare implements Type interface.
-func (t JsonType) Compare(a interface{}, b interface{}) (int, error) {
+func (t JsonType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
-	return CompareJSON(a, b)
+	return CompareJSON(ctx, a, b)
+}
+
+// convertJSONValue parses JSON-encoded data if the input is a string or []byte, returning the resulting JSONDocument. For
+// other types, the value is returned if it can be marshalled.
+func convertJSONValue(v interface{}) (interface{}, sql.ConvertInRange, error) {
+	var data []byte
+	var charsetMaxLength int64 = 1
+	switch x := v.(type) {
+	case []byte:
+		data = x
+	case string:
+		data = []byte(x)
+		charsetMaxLength = sql.Collation_Default.CharacterSet().MaxLength()
+	default:
+		// if |v| can be marshalled, it contains
+		// a valid JSON document representation
+		if b, berr := json.Marshal(v); berr == nil {
+			data = b
+		} else {
+			return nil, sql.InRange, nil
+		}
+	}
+
+	if int64(len(data))*charsetMaxLength > MaxJsonFieldByteLength {
+		return nil, sql.InRange, ErrLengthTooLarge.New(len(data), MaxJsonFieldByteLength)
+	}
+
+	var val interface{}
+	if err := json.Unmarshal(data, &val); err != nil {
+		return nil, sql.InRange, sql.ErrInvalidJson.New(err.Error())
+	}
+
+	return JSONDocument{Val: val}, sql.InRange, nil
 }
 
 // Convert implements Type interface.
-func (t JsonType) Convert(v interface{}) (doc interface{}, inRange sql.ConvertInRange, err error) {
+func (t JsonType) Convert(c context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
 	switch v := v.(type) {
 	case sql.JSONWrapper:
 		return v, sql.InRange, nil
 	case []byte:
-		if int64(len(v)) > MaxJsonFieldByteLength {
-			return nil, sql.InRange, ErrLengthTooLarge.New(len(v), MaxJsonFieldByteLength)
-		}
-		err = json.Unmarshal(v, &doc)
-		if err != nil {
-			return nil, sql.OutOfRange, sql.ErrInvalidJson.New(err.Error())
-		}
+		return convertJSONValue(v)
 	case string:
-		charsetMaxLength := sql.Collation_Default.CharacterSet().MaxLength()
-		length := int64(len(v)) * charsetMaxLength
-		if length > MaxJsonFieldByteLength {
-			return nil, sql.InRange, ErrLengthTooLarge.New(length, MaxJsonFieldByteLength)
-		}
-		err = json.Unmarshal([]byte(v), &doc)
+		return convertJSONValue(v)
+	// Text values may be stored in wrappers (e.g. Dolt's TextStorage), so unwrap to the raw string before decoding.
+	case sql.StringWrapper:
+		str, err := v.Unwrap(c)
 		if err != nil {
-			return nil, sql.OutOfRange, sql.ErrInvalidJson.New(err.Error())
+			return nil, sql.InRange, err
 		}
+		return convertJSONValue(str)
 	case int8:
 		return JSONDocument{Val: int64(v)}, sql.InRange, nil
 	case int16:
@@ -90,22 +118,8 @@ func (t JsonType) Convert(v interface{}) (doc interface{}, inRange sql.ConvertIn
 	case decimal.Decimal:
 		return JSONDocument{Val: v}, sql.InRange, nil
 	default:
-		// if |v| can be marshalled, it contains
-		// a valid JSON document representation
-		if b, berr := json.Marshal(v); berr == nil {
-			if int64(len(b)) > MaxJsonFieldByteLength {
-				return nil, sql.InRange, ErrLengthTooLarge.New(len(b), MaxJsonFieldByteLength)
-			}
-			err = json.Unmarshal(b, &doc)
-			if err != nil {
-				return nil, sql.OutOfRange, sql.ErrInvalidJson.New(err.Error())
-			}
-		}
+		return convertJSONValue(v)
 	}
-	if err != nil {
-		return nil, sql.OutOfRange, err
-	}
-	return JSONDocument{Val: doc}, sql.InRange, nil
 }
 
 // Equals implements the Type interface.
@@ -136,24 +150,24 @@ func (t JsonType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Va
 	// This is kind of a hack, and it means that reading JSON from tables no longer matches MySQL byte-for-byte.
 	// But its worth it to avoid the round-trip, which can be very slow.
 	if j, ok := v.(JSONBytes); ok {
-		str, err := MarshallJson(j)
+		str, err := MarshallJson(ctx, j)
 		if err != nil {
 			return sqltypes.NULL, err
 		}
-		val = AppendAndSliceBytes(dest, str)
+		val = str
 	} else {
 		// Convert to jsonType
-		jsVal, _, err := t.Convert(v)
+		jsVal, _, err := t.Convert(ctx, v)
 		if err != nil {
 			return sqltypes.NULL, err
 		}
 		js := jsVal.(sql.JSONWrapper)
 
-		str, err := StringifyJSON(js)
+		str, err := JsonToMySqlString(ctx, js)
 		if err != nil {
 			return sqltypes.NULL, err
 		}
-		val = AppendAndSliceString(dest, str)
+		val = encodings.StringToBytes(str)
 	}
 
 	return sqltypes.MakeTrusted(sqltypes.TypeJSON, val), nil

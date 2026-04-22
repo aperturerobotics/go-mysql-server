@@ -23,18 +23,18 @@ import (
 )
 
 type UnaryFunc struct {
-	expression.UnaryExpression
-	// Name is the name of the function
-	Name string
+	expression.UnaryExpressionStub
 	// The type returned by the function
 	RetType sql.Type
+	// Name is the name of the function
+	Name string
 }
 
 func NewUnaryFunc(arg sql.Expression, name string, returnType sql.Type) *UnaryFunc {
 	return &UnaryFunc{
-		UnaryExpression: expression.UnaryExpression{Child: arg},
-		Name:            name,
-		RetType:         returnType,
+		UnaryExpressionStub: expression.UnaryExpressionStub{Child: arg},
+		Name:                name,
+		RetType:             returnType,
 	}
 }
 
@@ -58,6 +58,6 @@ func (uf *UnaryFunc) String() string {
 }
 
 // Type implements the Expression interface.
-func (uf *UnaryFunc) Type() sql.Type {
+func (uf *UnaryFunc) Type(ctx *sql.Context) sql.Type {
 	return uf.RetType
 }

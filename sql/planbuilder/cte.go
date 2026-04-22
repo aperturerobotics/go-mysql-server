@@ -42,11 +42,6 @@ func (b *Builder) buildWith(inScope *scope, with *ast.With) (outScope *scope) {
 	outScope = inScope.push()
 
 	for _, cte := range with.Ctes {
-		cte, ok := cte.(*ast.CommonTableExpr)
-		if !ok {
-			b.handleErr(sql.ErrUnsupportedFeature.New(fmt.Sprintf("Unsupported type of common table expression %T", cte)))
-		}
-
 		ate := cte.AliasedTableExpr
 		sq, ok := ate.Expr.(*ast.Subquery)
 		if !ok {
@@ -90,18 +85,15 @@ func (b *Builder) buildCte(inScope *scope, e ast.TableExpr, name string, columns
 
 func (b *Builder) buildRecursiveCte(inScope *scope, union *ast.SetOp, name string, columns []string) *scope {
 	l, r := splitRecursiveCteUnion(name, union)
+	scopeMapping := make(map[sql.ColumnId]sql.Expression)
 	if r == nil {
 		// not recursive
 		sqScope := inScope.pushSubquery()
 		cteScope := b.buildSelectStmt(sqScope, union)
-		b.renameSource(cteScope, name, columns)
+
 		switch n := cteScope.node.(type) {
 		case *plan.SetOp:
-			sq := plan.NewSubqueryAlias(name, "", n)
 			b.qFlags.Set(sql.QFlagRelSubquery)
-			sq = sq.WithColumnNames(columns)
-			sq = sq.WithCorrelated(sqScope.correlated())
-			sq = sq.WithVolatile(sqScope.volatile())
 
 			tabId := cteScope.addTable(name)
 			var colset sql.ColSet
@@ -109,10 +101,13 @@ func (b *Builder) buildRecursiveCte(inScope *scope, union *ast.SetOp, name strin
 				c.tableId = tabId
 				cteScope.cols[i] = c
 				colset.Add(sql.ColumnId(c.id))
+				scopeMapping[sql.ColumnId(c.id)] = c.scalarGf()
 			}
-
-			cteScope.node = sq.WithId(tabId).WithColumns(colset)
+			cteScope.node = plan.NewSubqueryAlias(name, "", n).
+				WithColumnNames(columns).WithCorrelated(sqScope.correlated()).WithVolatile(sqScope.volatile()).
+				WithScopeMapping(scopeMapping).WithId(tabId).WithColumns(colset)
 		}
+		b.renameSource(cteScope, name, columns)
 		return cteScope
 	}
 
@@ -133,11 +128,10 @@ func (b *Builder) buildRecursiveCte(inScope *scope, union *ast.SetOp, name strin
 	cteScope := leftScope.replace()
 	tableId := cteScope.addTable(name)
 	var cols sql.ColSet
-	scopeMapping := make(map[sql.ColumnId]sql.Expression)
 	{
 		rInit = leftScope.node
-		recSch = make(sql.Schema, len(rInit.Schema()))
-		for i, c := range rInit.Schema() {
+		recSch = make(sql.Schema, len(rInit.Schema(b.ctx)))
+		for i, c := range rInit.Schema(b.ctx) {
 			newC := c.Copy()
 			if len(columns) > 0 {
 				newC.Name = columns[i]
@@ -154,11 +148,13 @@ func (b *Builder) buildRecursiveCte(inScope *scope, union *ast.SetOp, name strin
 			c.scalar = nil
 			c.table = name
 			toId := cteScope.newColumn(c)
-			scopeMapping[sql.ColumnId(toId)] = c.scalarGf()
 			cols.Add(sql.ColumnId(toId))
 		}
 		b.renameSource(cteScope, name, columns)
 
+		for _, c := range cteScope.cols {
+			scopeMapping[sql.ColumnId(c.id)] = c.scalarGf()
+		}
 		rTable = plan.NewRecursiveTable(name, recSch)
 		cteScope.node = rTable.WithId(tableId).WithColumns(cols)
 	}
@@ -193,20 +189,15 @@ func (b *Builder) buildRecursiveCte(inScope *scope, union *ast.SetOp, name strin
 		sortFields = append(sortFields, sf)
 	}
 
-	rcte := plan.NewRecursiveCte(rInit, rightScope.node, name, columns, distinct, limit, sortFields)
-	rcte = rcte.WithSchema(recSch).WithWorking(rTable)
 	corr := leftSqScope.correlated().Union(rightInScope.correlated())
 	vol := leftSqScope.activeSubquery.volatile || rightInScope.activeSubquery.volatile
 
-	rcteId := rcte.WithId(tableId).WithColumns(cols)
-
-	sq := plan.NewSubqueryAlias(name, "", rcteId)
 	b.qFlags.Set(sql.QFlagRelSubquery)
-	sq = sq.WithColumnNames(columns)
-	sq = sq.WithCorrelated(corr)
-	sq = sq.WithVolatile(vol)
-	sq = sq.WithScopeMapping(scopeMapping)
-	cteScope.node = sq.WithId(tableId).WithColumns(cols)
+	cteScope.node = plan.NewSubqueryAlias(name, "",
+		plan.NewRecursiveCte(rInit, rightScope.node, name, columns, distinct, limit, sortFields).
+			WithSchema(recSch).WithWorking(rTable).WithId(tableId).WithColumns(cols)).
+		WithColumnNames(columns).WithCorrelated(corr).WithVolatile(vol).WithScopeMapping(scopeMapping).
+		WithId(tableId).WithColumns(cols)
 	b.renameSource(cteScope, name, columns)
 	return cteScope
 }

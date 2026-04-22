@@ -19,15 +19,14 @@ import (
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/go-mysql-server/sql/mysql_db"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
 // DropRole represents the statement DROP ROLE.
 type DropRole struct {
-	IfExists bool
-	Roles    []UserName
 	MySQLDb  sql.Database
+	Roles    []UserName
+	IfExists bool
 }
 
 // NewDropRole returns a new DropRole node.
@@ -44,7 +43,7 @@ var _ sql.Databaser = (*DropRole)(nil)
 var _ sql.CollationCoercible = (*DropRole)(nil)
 
 // Schema implements the interface sql.Node.
-func (n *DropRole) Schema() sql.Schema {
+func (n *DropRole) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -89,65 +88,14 @@ func (n *DropRole) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (n *DropRole) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (n *DropRole) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(n, len(children), 0)
 	}
 	return n, nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (n *DropRole) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{}
-	// Both DROP ROLE and CREATE USER are valid privileges, so we use an OR
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_DropRole)) ||
-		opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_CreateUser))
-}
-
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (*DropRole) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.Collation_binary, 7
-}
-
-// RowIter implements the interface sql.Node.
-func (n *DropRole) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
-	mysqlDb, ok := n.MySQLDb.(*mysql_db.MySQLDb)
-	if !ok {
-		return nil, sql.ErrDatabaseNotFound.New("mysql")
-	}
-
-	editor := mysqlDb.Editor()
-	defer editor.Close()
-
-	for _, role := range n.Roles {
-		userPk := mysql_db.UserPrimaryKey{
-			Host: role.Host,
-			User: role.Name,
-		}
-		if role.AnyHost {
-			userPk.Host = "%"
-		}
-		existingUser, ok := editor.GetUser(userPk)
-		if !ok {
-			if n.IfExists {
-				continue
-			}
-			return nil, sql.ErrRoleDeletionFailure.New(role.String("'"))
-		}
-
-		//TODO: if a role is mentioned in the "mandatory_roles" system variable then they cannot be dropped
-		editor.RemoveUser(userPk)
-		editor.RemoveRoleEdgesFromKey(mysql_db.RoleEdgesFromKey{
-			FromHost: existingUser.Host,
-			FromUser: existingUser.User,
-		})
-		editor.RemoveRoleEdgesToKey(mysql_db.RoleEdgesToKey{
-			ToHost: existingUser.Host,
-			ToUser: existingUser.User,
-		})
-	}
-	if err := mysqlDb.Persist(ctx, editor); err != nil {
-		return nil, err
-	}
-	return sql.RowsToRowIter(sql.Row{types.NewOkResult(0)}), nil
 }

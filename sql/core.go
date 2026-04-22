@@ -15,14 +15,21 @@
 package sql
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"math"
 	trace2 "runtime/trace"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/shopspring/decimal"
+	"gopkg.in/src-d/go-errors.v1"
+
+	"github.com/dolthub/go-mysql-server/sql/values"
 )
 
 // Expression is a combination of one or more SQL expressions.
@@ -30,9 +37,9 @@ type Expression interface {
 	Resolvable
 	fmt.Stringer
 	// Type returns the expression type.
-	Type() Type
+	Type(ctx *Context) Type
 	// IsNullable returns whether the expression can be null.
-	IsNullable() bool
+	IsNullable(ctx *Context) bool
 	// Eval evaluates the given row and returns a result.
 	Eval(ctx *Context, row Row) (interface{}, error)
 	// Children returns the children expressions of this expression.
@@ -41,7 +48,17 @@ type Expression interface {
 	// It will return an error if the number of children is different than
 	// the current number of children. They must be given in the same order
 	// as they are returned by Children.
-	WithChildren(children ...Expression) (Expression, error)
+	WithChildren(ctx *Context, children ...Expression) (Expression, error)
+}
+
+// RowIterExpression is an Expression that returns a RowIter rather than a scalar, used to implement functions that
+// return sets.
+type RowIterExpression interface {
+	Expression
+	// EvalRowIter evaluates the expression, which must be a RowIter
+	EvalRowIter(ctx *Context, r Row) (RowIter, error)
+	// ReturnsRowIter returns whether this expression returns a RowIter
+	ReturnsRowIter() bool
 }
 
 // ExpressionWithNodes is an expression that contains nodes as children.
@@ -52,7 +69,7 @@ type ExpressionWithNodes interface {
 	// WithNodeChildren returns a copy of the expression with its node children replaced. It will return an error if the
 	// number of children is different than the current number of children. They must be given in the same order as they
 	// are returned by NodeChildren.
-	WithNodeChildren(children ...Node) (ExpressionWithNodes, error)
+	WithNodeChildren(ctx *Context, children ...Node) (ExpressionWithNodes, error)
 }
 
 // NonDeterministicExpression allows a way for expressions to declare that they are non-deterministic, which will
@@ -64,24 +81,33 @@ type NonDeterministicExpression interface {
 	IsNonDeterministic() bool
 }
 
+// IsNullExpression indicates that this expression tests for IS NULL.
+type IsNullExpression interface {
+	Expression
+	IsNullExpression() bool
+}
+
+// IsNotNullExpression indicates that this expression tests for IS NOT NULL. Note that in some cases in some
+// database engines, such as records in Postgres, IS NOT NULL is not identical to NOT(IS NULL).
+type IsNotNullExpression interface {
+	Expression
+	IsNotNullExpression() bool
+}
+
 // Node is a node in the execution plan tree.
 type Node interface {
 	Resolvable
 	fmt.Stringer
 	// Schema of the node.
-	Schema() Schema
+	Schema(ctx *Context) Schema
 	// Children nodes.
 	Children() []Node
 	// WithChildren returns a copy of the node with children replaced.
 	// It will return an error if the number of children is different than
 	// the current number of children. They must be given in the same order
 	// as they are returned by Children.
-	WithChildren(children ...Node) (Node, error)
-	// CheckPrivileges passes the operations representative of this Node to the PrivilegedOperationChecker to determine
-	// whether a user (contained in the context, along with their active roles) has the necessary privileges to execute
-	// this node (and its children).
-	CheckPrivileges(ctx *Context, opChecker PrivilegedOperationChecker) bool
-
+	WithChildren(ctx *Context, children ...Node) (Node, error)
+	// IsReadOnly returns whether the node is read-only.
 	IsReadOnly() bool
 }
 
@@ -90,11 +116,20 @@ type NodeExecBuilder interface {
 	Build(ctx *Context, n Node, r Row) (RowIter, error)
 }
 
-// ExecSourceRel is a node that has no children and is directly
-// row generating.
+// ExecSourceRel is a node that has no children and is directly row generating.
+// See also |ExecBuilderNode| for nodes that want to control their own iterator generation but have children
+// they need to build iterators for.
 type ExecSourceRel interface {
 	Node
+	// RowIter returns a RowIter for this node
 	RowIter(ctx *Context, r Row) (RowIter, error)
+}
+
+// ExecBuilderNode is a that generates its own RowIter given a builder.
+type ExecBuilderNode interface {
+	Node
+	// BuildRowIter builds a RowIter for the node with the builder provided
+	BuildRowIter(ctx *Context, b NodeExecBuilder, r Row) (RowIter, error)
 }
 
 // Nameable is something that has a name.
@@ -163,7 +198,7 @@ type Expressioner interface {
 	// It will return an error if the number of expressions is different than
 	// the current number of expressions. They must be given in the same order
 	// as they are returned by Expressions.
-	WithExpressions(...Expression) (Node, error)
+	WithExpressions(ctx *Context, exprs ...Expression) (Node, error)
 }
 
 // SchemaTarget is a node that has a target schema that can be set during analysis. This is necessary because some
@@ -179,7 +214,7 @@ type SchemaTarget interface {
 // PrimaryKeySchemaTarget is a node that has a primary key target schema that can be set
 type PrimaryKeySchemaTarget interface {
 	SchemaTarget
-	WithPrimaryKeySchema(schema PrimaryKeySchema) (Node, error)
+	WithPrimaryKeySchema(ctx *Context, schema PrimaryKeySchema) (Node, error)
 }
 
 // DynamicColumnsTable is a table with a schema that is variable depending
@@ -253,6 +288,7 @@ type Lockable interface {
 }
 
 // ConvertToBool converts a value to a boolean. nil is considered false.
+// TODO: the logic here should be merged with types.Boolean.Convert()
 func ConvertToBool(ctx *Context, v interface{}) (bool, error) {
 	switch b := v.(type) {
 	case []uint8:
@@ -288,10 +324,8 @@ func ConvertToBool(ctx *Context, v interface{}) (bool, error) {
 	case float64:
 		return b != 0, nil
 	case string:
-		bFloat, err := strconv.ParseFloat(b, 64)
+		bFloat, err := strconv.ParseFloat(TrimStringToNumberPrefix(ctx, b, false), 64)
 		if err != nil {
-			// In MySQL, if the string does not represent a float then it's false
-			ctx.Warn(1292, "Truncated incorrect DOUBLE value: '%s'", b)
 			return false, nil
 		}
 		return bFloat != 0, nil
@@ -302,6 +336,85 @@ func ConvertToBool(ctx *Context, v interface{}) (bool, error) {
 	default:
 		return false, fmt.Errorf("unable to cast %#v of type %T to bool", v, v)
 	}
+}
+
+const (
+	// IntCutSet is the set of characters that should be trimmed from the beginning and end of a string
+	//   when converting to a signed or unsigned integer
+	IntCutSet = " \t"
+
+	// NumericCutSet is the set of characters to trim from a string before converting it to a number.
+	NumericCutSet = " \t\n\r"
+)
+
+var ErrVectorInvalidBinaryLength = errors.NewKind("cannot convert BINARY(%d) to vector, byte length must be a multiple of 4 bytes")
+
+// DecodeVector decodes a byte slice that represents a vector. This is needed for distance functions.
+func DecodeVector(buf []byte) ([]float32, error) {
+	if len(buf)%int(values.Float32Size) != 0 {
+		return nil, ErrVectorInvalidBinaryLength.New(len(buf))
+	}
+	return unsafe.Slice((*float32)(unsafe.Pointer(&buf[0])), len(buf)/int(values.Float32Size)), nil
+}
+
+// EncodeVector encodes a byte slice that represents a vector.
+func EncodeVector(floats []float32) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&floats[0])), len(floats)*int(values.Float32Size))
+}
+
+func ConvertToVector(ctx context.Context, v interface{}) ([]float32, error) {
+	var err error
+	v, err = UnwrapAny(ctx, v)
+	if err != nil {
+		return nil, err
+	}
+	switch b := v.(type) {
+	case []float32:
+		return b, nil
+	case []byte:
+		return DecodeVector(b)
+	case string:
+		var val interface{}
+		err := json.Unmarshal([]byte(b), &val)
+		if err != nil {
+			return nil, fmt.Errorf("can't convert JSON to vector: %w", err)
+		}
+		return convertJsonInterfaceToVector(val)
+	case JSONWrapper:
+		val, err := b.ToInterface(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return convertJsonInterfaceToVector(val)
+	default:
+		return nil, fmt.Errorf("unable to cast %#v of type %T to vector", v, v)
+	}
+}
+
+func convertJsonInterfaceToVector(val interface{}) ([]float32, error) {
+	array, ok := val.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("can't convert JSON to vector; expected array, got %T", val)
+	}
+	res := make([]float32, len(array))
+	for i, elem := range array {
+		switch v := elem.(type) {
+		case float32:
+			res[i] = v
+		case float64:
+			if v > math.MaxFloat32 || v < -math.MaxFloat32 {
+				return nil, fmt.Errorf("data cannot be converted to a valid vector: %v", v)
+			}
+			res[i] = float32(v)
+		case int64:
+			res[i] = float32(v)
+		case int32:
+			res[i] = float32(v)
+		default:
+			return nil, fmt.Errorf("can't convert JSON to vector; expected array of floats, but array contained %T", elem)
+		}
+	}
+	return res, nil
 }
 
 // EvaluateCondition evaluates a condition, which is an expression whose value
@@ -339,27 +452,30 @@ func IsTrue(val interface{}) bool {
 // a node or expression to be printed in greater detail than its default String() representation.
 type DebugStringer interface {
 	// DebugString prints a debug string of the node in question.
-	DebugString() string
+	DebugString(ctx *Context) string
 }
 
 // DebugString returns a debug string for the Node or Expression given.
-func DebugString(nodeOrExpression interface{}) string {
+func DebugString(ctx *Context, nodeOrExpression interface{}) string {
 	if ds, ok := nodeOrExpression.(DebugStringer); ok {
-		return ds.DebugString()
+		return ds.DebugString(ctx)
 	}
 	if s, ok := nodeOrExpression.(fmt.Stringer); ok {
 		return s.String()
 	}
+	if nodeOrExpression == nil {
+		return ""
+	}
 	panic(fmt.Sprintf("Expected sql.DebugString or fmt.Stringer for %T", nodeOrExpression))
 }
 
-// Expression2 is an experimental future interface alternative to Expression to provide faster access.
-type Expression2 interface {
+// ValueExpression is an experimental future interface alternative to Expression to provide faster access.
+type ValueExpression interface {
 	Expression
-	// Eval2 evaluates the given row frame and returns a result.
-	Eval2(ctx *Context, row Row2) (Value, error)
-	// Type2 returns the expression type.
-	Type2() Type2
+	// EvalValue evaluates the given row frame and returns a result.
+	EvalValue(ctx *Context, row ValueRow) (Value, error)
+	// IsValueExpression indicates whether this expression and all its children support ValueExpression.
+	IsValueExpression(ctx *Context) bool
 }
 
 var SystemVariables SystemVariableRegistry
@@ -376,7 +492,7 @@ type SystemVariableRegistry interface {
 	// GetGlobal returns the current global value of the system variable with the given name
 	GetGlobal(name string) (SystemVariable, interface{}, bool)
 	// SetGlobal sets the global value of the system variable with the given name
-	SetGlobal(name string, val interface{}) error
+	SetGlobal(ctx *Context, name string, val interface{}) error
 	// GetAllGlobalVariables returns a copy of all global variable values.
 	GetAllGlobalVariables() map[string]interface{}
 }
@@ -397,12 +513,12 @@ type SystemVariable interface {
 	// InitValue sets value without validation.
 	// This is used for setting the initial values internally
 	// using pre-defined variables or for test-purposes.
-	InitValue(val any, global bool) (SystemVarValue, error)
+	InitValue(ctx *Context, val any, global bool) (SystemVarValue, error)
 	// SetValue sets the value of the sv of given scope, global or session
 	// It validates setting value of correct scope,
 	// converts the given value to appropriate value depending on the sv
 	// and it returns the SystemVarValue with the updated value.
-	SetValue(val any, global bool) (SystemVarValue, error)
+	SetValue(ctx *Context, val any, global bool) (SystemVarValue, error)
 	// IsReadOnly checks whether the variable is read only.
 	// It returns false if variable can be set to a value.
 	IsReadOnly() bool
@@ -417,20 +533,12 @@ var _ SystemVariable = (*MysqlSystemVariable)(nil)
 
 // MysqlSystemVariable represents a mysql system variable.
 type MysqlSystemVariable struct {
-	// Name is the name of the system variable.
-	Name string
-	// Scope defines the scope of the system variable, which is either Global, Session, or Both.
-	Scope *MysqlScope
-	// Dynamic defines whether the variable may be written to during runtime. Variables with this set to `false` will
-	// return an error if a user attempts to set a value.
-	Dynamic bool
-	// SetVarHintApplies defines if the variable may be set for a single query using SET_VAR().
-	// https://dev.mysql.com/doc/refman/8.0/en/optimizer-hints.html#optimizer-hints-set-var
-	SetVarHintApplies bool
 	// Type defines the type of the system variable. This may be a special type not accessible to standard MySQL operations.
 	Type Type
 	// Default defines the default value of the system variable.
 	Default interface{}
+	// Scope defines the scope of the system variable, which is either Global, Session, or Both.
+	Scope *MysqlScope
 	// NotifyChanged is called by the engine if the value of this variable
 	// changes during runtime.  It is typically |nil|, but can be used for
 	// system variables which control the behavior of the running server.
@@ -442,12 +550,20 @@ type MysqlSystemVariable struct {
 	// the global context and in a particular session. They should never
 	// block.  NotifyChanged is not called when a new system variable is
 	// registered.
-	NotifyChanged func(SystemVariableScope, SystemVarValue) error
+	NotifyChanged func(*Context, SystemVariableScope, SystemVarValue) error
 	// ValueFunction defines an optional function that is executed to provide
 	// the value of this system variable whenever it is requested. System variables
 	// that provide a ValueFunction should also set Dynamic to false, since they
 	// cannot be assigned a value and will return a read-only error if tried.
 	ValueFunction func() (interface{}, error)
+	// Name is the name of the system variable.
+	Name string
+	// Dynamic defines whether the variable may be written to during runtime. Variables with this set to `false` will
+	// return an error if a user attempts to set a value.
+	Dynamic bool
+	// SetVarHintApplies defines if the variable may be set for a single query using SET_VAR().
+	// https://dev.mysql.com/doc/refman/8.0/en/optimizer-hints.html#optimizer-hints-set-var
+	SetVarHintApplies bool
 }
 
 // GetName implements SystemVariable.
@@ -476,8 +592,8 @@ func (m *MysqlSystemVariable) GetDefault() any {
 }
 
 // InitValue implements SystemVariable.
-func (m *MysqlSystemVariable) InitValue(val any, global bool) (SystemVarValue, error) {
-	convertedVal, _, err := m.Type.Convert(val)
+func (m *MysqlSystemVariable) InitValue(ctx *Context, val any, global bool) (SystemVarValue, error) {
+	convertedVal, _, err := m.Type.Convert(ctx, val)
 	if err != nil {
 		return SystemVarValue{}, err
 	}
@@ -490,7 +606,7 @@ func (m *MysqlSystemVariable) InitValue(val any, global bool) (SystemVarValue, e
 		scope = GetMysqlScope(SystemVariableScope_Global)
 	}
 	if m.NotifyChanged != nil {
-		err = m.NotifyChanged(scope, svv)
+		err = m.NotifyChanged(ctx, scope, svv)
 		if err != nil {
 			return SystemVarValue{}, err
 		}
@@ -499,7 +615,7 @@ func (m *MysqlSystemVariable) InitValue(val any, global bool) (SystemVarValue, e
 }
 
 // SetValue implements SystemVariable.
-func (m *MysqlSystemVariable) SetValue(val any, global bool) (SystemVarValue, error) {
+func (m *MysqlSystemVariable) SetValue(ctx *Context, val any, global bool) (SystemVarValue, error) {
 	if global && m.Scope.Type == SystemVariableScope_Session {
 		return SystemVarValue{}, ErrSystemVariableSessionOnly.New(m.Name)
 	}
@@ -509,7 +625,7 @@ func (m *MysqlSystemVariable) SetValue(val any, global bool) (SystemVarValue, er
 	if !m.Dynamic || m.ValueFunction != nil {
 		return SystemVarValue{}, ErrSystemVariableReadOnly.New(m.Name)
 	}
-	return m.InitValue(val, global)
+	return m.InitValue(ctx, val, global)
 }
 
 // IsReadOnly implements SystemVariable.
@@ -557,7 +673,7 @@ func GetMysqlScope(t MysqlSVScopeType) *MysqlScope {
 func (m *MysqlScope) SetValue(ctx *Context, name string, val any) error {
 	switch m.Type {
 	case SystemVariableScope_Global:
-		err := SystemVariables.SetGlobal(name, val)
+		err := SystemVariables.SetGlobal(ctx, name, val)
 		if err != nil {
 			return err
 		}
@@ -571,11 +687,11 @@ func (m *MysqlScope) SetValue(ctx *Context, name string, val any) error {
 		if !ok {
 			return ErrSessionDoesNotSupportPersistence.New()
 		}
-		err := persistSess.PersistGlobal(name, val)
+		err := persistSess.PersistGlobal(ctx, name, val)
 		if err != nil {
 			return err
 		}
-		err = SystemVariables.SetGlobal(name, val)
+		err = SystemVariables.SetGlobal(ctx, name, val)
 		if err != nil {
 			return err
 		}
@@ -584,7 +700,7 @@ func (m *MysqlScope) SetValue(ctx *Context, name string, val any) error {
 		if !ok {
 			return ErrSessionDoesNotSupportPersistence.New()
 		}
-		err := persistSess.PersistGlobal(name, val)
+		err := persistSess.PersistGlobal(ctx, name, val)
 		if err != nil {
 			return err
 		}
@@ -737,10 +853,10 @@ type StatusVariable interface {
 
 // MySQLStatusVariable represents a mysql status variable.
 type MySQLStatusVariable struct {
-	Name    string
-	Scope   StatusVariableScope
 	Type    Type
 	Default interface{}
+	Name    string
+	Scope   StatusVariableScope
 }
 
 var _ StatusVariable = (*MySQLStatusVariable)(nil)
@@ -840,4 +956,45 @@ func (s *ImmutableStatusVarValue) Copy() StatusVarValue {
 func IncrementStatusVariable(ctx *Context, name string, val int) {
 	StatusVariables.IncrementGlobal(name, val)
 	ctx.Session.IncrementStatusVariable(ctx, name, val)
+}
+
+// StoredProcParam is a Parameter for a Stored Procedure.
+// Stored Procedures Parameters can be referenced from within other Stored Procedures, so we need to store them
+// somewhere that is accessible between interpreter calls to the engine.
+type StoredProcParam struct {
+	Type       Type
+	Value      any
+	Reference  *StoredProcParam
+	HasBeenSet bool
+}
+
+// SetValue saves val to the StoredProcParam, and set HasBeenSet to true.
+func (s *StoredProcParam) SetValue(val any) {
+	s.Value = val
+	s.HasBeenSet = true
+	if s.Reference != nil && s != s.Reference {
+		s.Reference.SetValue(val)
+	}
+}
+
+// OrderAndLimit stores the context of an ORDER BY ... LIMIT statement, and is used by index lookups and iterators.
+type OrderAndLimit struct {
+	OrderBy       Expression
+	Limit         Expression
+	Literal       Expression
+	CalcFoundRows bool
+}
+
+func (v OrderAndLimit) DebugString(ctx *Context) string {
+	if v.Limit != nil {
+		return fmt.Sprintf("%v LIMIT %v", DebugString(ctx, v.OrderBy), DebugString(ctx, v.Limit))
+	}
+	return DebugString(ctx, v.OrderBy)
+}
+
+func (v OrderAndLimit) String() string {
+	if v.Limit != nil {
+		return fmt.Sprintf("%v LIMIT %v", v.OrderBy, v.Limit)
+	}
+	return v.OrderBy.String()
 }

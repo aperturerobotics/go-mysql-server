@@ -37,9 +37,9 @@ import (
 
 type MySqlProxy struct {
 	ctx     *sql.Context
-	connStr string
-	logger  *logrus.Entry
+	logger  *logrus.Logger
 	conns   map[uint32]proxyConn
+	connStr string
 }
 
 var _ mysql.Handler = MySqlProxy{}
@@ -54,7 +54,7 @@ type proxyConn struct {
 }
 
 // NewMySqlProxyHandler creates a new MySqlProxy.
-func NewMySqlProxyHandler(le *logrus.Entry, connStr string) (MySqlProxy, error) {
+func NewMySqlProxyHandler(logger *logrus.Logger, connStr string) (MySqlProxy, error) {
 	// ensure parseTime=true
 	cfg, err := mysql2.ParseDSN(connStr)
 	if err != nil {
@@ -63,7 +63,7 @@ func NewMySqlProxyHandler(le *logrus.Entry, connStr string) (MySqlProxy, error) 
 	cfg.ParseTime = true
 	connStr = cfg.FormatDSN()
 
-	conn, err := newConn(connStr, 0, le)
+	conn, err := newConn(connStr, 0, logger)
 	if err != nil {
 		return MySqlProxy{}, err
 	}
@@ -76,13 +76,13 @@ func NewMySqlProxyHandler(le *logrus.Entry, connStr string) (MySqlProxy, error) 
 	return MySqlProxy{
 		ctx:     sql.NewEmptyContext(),
 		connStr: connStr,
-		logger:  le,
+		logger:  logger,
 		conns:   make(map[uint32]proxyConn),
 	}, nil
 }
 
-func newConn(connStr string, connId uint32, le *logrus.Entry) (conn proxyConn, err error) {
-	l := le.WithFields(logrus.Fields{"dsn": connStr, sql.ConnectionIdLogField: connId})
+func newConn(connStr string, connId uint32, lgr *logrus.Logger) (conn proxyConn, err error) {
+	l := logrus.NewEntry(lgr).WithField("dsn", connStr).WithField(sql.ConnectionIdLogField, connId)
 	var c *dbr.Connection
 	for d := 100.0; d < 10000.0; d *= 1.6 {
 		l.Debugf("Attempting connection to MySQL")
@@ -165,6 +165,10 @@ func (h MySqlProxy) ConnectionClosed(c *mysql.Conn) {
 		lgr.Errorf("Error closing connection")
 	}
 	delete(h.conns, c.ConnectionID)
+}
+
+func (h MySqlProxy) ConnectionAuthenticated(c *mysql.Conn) error {
+	return nil
 }
 
 // ConnectionAborted implements mysql.Handler.
@@ -357,7 +361,7 @@ func fetchMySqlRows(ctx *sql.Context, results *dsql.Rows, count int) (res *sqlty
 
 		row := make([]sqltypes.Value, len(fields))
 		for i := range row {
-			scanRow[i], _, err = types[i].Convert(scanRow[i])
+			scanRow[i], _, err = types[i].Convert(ctx, scanRow[i])
 			if err != nil {
 				return nil, false, err
 			}

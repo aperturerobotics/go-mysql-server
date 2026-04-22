@@ -24,10 +24,10 @@ import (
 
 // DeclareVariables represents the DECLARE statement for local variables.
 type DeclareVariables struct {
-	Names      []string
 	Type       sql.Type
 	DefaultVal *sql.ColumnDefaultValue
 	Pref       *expression.ProcedureReference
+	Names      []string
 }
 
 var _ sql.Node = (*DeclareVariables)(nil)
@@ -58,7 +58,7 @@ func (d *DeclareVariables) String() string {
 }
 
 // Schema implements the interface sql.Node.
-func (d *DeclareVariables) Schema() sql.Schema {
+func (d *DeclareVariables) Schema(ctx *sql.Context) sql.Schema {
 	return nil
 }
 
@@ -68,13 +68,8 @@ func (d *DeclareVariables) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (d *DeclareVariables) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (d *DeclareVariables) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(d, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (d *DeclareVariables) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

@@ -44,6 +44,12 @@ type Catalog interface {
 
 	// UnlockTables unlocks all tables locked by the session id given
 	UnlockTables(ctx *Context, id uint32) error
+
+	// AuthorizationHandler returns the AuthorizationHandler that is used by the catalog.
+	AuthorizationHandler() AuthorizationHandler
+
+	// Overrides returns the overrides that replace various functionality within the engine.
+	Overrides() EngineOverrides
 }
 
 // CatalogTable is a Table that depends on a Catalog.

@@ -43,7 +43,7 @@ type StatsProv struct {
 
 var _ sql.StatsProvider = (*StatsProv)(nil)
 
-func (s *StatsProv) RefreshTableStats(ctx *sql.Context, table sql.Table, db string) error {
+func (s *StatsProv) AnalyzeTable(ctx *sql.Context, table sql.Table, db string) error {
 	// non-Dolt would sample the table to get estimate of unique and histogram
 	iat, ok := table.(sql.IndexAddressableTable)
 	if !ok {
@@ -55,7 +55,7 @@ func (s *StatsProv) RefreshTableStats(ctx *sql.Context, table sql.Table, db stri
 	}
 
 	ordinals := make(map[string]int)
-	for i, c := range table.Schema() {
+	for i, c := range table.Schema(ctx) {
 		ordinals[strings.ToLower(c.Name)] = i
 	}
 
@@ -111,7 +111,7 @@ func (s *StatsProv) estimateStats(ctx *sql.Context, table sql.Table, keys map[st
 		}
 	}
 
-	sch := table.Schema()
+	sch := table.Schema(ctx)
 	for key, ordinals := range keys {
 		keyVals := make([]sql.Row, len(sample))
 		for i, row := range sample {
@@ -128,7 +128,7 @@ func (s *StatsProv) estimateStats(ctx *sql.Context, table sql.Table, keys map[st
 				return true
 			}
 			col := sch[ordinals[k]]
-			cmp, _ := col.Type.Compare(keyVals[i][k], keyVals[j][k])
+			cmp, _ := col.Type.Compare(ctx, keyVals[i][k], keyVals[j][k])
 			return cmp <= 0
 		})
 
@@ -156,7 +156,17 @@ func (s *StatsProv) estimateStats(ctx *sql.Context, table sql.Table, keys map[st
 			types = append(types, sch[i].Type)
 		}
 
-		qual, err := sql.NewQualifierFromString(string(key))
+		var schemaName string
+		if tabSch, ok := table.(sql.DatabaseSchemaTable); ok {
+			schemaName = tabSch.DatabaseSchema().SchemaName()
+		}
+
+		var qual sql.StatQualifier
+		if schemaName == "" {
+			qual, err = sql.NewQualifierFromString(string(key))
+		} else {
+			qual, err = sql.NewSchemaQualifierFromString(string(key))
+		}
 		if err != nil {
 			return err
 		}
@@ -164,7 +174,7 @@ func (s *StatsProv) estimateStats(ctx *sql.Context, table sql.Table, keys map[st
 		stat := stats.NewStatistic(rowCount, rowCount, 0, dataLen, time.Now(), qual, cols, types, buckets, sql.IndexClassDefault, nil)
 
 		// functional dependencies
-		fds, idxCols, err := stats.IndexFds(table.Name(), sch, indexes[strings.ToLower(qual.Index())])
+		fds, idxCols, err := stats.IndexFds(ctx, table.Name(), sch, indexes[strings.ToLower(qual.Index())])
 		if err != nil {
 			return err
 		}
@@ -260,7 +270,7 @@ func (s *StatsProv) GetStats(ctx *sql.Context, qual sql.StatQualifier, cols []st
 
 func (s *StatsProv) DropStats(ctx *sql.Context, qual sql.StatQualifier, cols []string) error {
 	colsSuff := strings.Join(cols, ",") + ")"
-	for key, _ := range s.colStats {
+	for key := range s.colStats {
 		if strings.HasPrefix(string(key), qual.String()) && strings.HasSuffix(string(key), colsSuff) {
 			delete(s.colStats, key)
 		}
@@ -295,7 +305,7 @@ func (s *StatsProv) DataLength(ctx *sql.Context, db string, table sql.Table) (ui
 }
 
 func (s *StatsProv) DropDbStats(ctx *sql.Context, db string, flush bool) error {
-	for key, _ := range s.colStats {
+	for key := range s.colStats {
 		if strings.HasPrefix(string(key), db) {
 			delete(s.colStats, key)
 		}

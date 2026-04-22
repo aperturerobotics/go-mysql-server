@@ -23,7 +23,7 @@ import (
 
 // ConvertUsing represents a CONVERT(X USING T) operation that casts the expression X to the character set T.
 type ConvertUsing struct {
-	UnaryExpression
+	UnaryExpressionStub
 	TargetCharSet sql.CharacterSetID
 }
 
@@ -32,8 +32,8 @@ var _ sql.CollationCoercible = (*ConvertUsing)(nil)
 
 func NewConvertUsing(expr sql.Expression, targetCharSet sql.CharacterSetID) *ConvertUsing {
 	return &ConvertUsing{
-		UnaryExpression: UnaryExpression{Child: expr},
-		TargetCharSet:   targetCharSet,
+		UnaryExpressionStub: UnaryExpressionStub{Child: expr},
+		TargetCharSet:       targetCharSet,
 	}
 }
 
@@ -43,8 +43,8 @@ func (c *ConvertUsing) String() string {
 }
 
 // Type implements the interface sql.Expression.
-func (c *ConvertUsing) Type() sql.Type {
-	typ := c.Child.Type()
+func (c *ConvertUsing) Type(ctx *sql.Context) sql.Type {
+	typ := c.Child.Type(ctx)
 	if collatedType, ok := typ.(sql.TypeWithCollation); ok {
 		newTyp, _ := collatedType.WithNewCollation(c.TargetCharSet.DefaultCollation())
 		return newTyp
@@ -73,7 +73,7 @@ func (c *ConvertUsing) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) 
 }
 
 // WithChildren implements the interface sql.Expression.
-func (c *ConvertUsing) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (c *ConvertUsing) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(c, len(children), 1)
 	}

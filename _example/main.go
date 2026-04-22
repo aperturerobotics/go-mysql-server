@@ -58,7 +58,7 @@ func main() {
 
 	session := memory.NewSession(sql.NewBaseSession(), pro)
 	ctx := sql.NewContext(context.Background(), sql.WithSession(session))
-	ctx.SetCurrentDatabase("test")
+	ctx.SetCurrentDatabase(dbName)
 
 	// This variable may be found in the "users_example.go" file. Please refer to that file for a walkthrough on how to
 	// set up the "mysql" database to allow user creation and user checking when establishing connections. This is set
@@ -73,7 +73,7 @@ func main() {
 		Protocol: "tcp",
 		Address:  fmt.Sprintf("%s:%d", address, port),
 	}
-	s, err := server.NewServer(config, engine, memory.NewSessionBuilder(pro), nil)
+	s, err := server.NewServer(config, engine, sql.NewContext, memory.NewSessionBuilder(pro), nil)
 	if err != nil {
 		panic(err)
 	}
@@ -84,13 +84,13 @@ func main() {
 
 func createTestDatabase() *memory.DbProvider {
 	db := memory.NewDatabase(dbName)
-	db.BaseDatabase.EnablePrimaryKeyIndexes()
 
 	pro := memory.NewDBProvider(db)
 	session := memory.NewSession(sql.NewBaseSession(), pro)
 	ctx := sql.NewContext(context.Background(), sql.WithSession(session))
+	ctx.Session = session
 
-	table := memory.NewTable(db, tableName, sql.NewPrimaryKeySchema(sql.Schema{
+	table := memory.NewTable(ctx, db, tableName, sql.NewPrimaryKeySchema(sql.Schema{
 		{Name: "name", Type: types.Text, Nullable: false, Source: tableName, PrimaryKey: true},
 		{Name: "email", Type: types.Text, Nullable: false, Source: tableName, PrimaryKey: true},
 		{Name: "phone_numbers", Type: types.JSON, Nullable: false, Source: tableName},

@@ -52,8 +52,14 @@ func TestProcessList(t *testing.T) {
 		Connection: 1,
 		Host:       clientHostOne,
 		Progress: map[string]sql.TableProgress{
-			"a": {sql.Progress{Name: "a", Done: 0, Total: 5}, map[string]sql.PartitionProgress{}},
-			"b": {sql.Progress{Name: "b", Done: 0, Total: 6}, map[string]sql.PartitionProgress{}},
+			"a": {
+				PartitionsProgress: map[string]sql.PartitionProgress{},
+				Progress:           sql.Progress{Name: "a", Done: 0, Total: 5},
+			},
+			"b": {
+				PartitionsProgress: map[string]sql.PartitionProgress{},
+				Progress:           sql.Progress{Name: "b", Done: 0, Total: 6},
+			},
 		},
 		User:      "foo",
 		Query:     "SELECT foo",
@@ -74,11 +80,17 @@ func TestProcessList(t *testing.T) {
 	p.RemovePartitionProgress(ctx.Pid(), "b", "b-3")
 
 	expectedProgress := map[string]sql.TableProgress{
-		"a": {sql.Progress{Name: "a", Total: 5}, map[string]sql.PartitionProgress{}},
-		"b": {sql.Progress{Name: "b", Total: 6}, map[string]sql.PartitionProgress{
-			"b-1": {sql.Progress{Name: "b-1", Done: 0, Total: -1}},
-			"b-2": {sql.Progress{Name: "b-2", Done: 1, Total: -1}},
-		}},
+		"a": {
+			PartitionsProgress: map[string]sql.PartitionProgress{},
+			Progress:           sql.Progress{Name: "a", Total: 5},
+		},
+		"b": {
+			PartitionsProgress: map[string]sql.PartitionProgress{
+				"b-1": {sql.Progress{Name: "b-1", Done: 0, Total: -1}},
+				"b-2": {sql.Progress{Name: "b-2", Done: 1, Total: -1}},
+			},
+			Progress: sql.Progress{Name: "b", Total: 6},
+		},
 	}
 	require.Equal(expectedProgress, p.procs[1].Progress)
 
@@ -171,6 +183,59 @@ func TestKillConnection(t *testing.T) {
 	require.False(t, killed[2])
 }
 
+func TestBeginEndOperation(t *testing.T) {
+	knownSession := sql.NewBaseSessionWithClientServer("", sql.Client{}, 1)
+	unknownSession := sql.NewBaseSessionWithClientServer("", sql.Client{}, 2)
+
+	pl := NewProcessList()
+	pl.AddConnection(1, "")
+
+	// Begining an operation with an unknown connection returns an error.
+	ctx := sql.NewContext(context.Background(), sql.WithSession(unknownSession))
+	_, err := pl.BeginOperation(ctx)
+	require.Error(t, err)
+
+	// Can begin and end operation before connection is ready.
+	ctx = sql.NewContext(context.Background(), sql.WithSession(knownSession))
+	subCtx, err := pl.BeginOperation(ctx)
+	require.NoError(t, err)
+	pl.EndOperation(subCtx)
+
+	// Can begin and end operation across the connection ready boundary.
+	subCtx, err = pl.BeginOperation(ctx)
+	require.NoError(t, err)
+	pl.ConnectionReady(knownSession)
+	pl.EndOperation(subCtx)
+
+	// Ending the operation cancels the subcontext.
+	subCtx, err = pl.BeginOperation(ctx)
+	require.NoError(t, err)
+	done := make(chan struct{})
+	context.AfterFunc(subCtx, func() {
+		close(done)
+	})
+	pl.EndOperation(subCtx)
+	<-done
+
+	// Kill on the connection cancels the subcontext.
+	subCtx, err = pl.BeginOperation(ctx)
+	require.NoError(t, err)
+	done = make(chan struct{})
+	context.AfterFunc(subCtx, func() {
+		close(done)
+	})
+	pl.Kill(1)
+	<-done
+	pl.EndOperation(subCtx)
+
+	// Beginning an operation while one is outstanding errors.
+	subCtx, err = pl.BeginOperation(ctx)
+	require.NoError(t, err)
+	_, err = pl.BeginOperation(ctx)
+	require.Error(t, err)
+	pl.EndOperation(subCtx)
+}
+
 // TestSlowQueryTracking tests that processes that take longer than @@long_query_time increment the
 // Slow_queries status variable.
 func TestSlowQueryTracking(t *testing.T) {
@@ -189,7 +254,7 @@ func TestSlowQueryTracking(t *testing.T) {
 	require.NoError(t, err)
 
 	// Change @@long_query_time so we don't have to wait for 10 seconds
-	require.NoError(t, sql.SystemVariables.SetGlobal("long_query_time", 1))
+	require.NoError(t, sql.SystemVariables.SetGlobal(ctx, "long_query_time", 1))
 	time.Sleep(1_500 * time.Millisecond)
 	p.EndQuery(ctx)
 

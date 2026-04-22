@@ -16,6 +16,9 @@ package plan
 
 import (
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/types"
+
+	"github.com/dolthub/vitess/go/sqltypes"
 )
 
 // Describe is a node that describes its children.
@@ -32,7 +35,7 @@ func NewDescribe(child sql.Node) *Describe {
 }
 
 // Schema implements the Node interface.
-func (d *Describe) Schema() sql.Schema {
+func (d *Describe) Schema(ctx *sql.Context) sql.Schema {
 	return sql.Schema{{
 		Name: "name",
 		Type: VarChar25000,
@@ -47,17 +50,12 @@ func (d *Describe) IsReadOnly() bool {
 }
 
 // WithChildren implements the Node interface.
-func (d *Describe) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (d *Describe) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(d, len(children), 1)
 	}
 
 	return NewDescribe(children[0]), nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (d *Describe) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return d.Child.CheckPrivileges(ctx, opChecker)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -93,16 +91,11 @@ func (d *DescribeQuery) Children() []sql.Node {
 	return nil
 }
 
-func (d *DescribeQuery) WithChildren(node ...sql.Node) (sql.Node, error) {
+func (d *DescribeQuery) WithChildren(ctx *sql.Context, node ...sql.Node) (sql.Node, error) {
 	if len(node) > 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(d, len(node), 0)
 	}
 	return d, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (d *DescribeQuery) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return d.Child.CheckPrivileges(ctx, opChecker)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -112,6 +105,22 @@ func (*DescribeQuery) CollationCoercibility(ctx *sql.Context) (collation sql.Col
 
 // DescribeSchema is the schema returned by a DescribeQuery node.
 var DescribeSchema = sql.Schema{
+	{Name: "id", Type: types.Uint64},
+	{Name: "select_type", Type: types.MustCreateStringWithDefaults(sqltypes.VarChar, 57)},
+	{Name: "table", Type: types.MustCreateStringWithDefaults(sqltypes.VarChar, 192)},
+	{Name: "partitions", Type: types.Text},
+	{Name: "type", Type: types.MustCreateStringWithDefaults(sqltypes.VarChar, 30)},
+	{Name: "possible_keys", Type: types.MustCreateStringWithDefaults(sqltypes.VarChar, 12288)},
+	{Name: "key", Type: types.MustCreateStringWithDefaults(sqltypes.VarChar, 192)},
+	{Name: "key_len", Type: types.MustCreateStringWithDefaults(sqltypes.VarChar, 12288)},
+	{Name: "ref", Type: types.MustCreateStringWithDefaults(sqltypes.VarChar, 3072)},
+	{Name: "rows", Type: types.Uint64},
+	{Name: "filtered", Type: types.Float64},
+	{Name: "Extra", Type: types.MustCreateStringWithDefaults(sqltypes.VarChar, 765)},
+}
+
+// DescribePlanSchema is the schema returned by a DescribeQuery node.
+var DescribePlanSchema = sql.Schema{
 	{Name: "plan", Type: VarChar25000},
 }
 
@@ -121,31 +130,38 @@ func NewDescribeQuery(format sql.DescribeOptions, child sql.Node) *DescribeQuery
 }
 
 // Schema implements the Node interface.
-func (d *DescribeQuery) Schema() sql.Schema {
-	return DescribeSchema
+func (d *DescribeQuery) Schema(ctx *sql.Context) sql.Schema {
+	if d.Format.Plan {
+		return DescribePlanSchema
+	} else {
+		return DescribeSchema
+	}
 }
 
-func (d *DescribeQuery) Describe(options sql.DescribeOptions) string {
+func (d *DescribeQuery) Describe(ctx *sql.Context, options sql.DescribeOptions) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("DescribeQuery(format=%s)", d.Format)
 	options.Estimates = d.Format.Estimates || options.Estimates
 	options.Analyze = d.Format.Analyze || options.Analyze
 	options.Debug = d.Format.Debug || options.Debug
-	_ = pr.WriteChildren(sql.Describe(d.Child, options))
+	_ = pr.WriteChildren(sql.Describe(ctx, d.Child, options))
 
 	return pr.String()
 }
 
 func (d *DescribeQuery) String() string {
-	return d.Describe(sql.DescribeOptions{
+	// To maintain compatibility with fmt.Stringer we have to use an empty context, but this will fail in any case that
+	// requires a context to determine a string (such as an integrator using the context to contain type information).
+	ctx := sql.NewEmptyContext()
+	return d.Describe(ctx, sql.DescribeOptions{
 		Analyze:   false,
 		Estimates: false,
 		Debug:     false,
 	})
 }
 
-func (d *DescribeQuery) DebugString() string {
-	return d.Describe(sql.DescribeOptions{
+func (d *DescribeQuery) DebugString(ctx *sql.Context) string {
+	return d.Describe(ctx, sql.DescribeOptions{
 		Analyze:   false,
 		Estimates: false,
 		Debug:     true,

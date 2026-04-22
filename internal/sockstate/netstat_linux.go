@@ -100,7 +100,7 @@ func (p *procFd) iterFdDir() {
 				}
 				z := bytes.SplitN(buf[:n], []byte(" "), 3)
 				name := getProcName(z[1])
-				p.p = &process{p.pid, name}
+				p.p = &process{name: name, pid: p.pid}
 			}
 			sk.Process = p.p
 		}
@@ -279,10 +279,11 @@ func tcpSocks(accept AcceptFn) ([]sockTabEntry, error) {
 
 // GetConnInode returns the inode number of an fd.
 func GetConnInode(conn *net.TCPConn) (n uint64, err error) {
-	fd, err := getConnFd(conn)
+	fd, finalize, err := getConnFd(conn)
 	if err != nil {
 		return 0, err
 	}
+	defer finalize()
 
 	if isWSL || isProcBlocked {
 		return 0, ErrSocketCheckNotImplemented.New()

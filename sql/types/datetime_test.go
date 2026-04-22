@@ -29,6 +29,7 @@ import (
 )
 
 func TestDatetimeCompare(t *testing.T) {
+	ctx := sql.NewEmptyContext()
 	tests := []struct {
 		typ         sql.Type
 		val1        interface{}
@@ -57,7 +58,7 @@ func TestDatetimeCompare(t *testing.T) {
 		{DatetimeMaxPrecision, "2010-06-03 06:03:11.123456111", "2010-06-03 06:03:11.123456333", 0},
 		{MustCreateDatetimeType(sqltypes.Datetime, 3), "2010-06-03 06:03:11.123", "2010-06-03 06:03:11", 1},
 		{MustCreateDatetimeType(sqltypes.Datetime, 3), "2010-06-03 06:03:11", "2010-06-03 06:03:11.123", -1},
-		{MustCreateDatetimeType(sqltypes.Datetime, 3), "2010-06-03 06:03:11.123456", "2010-06-03 06:03:11.123789", 0},
+		{MustCreateDatetimeType(sqltypes.Datetime, 3), "2010-06-03 06:03:11.123456", "2010-06-03 06:03:11.123789", -1},
 		{Timestamp, time.Date(2012, 12, 12, 12, 12, 12, 12, time.UTC),
 			time.Date(2012, 12, 12, 12, 24, 24, 24, time.UTC), -1},
 		{Timestamp, time.Date(2012, 12, 12, 12, 12, 12, 12, time.UTC),
@@ -68,7 +69,7 @@ func TestDatetimeCompare(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(fmt.Sprintf("%v %v", test.val1, test.val2), func(t *testing.T) {
-			cmp, err := test.typ.Compare(test.val1, test.val2)
+			cmp, err := test.typ.Compare(ctx, test.val1, test.val2)
 			require.NoError(t, err)
 			assert.Equal(t, test.expectedCmp, cmp)
 		})
@@ -149,6 +150,7 @@ func TestDatetimeCreateInvalidBaseTypes(t *testing.T) {
 }
 
 func TestDatetimeConvert(t *testing.T) {
+	ctx := sql.NewEmptyContext()
 	type testcase struct {
 		typ         sql.Type
 		val         interface{}
@@ -219,9 +221,9 @@ func TestDatetimeConvert(t *testing.T) {
 			time.Date(2012, 12, 12, 12, 12, 12, 0, time.UTC), false},
 		{Datetime, "2010-06-03 12:12:12.123456", time.Date(2010, 6, 3, 12, 12, 12, 0, time.UTC), false},
 		{Datetime, "2010-06-03T12:12:12.123456Z", time.Date(2010, 6, 3, 12, 12, 12, 0, time.UTC), false},
-		{Datetime, "2010-06-03 12:34:56.7", time.Date(2010, 6, 3, 12, 34, 56, 0, time.UTC), false},
-		{Datetime, "2010-06-03 12:34:56.78", time.Date(2010, 6, 3, 12, 34, 56, 0, time.UTC), false},
-		{Datetime, "2010-06-03 12:34:56.789", time.Date(2010, 6, 3, 12, 34, 56, 0, time.UTC), false},
+		{Datetime, "2010-06-03 12:34:56.7", time.Date(2010, 6, 3, 12, 34, 57, 0, time.UTC), false},
+		{Datetime, "2010-06-03 12:34:56.78", time.Date(2010, 6, 3, 12, 34, 57, 0, time.UTC), false},
+		{Datetime, "2010-06-03 12:34:56.789", time.Date(2010, 6, 3, 12, 34, 57, 0, time.UTC), false},
 
 		{TimestampMaxPrecision, nil, nil, false},
 		{TimestampMaxPrecision, time.Date(2012, 12, 12, 12, 12, 12, 12, time.UTC),
@@ -258,9 +260,9 @@ func TestDatetimeConvert(t *testing.T) {
 			time.Date(2012, 12, 12, 12, 12, 12, 0, time.UTC), false},
 		{Timestamp, "2010-06-03 12:12:12.123456", time.Date(2010, 6, 3, 12, 12, 12, 0, time.UTC), false},
 		{Timestamp, "2010-06-03T12:12:12.123456Z", time.Date(2010, 6, 3, 12, 12, 12, 0, time.UTC), false},
-		{Timestamp, "2010-06-03 12:34:56.7", time.Date(2010, 6, 3, 12, 34, 56, 0, time.UTC), false},
-		{Timestamp, "2010-06-03 12:34:56.78", time.Date(2010, 6, 3, 12, 34, 56, 0, time.UTC), false},
-		{Timestamp, "2010-06-03 12:34:56.789", time.Date(2010, 6, 3, 12, 34, 56, 0, time.UTC), false},
+		{Timestamp, "2010-06-03 12:34:56.7", time.Date(2010, 6, 3, 12, 34, 57, 0, time.UTC), false},
+		{Timestamp, "2010-06-03 12:34:56.78", time.Date(2010, 6, 3, 12, 34, 57, 0, time.UTC), false},
+		{Timestamp, "2010-06-03 12:34:56.789", time.Date(2010, 6, 3, 12, 34, 57, 0, time.UTC), false},
 
 		{Date, "0000-01-01 00:00:00", time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
 		{Date, "0500-01-01 00:00:00", time.Date(500, 1, 1, 0, 0, 0, 0, time.UTC), false},
@@ -268,53 +270,70 @@ func TestDatetimeConvert(t *testing.T) {
 		{Date, "", nil, true},
 		{Date, "0500-01-01", time.Date(500, 1, 1, 0, 0, 0, 0, time.UTC), false},
 		{Date, "10000-01-01", nil, true},
-		{Date, int(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{Date, int8(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{Date, int16(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{Date, int32(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{Date, int64(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{Date, uint(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{Date, uint8(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{Date, uint16(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{Date, uint32(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{Date, uint64(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{Date, float32(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{Date, float64(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
+		{Date, int(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, int8(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, int16(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, int32(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, int64(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, uint(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, uint8(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, uint16(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, uint32(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, uint64(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, float32(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, float64(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, "0000-00-00", time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, "0000-00-00 00:00:00.000000", time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, "0000-00-00 00:00:00", time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, "0000-00-00.00:00:00", time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{Date, "00-00-00", time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+
 		{Date, []byte{0}, nil, true},
 
 		{DatetimeMaxPrecision, "0500-01-01 01:01:01", time.Date(500, 1, 1, 1, 1, 1, 0, time.UTC), false},
 		{DatetimeMaxPrecision, "0000-01-01 00:00:00", time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
 		{DatetimeMaxPrecision, time.Date(10000, 1, 1, 1, 1, 1, 1, time.UTC), nil, true},
-		{DatetimeMaxPrecision, int(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{DatetimeMaxPrecision, int8(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{DatetimeMaxPrecision, int16(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{DatetimeMaxPrecision, int32(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{DatetimeMaxPrecision, int64(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{DatetimeMaxPrecision, uint(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{DatetimeMaxPrecision, uint8(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{DatetimeMaxPrecision, uint16(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{DatetimeMaxPrecision, uint32(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{DatetimeMaxPrecision, uint64(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{DatetimeMaxPrecision, float32(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{DatetimeMaxPrecision, float64(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, int(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, int8(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, int16(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, int32(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, int64(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, uint(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, uint8(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, uint16(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, uint32(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, uint64(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, float32(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, float64(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, "0000-00-00", time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, "0000-00-00 00:00:00.000000", time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, "0000-00-00 00:00:00", time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, "0000-00-00.00:00:00", time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{DatetimeMaxPrecision, "00-00-00", time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+
 		{DatetimeMaxPrecision, []byte{0}, nil, true},
 
 		{TimestampMaxPrecision, time.Date(1960, 1, 1, 1, 1, 1, 1, time.UTC), nil, true},
 		{TimestampMaxPrecision, "1970-01-01 00:00:00", nil, true},
 		{TimestampMaxPrecision, "1970-01-01 00:00:01", time.Date(1970, 1, 1, 0, 0, 1, 0, time.UTC), false},
 		{TimestampMaxPrecision, time.Date(2040, 1, 1, 1, 1, 1, 1, time.UTC), nil, true},
-		{TimestampMaxPrecision, int(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{TimestampMaxPrecision, int8(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{TimestampMaxPrecision, int16(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{TimestampMaxPrecision, int32(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{TimestampMaxPrecision, int64(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{TimestampMaxPrecision, uint(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{TimestampMaxPrecision, uint8(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{TimestampMaxPrecision, uint16(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{TimestampMaxPrecision, uint32(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{TimestampMaxPrecision, uint64(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{TimestampMaxPrecision, float32(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{TimestampMaxPrecision, float64(0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, int(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, int8(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, int16(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, int32(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, int64(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, uint(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, uint8(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, uint16(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, uint32(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, uint64(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, float32(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, float64(0), time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, "0000-00-00", time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, "0000-00-00 00:00:00.000000", time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, "0000-00-00 00:00:00", time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, "0000-00-00.00:00:00", time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
+		{TimestampMaxPrecision, "00-00-00", time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC), false},
 		{TimestampMaxPrecision, []byte{0}, nil, true},
 
 		{Date, int(1), nil, true},
@@ -359,7 +378,7 @@ func TestDatetimeConvert(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(fmt.Sprintf("%v %v %v", test.typ, test.val, test.expectedVal), func(t *testing.T) {
-			val, _, err := test.typ.Convert(test.val)
+			val, _, err := test.typ.Convert(ctx, test.val)
 			if test.expectedErr {
 				assert.Error(t, err)
 			} else {
@@ -402,4 +421,36 @@ func TestDatetimeZero(t *testing.T) {
 	require.True(t, ok)
 	_, ok = MustCreateDatetimeType(sqltypes.Timestamp, 0).Zero().(time.Time)
 	require.True(t, ok)
+}
+
+func TestDatetimeOverflowUnderflow(t *testing.T) {
+	ctx := sql.NewEmptyContext()
+	tests := []struct {
+		typ         sql.DatetimeType
+		val         interface{}
+		expectError bool
+	}{
+		{Timestamp, "1969-12-31 23:59:59", true},
+		{Timestamp, "2038-01-19 03:14:08", true},
+		{Date, Date.MinimumTime().Format("2006-01-02"), false},
+		{Date, Date.MaximumTime().Format("2006-01-02"), false},
+		{Datetime, Datetime.MinimumTime().Format("2006-01-02 15:04:05"), false},
+		{Datetime, Datetime.MaximumTime().Format("2006-01-02 15:04:05"), false},
+		{Timestamp, Timestamp.MinimumTime().Format("2006-01-02 15:04:05"), false},
+		{Timestamp, Timestamp.MaximumTime().Format("2006-01-02 15:04:05"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.typ.String()+"_"+tt.val.(string), func(t *testing.T) {
+			_, inRange, err := tt.typ.Convert(ctx, tt.val)
+
+			if tt.expectError {
+				require.True(t, err != nil || inRange != sql.InRange,
+					"expected error or out-of-range but got neither; err: %v, inRange: %v", err, inRange)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, sql.InRange, inRange)
+			}
+		})
+	}
 }

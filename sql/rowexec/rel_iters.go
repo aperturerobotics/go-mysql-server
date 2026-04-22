@@ -15,144 +15,25 @@
 package rowexec
 
 import (
-	"container/heap"
 	"errors"
-	"fmt"
 	"io"
-	"sort"
 	"strings"
-
-	"github.com/dolthub/jsonpath"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/expression/function/aggregation"
+	"github.com/dolthub/go-mysql-server/sql/hash"
+	"github.com/dolthub/go-mysql-server/sql/iters"
 	"github.com/dolthub/go-mysql-server/sql/plan"
+	"github.com/dolthub/go-mysql-server/sql/transform"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
-
-type topRowsIter struct {
-	sortFields    sql.SortFields
-	calcFoundRows bool
-	childIter     sql.RowIter
-	limit         int64
-	topRows       []sql.Row
-	numFoundRows  int64
-	idx           int
-}
-
-func newTopRowsIter(s sql.SortFields, limit int64, calcFoundRows bool, child sql.RowIter, childSchemaLen int) *topRowsIter {
-	return &topRowsIter{
-		sortFields:    append(s, sql.SortField{Column: expression.NewGetField(childSchemaLen, types.Int64, "order", false)}),
-		limit:         limit,
-		calcFoundRows: calcFoundRows,
-		childIter:     child,
-		idx:           -1,
-	}
-}
-
-func (i *topRowsIter) Next(ctx *sql.Context) (sql.Row, error) {
-	if i.idx == -1 {
-		err := i.computeTopRows(ctx)
-		if err != nil {
-			return nil, err
-		}
-		i.idx = 0
-	}
-
-	if i.idx >= len(i.topRows) {
-		return nil, io.EOF
-	}
-	row := i.topRows[i.idx]
-	i.idx++
-	return row[:len(row)-1], nil
-}
-
-func (i *topRowsIter) Close(ctx *sql.Context) error {
-	i.topRows = nil
-
-	if i.calcFoundRows {
-		ctx.SetLastQueryInfoInt(sql.FoundRows, i.numFoundRows)
-	}
-
-	return i.childIter.Close(ctx)
-}
-
-func (i *topRowsIter) computeTopRows(ctx *sql.Context) error {
-	topRowsHeap := &expression.TopRowsHeap{
-		expression.Sorter{
-			SortFields: i.sortFields,
-			Rows:       []sql.Row{},
-			LastError:  nil,
-			Ctx:        ctx,
-		},
-	}
-	for {
-		row, err := i.childIter.Next(ctx)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		i.numFoundRows++
-
-		row = append(row, i.numFoundRows)
-
-		heap.Push(topRowsHeap, row)
-		if int64(topRowsHeap.Len()) > i.limit {
-			heap.Pop(topRowsHeap)
-		}
-		if topRowsHeap.LastError != nil {
-			return topRowsHeap.LastError
-		}
-	}
-
-	var err error
-	i.topRows, err = topRowsHeap.Rows()
-	return err
-}
-
-// getInt64Value returns the int64 literal value in the expression given, or an error with the errStr given if it
-// cannot.
-func getInt64Value(ctx *sql.Context, expr sql.Expression) (int64, error) {
-	i, err := expr.Eval(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-
-	switch i := i.(type) {
-	case int:
-		return int64(i), nil
-	case int8:
-		return int64(i), nil
-	case int16:
-		return int64(i), nil
-	case int32:
-		return int64(i), nil
-	case int64:
-		return i, nil
-	case uint:
-		return int64(i), nil
-	case uint8:
-		return int64(i), nil
-	case uint16:
-		return int64(i), nil
-	case uint32:
-		return int64(i), nil
-	case uint64:
-		return int64(i), nil
-	default:
-		// analyzer should catch this already
-		panic(fmt.Sprintf("Unsupported type for limit %T", i))
-	}
-}
 
 // windowToIter transforms a plan.Window into a series
 // of aggregation.WindowPartitionIter and a list of output projection indexes
 // for each window partition.
 // TODO: make partition ordering deterministic
-func windowToIter(w *plan.Window) ([]*aggregation.WindowPartitionIter, [][]int, error) {
+func windowToIter(ctx *sql.Context, w *plan.Window) ([]*aggregation.WindowPartitionIter, [][]int, error) {
 	partIdToOutputIdxs := make(map[uint64][]int, 0)
 	partIdToBlock := make(map[uint64]*aggregation.WindowPartition, 0)
 	var window *sql.WindowDefinition
@@ -167,14 +48,14 @@ func windowToIter(w *plan.Window) ([]*aggregation.WindowPartitionIter, [][]int, 
 		switch e := expr.(type) {
 		case sql.Aggregation:
 			window = e.Window()
-			fn, err = e.NewWindowFunction()
+			fn, err = e.NewWindowFunction(ctx)
 		case sql.WindowAggregation:
 			window = e.Window()
-			fn, err = e.NewWindowFunction()
+			fn, err = e.NewWindowFunction(ctx)
 		default:
 			// non window aggregates resolve to LastAgg with empty over clause
 			window = sql.NewWindowDefinition(nil, nil, nil, "", "")
-			fn, err = aggregation.NewLast(e).NewWindowFunction()
+			fn, err = aggregation.NewLast(e).NewWindowFunction(ctx)
 		}
 		if err != nil {
 			return nil, nil, err
@@ -216,8 +97,8 @@ func windowToIter(w *plan.Window) ([]*aggregation.WindowPartitionIter, [][]int, 
 }
 
 type offsetIter struct {
-	skip      int64
 	childIter sql.RowIter
+	skip      int64
 }
 
 func (i *offsetIter) Next(ctx *sql.Context) (sql.Row, error) {
@@ -243,282 +124,179 @@ func (i *offsetIter) Close(ctx *sql.Context) error {
 	return i.childIter.Close(ctx)
 }
 
-type jsonTableColOpts struct {
-	name      string
-	typ       sql.Type
-	forOrd    bool
-	exists    bool
-	defErrVal interface{}
-	defEmpVal interface{}
-	errOnErr  bool
-	errOnEmp  bool
+var _ sql.RowIter = &iters.JsonTableRowIter{}
+
+type ProjectIter struct {
+	childIter      sql.RowIter
+	nestedState    *nestedIterState
+	projs          []sql.Expression
+	canDefer       bool
+	hasNestedIters bool
 }
 
-// jsonTableCol represents a column in a json table.
-type jsonTableCol struct {
-	path string // if there are nested columns, this is a schema path, otherwise it is a col path
-	opts *jsonTableColOpts
-	cols []*jsonTableCol // nested columns
-
-	data     []interface{}
-	err      error
-	pos      int
-	finished bool // exhausted all rows in data
-	currSib  int
+type nestedIterState struct {
+	projections    []sql.Expression
+	sourceRow      sql.Row
+	iterEvaluators []*RowIterEvaluator
 }
 
-// IsSibling returns if the jsonTableCol contains multiple columns
-func (c *jsonTableCol) IsSibling() bool {
-	return len(c.cols) != 0
-}
-
-// NextSibling starts at the current sibling and moves to the next unfinished sibling
-// if there are no more unfinished siblings, it sets c.currSib to the first sibling and returns true
-// if the c.currSib is unfinished, nothing changes
-func (c *jsonTableCol) NextSibling() bool {
-	for i := c.currSib; i < len(c.cols); i++ {
-		if c.cols[i].IsSibling() && !c.cols[i].finished {
-			c.currSib = i
-			return false
-		}
-	}
-	c.currSib = 0
-	for i := 0; i < len(c.cols); i++ {
-		if c.cols[i].IsSibling() {
-			c.currSib = i
-			break
-		}
-	}
-	return true
-}
-
-// LoadData loads the data for this column from the given object and c.path
-// LoadData will always wrap the data in a slice to ensure it is iterable
-// Additionally, this function will set the c.currSib to the first sibling
-func (c *jsonTableCol) LoadData(obj interface{}) {
-	var data interface{}
-	data, c.err = jsonpath.JsonPathLookup(obj, c.path)
-	if d, ok := data.([]interface{}); ok {
-		c.data = d
-	} else {
-		c.data = []interface{}{data}
-	}
-	c.pos = 0
-
-	c.NextSibling()
-}
-
-// Reset clears the column's data and error, and recursively resets all nested columns
-func (c *jsonTableCol) Reset() {
-	c.data, c.err = nil, nil
-	c.finished = false
-	for _, col := range c.cols {
-		col.Reset()
-	}
-}
-
-// Next returns the next row for this column.
-func (c *jsonTableCol) Next(obj interface{}, pass bool, ord int) (sql.Row, error) {
-	// nested column should recurse
-	if len(c.cols) != 0 {
-		if c.data == nil {
-			c.LoadData(obj)
-		}
-
-		var innerObj interface{}
-		if !c.finished {
-			innerObj = c.data[c.pos]
-		}
-
-		var row sql.Row
-		for i, col := range c.cols {
-			innerPass := len(col.cols) != 0 && i != c.currSib
-			rowPart, err := col.Next(innerObj, pass || innerPass, c.pos+1)
-			if err != nil {
-				return nil, err
-			}
-			row = append(row, rowPart...)
-		}
-
-		if pass {
-			return row, nil
-		}
-
-		if c.NextSibling() {
-			for _, col := range c.cols {
-				col.Reset()
-			}
-			c.pos++
-		}
-
-		if c.pos >= len(c.data) {
-			c.finished = true
-		}
-
-		return row, nil
+func (i *ProjectIter) Next(ctx *sql.Context) (sql.Row, error) {
+	if i.hasNestedIters {
+		return i.ProjectRowWithNestedIters(ctx)
 	}
 
-	// this should only apply to nested columns, maybe...
-	if pass {
-		return sql.Row{nil}, nil
-	}
-
-	// FOR ORDINAL is a special case
-	if c.opts != nil && c.opts.forOrd {
-		return sql.Row{ord}, nil
-	}
-
-	// TODO: cache this?
-	val, err := jsonpath.JsonPathLookup(obj, c.path)
-	if c.opts.exists {
-		if err != nil {
-			return sql.Row{0}, nil
-		} else {
-			return sql.Row{1}, nil
-		}
-	}
-
-	// key error means empty
-	if err != nil {
-		if c.opts.errOnEmp {
-			return nil, fmt.Errorf("missing value for JSON_TABLE column '%s'", c.opts.name)
-		}
-		val = c.opts.defEmpVal
-	}
-
-	val, _, err = c.opts.typ.Convert(val)
-	if err != nil {
-		if c.opts.errOnErr {
-			return nil, err
-		}
-		val, _, err = c.opts.typ.Convert(c.opts.defErrVal)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Base columns are always finished
-	c.finished = true
-	return sql.Row{val}, nil
-}
-
-type jsonTableRowIter struct {
-	data    []interface{}
-	pos     int
-	cols    []*jsonTableCol
-	currSib int
-}
-
-var _ sql.RowIter = &jsonTableRowIter{}
-
-// NextSibling starts at the current sibling and moves to the next unfinished sibling
-// if there are no more unfinished siblings, it resets to the first sibling
-func (j *jsonTableRowIter) NextSibling() bool {
-	for i := j.currSib; i < len(j.cols); i++ {
-		if !j.cols[i].finished && len(j.cols[i].cols) != 0 {
-			j.currSib = i
-			return false
-		}
-	}
-	j.currSib = 0
-	for i := 0; i < len(j.cols); i++ {
-		if len(j.cols[i].cols) != 0 {
-			j.currSib = i
-			break
-		}
-	}
-	return true
-}
-
-func (j *jsonTableRowIter) ResetAll() {
-	for _, col := range j.cols {
-		col.Reset()
-	}
-}
-
-func (j *jsonTableRowIter) Next(ctx *sql.Context) (sql.Row, error) {
-	if j.pos >= len(j.data) {
-		return nil, io.EOF
-	}
-	obj := j.data[j.pos]
-
-	var row sql.Row
-	for i, col := range j.cols {
-		pass := len(col.cols) != 0 && i != j.currSib
-		rowPart, err := col.Next(obj, pass, j.pos+1)
-		if err != nil {
-			return nil, err
-		}
-		row = append(row, rowPart...)
-	}
-
-	if j.NextSibling() {
-		j.ResetAll()
-		j.pos++
-	}
-
-	return row, nil
-}
-
-func (j *jsonTableRowIter) Close(ctx *sql.Context) error {
-	return nil
-}
-
-// orderedDistinctIter iterates the children iterator and skips all the
-// repeated rows assuming the iterator has all rows sorted.
-type orderedDistinctIter struct {
-	childIter sql.RowIter
-	schema    sql.Schema
-	prevRow   sql.Row
-}
-
-func newOrderedDistinctIter(child sql.RowIter, schema sql.Schema) *orderedDistinctIter {
-	return &orderedDistinctIter{childIter: child, schema: schema}
-}
-
-func (di *orderedDistinctIter) Next(ctx *sql.Context) (sql.Row, error) {
-	for {
-		row, err := di.childIter.Next(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		if di.prevRow != nil {
-			ok, err := di.prevRow.Equals(row, di.schema)
-			if err != nil {
-				return nil, err
-			}
-
-			if ok {
-				continue
-			}
-		}
-
-		di.prevRow = row
-		return row, nil
-	}
-}
-
-func (di *orderedDistinctIter) Close(ctx *sql.Context) error {
-	return di.childIter.Close(ctx)
-}
-
-type projectIter struct {
-	p         []sql.Expression
-	childIter sql.RowIter
-}
-
-func (i *projectIter) Next(ctx *sql.Context) (sql.Row, error) {
 	childRow, err := i.childIter.Next(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return ProjectRow(ctx, i.p, childRow)
+	return ProjectRow(ctx, i.projs, childRow)
 }
 
-func (i *projectIter) Close(ctx *sql.Context) error {
+func (i *ProjectIter) Close(ctx *sql.Context) error {
 	return i.childIter.Close(ctx)
+}
+
+func (i *ProjectIter) GetProjections() []sql.Expression {
+	return i.projs
+}
+
+func (i *ProjectIter) CanDefer() bool {
+	return i.canDefer
+}
+
+func (i *ProjectIter) GetChildIter() sql.RowIter {
+	return i.childIter
+}
+
+// ProjectRowWithNestedIters evaluates a set of projections, allowing for nested iterators in the expressions.
+func (i *ProjectIter) ProjectRowWithNestedIters(
+	ctx *sql.Context,
+) (sql.Row, error) {
+
+	// For the set of iterators, we return one row each element in the longest of the iterators provided.
+	// Other iterator values will be NULL after they are depleted. All non-iterator fields for the row are returned
+	// identically for each row in the result set.
+	if i.nestedState != nil {
+		row, err := ProjectRow(ctx, i.nestedState.projections, i.nestedState.sourceRow)
+		if err != nil {
+			return nil, err
+		}
+
+		nestedIterationFinished := true
+		for _, evaluator := range i.nestedState.iterEvaluators {
+			if !evaluator.finished && evaluator.iter != nil {
+				nestedIterationFinished = false
+				break
+			}
+		}
+
+		if nestedIterationFinished {
+			i.nestedState = nil
+			return i.ProjectRowWithNestedIters(ctx)
+		}
+
+		return row, nil
+	}
+
+	row, err := i.childIter.Next(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	i.nestedState = &nestedIterState{
+		sourceRow: row,
+	}
+
+	// We need a new set of projections, with any iterator-returning expressions replaced by new expressions that will
+	// return the result of the iteration on each call to Eval. We also need to keep a list of all such iterators, so
+	// that we can tell when they have all finished their iterations.
+	var rowIterEvaluators []*RowIterEvaluator
+	newProjs := make([]sql.Expression, len(i.projs))
+	for i, proj := range i.projs {
+		p, _, err := transform.Expr(ctx, proj, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+			if rie, ok := e.(sql.RowIterExpression); ok && rie.ReturnsRowIter() {
+				ri, err := rie.EvalRowIter(ctx, row)
+				if err != nil {
+					return nil, false, err
+				}
+
+				evaluator := &RowIterEvaluator{
+					iter: ri,
+					typ:  rie.Type(ctx),
+				}
+				rowIterEvaluators = append(rowIterEvaluators, evaluator)
+				return evaluator, transform.NewTree, nil
+			}
+
+			return e, transform.SameTree, nil
+		})
+
+		if err != nil {
+			return nil, err
+		}
+
+		newProjs[i] = p
+	}
+
+	i.nestedState.projections = newProjs
+	i.nestedState.iterEvaluators = rowIterEvaluators
+
+	return i.ProjectRowWithNestedIters(ctx)
+}
+
+// RowIterEvaluator is an expression that returns the next value from a sql.RowIter each time Eval is called.
+type RowIterEvaluator struct {
+	iter     sql.RowIter
+	typ      sql.Type
+	finished bool
+}
+
+var _ sql.Expression = (*RowIterEvaluator)(nil)
+
+func (r RowIterEvaluator) Resolved() bool {
+	return true
+}
+
+func (r RowIterEvaluator) String() string {
+	return "RowIterEvaluator"
+}
+
+func (r RowIterEvaluator) Type(ctx *sql.Context) sql.Type {
+	return r.typ
+}
+
+func (r RowIterEvaluator) IsNullable(ctx *sql.Context) bool {
+	return true
+}
+
+func (r *RowIterEvaluator) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+	if r.finished || r.iter == nil {
+		return nil, nil
+	}
+
+	nextRow, err := r.iter.Next(ctx)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			r.finished = true
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	// All of the set-returning functions return a single value per column
+	return nextRow[0], nil
+}
+
+func (r RowIterEvaluator) Children() []sql.Expression {
+	return nil
+}
+
+func (r RowIterEvaluator) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	if len(children) != 0 {
+		return nil, sql.ErrInvalidChildrenNumber.New(r, len(children), 0)
+	}
+	return &r, nil
 }
 
 // ProjectRow evaluates a set of projections.
@@ -527,8 +305,8 @@ func ProjectRow(
 	projections []sql.Expression,
 	row sql.Row,
 ) (sql.Row, error) {
+	var fields = make(sql.Row, len(projections))
 	var secondPass []int
-	var fields sql.Row
 	for i, expr := range projections {
 		// Default values that are expressions may reference other fields, thus they must evaluate after all other exprs.
 		// Also default expressions may not refer to other columns that come after them if they also have a default expr.
@@ -536,16 +314,15 @@ func ProjectRow(
 		// Since literals do not reference other columns, they're evaluated on the first pass.
 		defaultVal, isDefaultVal := defaultValFromProjectExpr(expr)
 		if isDefaultVal && !defaultVal.IsLiteral() {
-			fields = append(fields, nil)
 			secondPass = append(secondPass, i)
 			continue
 		}
-		f, fErr := expr.Eval(ctx, row)
+		field, fErr := expr.Eval(ctx, row)
 		if fErr != nil {
 			return nil, fErr
 		}
-		f = normalizeNegativeZeros(f)
-		fields = append(fields, f)
+		field = normalizeNegativeZeros(field)
+		fields[i] = field
 	}
 	for _, index := range secondPass {
 		field, err := projections[index].Eval(ctx, fields)
@@ -555,7 +332,7 @@ func ProjectRow(
 		field = normalizeNegativeZeros(field)
 		fields[index] = field
 	}
-	return sql.NewRow(fields...), nil
+	return fields, nil
 }
 
 func defaultValFromProjectExpr(e sql.Expression) (*sql.ColumnDefaultValue, bool) {
@@ -564,6 +341,13 @@ func defaultValFromProjectExpr(e sql.Expression) (*sql.ColumnDefaultValue, bool)
 	}
 	if defaultVal, ok := e.(*sql.ColumnDefaultValue); ok {
 		return defaultVal, true
+	}
+	if defaultExpr, ok := e.(plan.ColDefaultExpression); ok {
+		if defaultExpr.Column.Default != nil {
+			return defaultExpr.Column.Default, true
+		} else if defaultExpr.Column.Generated != nil {
+			return defaultExpr.Column.Generated, true
+		}
 	}
 
 	return nil, false
@@ -589,27 +373,6 @@ func normalizeNegativeZeros(val interface{}) interface{} {
 	return val
 }
 
-// TODO a queue is probably more optimal
-type recursiveTableIter struct {
-	pos int
-	buf []sql.Row
-}
-
-var _ sql.RowIter = (*recursiveTableIter)(nil)
-
-func (r *recursiveTableIter) Next(ctx *sql.Context) (sql.Row, error) {
-	if r.buf == nil || r.pos >= len(r.buf) {
-		return nil, io.EOF
-	}
-	r.pos++
-	return r.buf[r.pos-1], nil
-}
-
-func (r *recursiveTableIter) Close(ctx *sql.Context) error {
-	r.buf = nil
-	return nil
-}
-
 func setUserVar(ctx *sql.Context, userVar *expression.UserVar, right sql.Expression, row sql.Row) error {
 	val, err := right.Eval(ctx, row)
 	if err != nil {
@@ -626,6 +389,10 @@ func setUserVar(ctx *sql.Context, userVar *expression.UserVar, right sql.Express
 
 func setSystemVar(ctx *sql.Context, sysVar *expression.SystemVar, right sql.Expression, row sql.Row) error {
 	val, err := right.Eval(ctx, row)
+	if err != nil {
+		return err
+	}
+	err = validateSystemVariableValue(sysVar.Name, val)
 	if err != nil {
 		return err
 	}
@@ -701,6 +468,20 @@ func setSystemVar(ctx *sql.Context, sysVar *expression.SystemVar, right sql.Expr
 	return nil
 }
 
+func validateSystemVariableValue(sysVarName string, val interface{}) error {
+	switch strings.ToLower(sysVarName) {
+	case "time_zone":
+		valStr, ok := val.(string)
+		if !ok {
+			return sql.ErrInvalidTimeZone.New(val)
+		}
+		if !sql.ValidTimeZone(valStr) {
+			return sql.ErrInvalidTimeZone.New(valStr)
+		}
+	}
+	return nil
+}
+
 // Applies the update expressions given to the row given, returning the new resultant row.
 func applyUpdateExpressions(ctx *sql.Context, updateExprs []sql.Expression, row sql.Row) (sql.Row, error) {
 	var ok bool
@@ -733,7 +514,7 @@ func (d *declareVariablesIter) Next(ctx *sql.Context) (sql.Row, error) {
 		return nil, err
 	}
 	for _, varName := range d.Names {
-		if err := d.Pref.InitializeVariable(varName, d.Type, defaultVal); err != nil {
+		if err := d.Pref.InitializeVariable(ctx, varName, d.Type, defaultVal); err != nil {
 			return nil, err
 		}
 	}
@@ -775,22 +556,22 @@ type recursiveCteIter struct {
 	init sql.Node
 	// recursive sql.Project
 	rec sql.Node
-	// anchor to recursive table to repopulate with [temp]
-	working *plan.RecursiveTable
-	// true if UNION, false if UNION ALL
-	deduplicate bool
-	// parent iter initialization state
-	row sql.Row
-
 	// active iterator, either [init].RowIter or [rec].RowIter
 	iter sql.RowIter
-	// number of recursive iterations finished
-	cycle int
-	// buffer to collect intermediate results for next recursion
-	temp []sql.Row
 	// duplicate lookup if [deduplicated] set
 	cache sql.KeyValueCache
-	b     *BaseBuilder
+	// anchor to recursive table to repopulate with [temp]
+	working *plan.RecursiveTable
+
+	b *BaseBuilder
+	// parent iter initialization state
+	row sql.Row
+	// buffer to collect intermediate results for next recursion
+	temp []sql.Row
+	// number of recursive iterations finishe
+	cycle int
+	// true if UNION, false if UNION ALL
+	deduplicate bool
 }
 
 var _ sql.RowIter = (*recursiveCteIter)(nil)
@@ -828,7 +609,7 @@ func (r *recursiveCteIter) Next(ctx *sql.Context) (sql.Row, error) {
 
 		var key uint64
 		if r.deduplicate {
-			key, _ = sql.HashOf(row)
+			key, _ = hash.HashOf(ctx, nil, row)
 			if k, _ := r.cache.Get(key); k != nil {
 				// skip duplicate
 				continue
@@ -884,347 +665,6 @@ func (r *recursiveCteIter) Close(ctx *sql.Context) error {
 	r.temp = nil
 	if r.iter != nil {
 		return r.iter.Close(ctx)
-	}
-	return nil
-}
-
-type limitIter struct {
-	calcFoundRows bool
-	currentPos    int64
-	childIter     sql.RowIter
-	limit         int64
-}
-
-func (li *limitIter) Next(ctx *sql.Context) (sql.Row, error) {
-	if li.currentPos >= li.limit {
-		// If we were asked to calc all found rows, then when we are past the limit we iterate over the rest of the
-		// result set to count it
-		if li.calcFoundRows {
-			for {
-				_, err := li.childIter.Next(ctx)
-				if err != nil {
-					return nil, err
-				}
-				li.currentPos++
-			}
-		}
-
-		return nil, io.EOF
-	}
-
-	childRow, err := li.childIter.Next(ctx)
-	if err != nil {
-		return nil, err
-	}
-	li.currentPos++
-
-	return childRow, nil
-}
-
-func (li *limitIter) Close(ctx *sql.Context) error {
-	err := li.childIter.Close(ctx)
-	if err != nil {
-		return err
-	}
-
-	if li.calcFoundRows {
-		ctx.SetLastQueryInfoInt(sql.FoundRows, li.currentPos)
-	}
-	return nil
-}
-
-type sortIter struct {
-	sortFields sql.SortFields
-	childIter  sql.RowIter
-	sortedRows []sql.Row
-	idx        int
-}
-
-var _ sql.RowIter = (*sortIter)(nil)
-
-func newSortIter(s sql.SortFields, child sql.RowIter) *sortIter {
-	return &sortIter{
-		sortFields: s,
-		childIter:  child,
-		idx:        -1,
-	}
-}
-
-func (i *sortIter) Next(ctx *sql.Context) (sql.Row, error) {
-	if i.idx == -1 {
-		err := i.computeSortedRows(ctx)
-		if err != nil {
-			return nil, err
-		}
-		i.idx = 0
-	}
-
-	if i.idx >= len(i.sortedRows) {
-		return nil, io.EOF
-	}
-	row := i.sortedRows[i.idx]
-	i.idx++
-	return row, nil
-}
-
-func (i *sortIter) Close(ctx *sql.Context) error {
-	i.sortedRows = nil
-	return i.childIter.Close(ctx)
-}
-
-func (i *sortIter) computeSortedRows(ctx *sql.Context) error {
-	cache, dispose := ctx.Memory.NewRowsCache()
-	defer dispose()
-
-	for {
-		row, err := i.childIter.Next(ctx)
-
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-
-		if err := cache.Add(row); err != nil {
-			return err
-		}
-	}
-
-	rows := cache.Get()
-	sorter := &expression.Sorter{
-		SortFields: i.sortFields,
-		Rows:       rows,
-		LastError:  nil,
-		Ctx:        ctx,
-	}
-	sort.Stable(sorter)
-	if sorter.LastError != nil {
-		return sorter.LastError
-	}
-	i.sortedRows = rows
-	return nil
-}
-
-// distinctIter keeps track of the hashes of all rows that have been emitted.
-// It does not emit any rows whose hashes have been seen already.
-// TODO: come up with a way to use less memory than keeping all hashes in memory.
-// Even though they are just 64-bit integers, this could be a problem in large
-// result sets.
-type distinctIter struct {
-	childIter sql.RowIter
-	seen      sql.KeyValueCache
-	dispose   sql.DisposeFunc
-}
-
-func newDistinctIter(ctx *sql.Context, child sql.RowIter) *distinctIter {
-	cache, dispose := ctx.Memory.NewHistoryCache()
-	return &distinctIter{
-		childIter: child,
-		seen:      cache,
-		dispose:   dispose,
-	}
-}
-
-func (di *distinctIter) Next(ctx *sql.Context) (sql.Row, error) {
-	for {
-		row, err := di.childIter.Next(ctx)
-		if err != nil {
-			if err == io.EOF {
-				di.Dispose()
-			}
-			return nil, err
-		}
-
-		hash, err := sql.HashOf(row)
-		if err != nil {
-			return nil, err
-		}
-
-		if _, err := di.seen.Get(hash); err == nil {
-			continue
-		}
-
-		if err := di.seen.Put(hash, struct{}{}); err != nil {
-			return nil, err
-		}
-
-		return row, nil
-	}
-}
-
-func (di *distinctIter) Close(ctx *sql.Context) error {
-	di.Dispose()
-	return di.childIter.Close(ctx)
-}
-
-func (di *distinctIter) Dispose() {
-	if di.dispose != nil {
-		di.dispose()
-	}
-}
-
-type unionIter struct {
-	cur      sql.RowIter
-	nextIter func(ctx *sql.Context) (sql.RowIter, error)
-}
-
-func (ui *unionIter) Next(ctx *sql.Context) (sql.Row, error) {
-	res, err := ui.cur.Next(ctx)
-	if err == io.EOF {
-		if ui.nextIter == nil {
-			return nil, io.EOF
-		}
-		err = ui.cur.Close(ctx)
-		if err != nil {
-			return nil, err
-		}
-		ui.cur, err = ui.nextIter(ctx)
-		ui.nextIter = nil
-		if err != nil {
-			return nil, err
-		}
-		return ui.cur.Next(ctx)
-	}
-	return res, err
-}
-
-func (ui *unionIter) Close(ctx *sql.Context) error {
-	if ui.cur != nil {
-		return ui.cur.Close(ctx)
-	} else {
-		return nil
-	}
-}
-
-type intersectIter struct {
-	lIter, rIter sql.RowIter
-	cached       bool
-	cache        map[uint64]int
-}
-
-func (ii *intersectIter) Next(ctx *sql.Context) (sql.Row, error) {
-	if !ii.cached {
-		ii.cache = make(map[uint64]int)
-		for {
-			res, err := ii.rIter.Next(ctx)
-			if err != nil && err != io.EOF {
-				return nil, err
-			}
-
-			hash, herr := sql.HashOf(res)
-			if herr != nil {
-				return nil, herr
-			}
-			if _, ok := ii.cache[hash]; !ok {
-				ii.cache[hash] = 0
-			}
-			ii.cache[hash]++
-
-			if err == io.EOF {
-				break
-			}
-		}
-		ii.cached = true
-	}
-
-	for {
-		res, err := ii.lIter.Next(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		hash, herr := sql.HashOf(res)
-		if herr != nil {
-			return nil, herr
-		}
-		if _, ok := ii.cache[hash]; !ok {
-			continue
-		}
-		if ii.cache[hash] <= 0 {
-			continue
-		}
-		ii.cache[hash]--
-
-		return res, nil
-	}
-}
-
-func (ii *intersectIter) Close(ctx *sql.Context) error {
-	if ii.lIter != nil {
-		if err := ii.lIter.Close(ctx); err != nil {
-			return err
-		}
-	}
-	if ii.rIter != nil {
-		if err := ii.rIter.Close(ctx); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-type exceptIter struct {
-	lIter, rIter sql.RowIter
-	cached       bool
-	cache        map[uint64]int
-}
-
-func (ei *exceptIter) Next(ctx *sql.Context) (sql.Row, error) {
-	if !ei.cached {
-		ei.cache = make(map[uint64]int)
-		for {
-			res, err := ei.rIter.Next(ctx)
-			if err != nil && err != io.EOF {
-				return nil, err
-			}
-
-			hash, herr := sql.HashOf(res)
-			if herr != nil {
-				return nil, herr
-			}
-			if _, ok := ei.cache[hash]; !ok {
-				ei.cache[hash] = 0
-			}
-			ei.cache[hash]++
-
-			if err == io.EOF {
-				break
-			}
-		}
-		ei.cached = true
-	}
-
-	for {
-		res, err := ei.lIter.Next(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		hash, herr := sql.HashOf(res)
-		if herr != nil {
-			return nil, herr
-		}
-		if _, ok := ei.cache[hash]; !ok {
-			return res, nil
-		}
-		if ei.cache[hash] <= 0 {
-			return res, nil
-		}
-		ei.cache[hash]--
-	}
-}
-
-func (ei *exceptIter) Close(ctx *sql.Context) error {
-	if ei.lIter != nil {
-		if err := ei.lIter.Close(ctx); err != nil {
-			return err
-		}
-	}
-	if ei.rIter != nil {
-		if err := ei.rIter.Close(ctx); err != nil {
-			return err
-		}
 	}
 	return nil
 }

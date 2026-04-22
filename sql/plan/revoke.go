@@ -26,19 +26,21 @@ import (
 
 // Revoke represents the statement REVOKE [privilege...] ON [item] FROM [user...].
 type Revoke struct {
-	Privileges     []Privilege
-	ObjectType     ObjectType
-	PrivilegeLevel PrivilegeLevel
-	Users          []UserName
-	MySQLDb        sql.Database
+	MySQLDb           sql.Database
+	PrivilegeLevel    PrivilegeLevel
+	Privileges        []Privilege
+	Users             []UserName
+	ObjectType        ObjectType
+	IgnoreUnknownUser bool
 }
 
 var _ sql.Node = (*Revoke)(nil)
 var _ sql.Databaser = (*Revoke)(nil)
 var _ sql.CollationCoercible = (*Revoke)(nil)
+var _ sql.AuthorizationCheckerNode = (*Revoke)(nil)
 
 // Schema implements the interface sql.Node.
-func (n *Revoke) Schema() sql.Schema {
+func (n *Revoke) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -79,15 +81,15 @@ func (n *Revoke) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (n *Revoke) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (n *Revoke) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(n, len(children), 0)
 	}
 	return n, nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (n *Revoke) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
+// CheckAuth implements the interface sql.AuthorizationCheckerNode.
+func (n *Revoke) CheckAuth(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
 	subject := sql.PrivilegeCheckSubject{Database: "mysql"}
 	if opChecker.UserHasPrivileges(ctx,
 		sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Update)) {
@@ -164,7 +166,7 @@ func (n *Revoke) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOpera
 		return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject,
 			convertToSqlPrivilegeType(true, n.Privileges...)...))
 	} else {
-		//TODO: add column checks
+		// TODO: add column checks
 		subject = sql.PrivilegeCheckSubject{
 			Database: n.PrivilegeLevel.Database,
 			Table:    n.PrivilegeLevel.TableRoutine,
@@ -424,97 +426,33 @@ func (n *Revoke) HandleRoutinePrivileges(user *mysql_db.User, dbName string, rou
 	return nil
 }
 
-// RevokeAll represents the statement REVOKE ALL PRIVILEGES.
-type RevokeAll struct {
-	Users []UserName
-}
-
-var _ sql.Node = (*RevokeAll)(nil)
-var _ sql.CollationCoercible = (*RevokeAll)(nil)
-
-// NewRevokeAll returns a new RevokeAll node.
-func NewRevokeAll(users []UserName) *RevokeAll {
-	return &RevokeAll{
-		Users: users,
-	}
-}
-
-// Schema implements the interface sql.Node.
-func (n *RevokeAll) Schema() sql.Schema {
-	return types.OkResultSchema
-}
-
-func (n *RevokeAll) IsReadOnly() bool {
-	return false
-}
-
-// String implements the interface sql.Node.
-func (n *RevokeAll) String() string {
-	users := make([]string, len(n.Users))
-	for i, user := range n.Users {
-		users[i] = user.String("")
-	}
-	return fmt.Sprintf("RevokeAll(From: %s)", strings.Join(users, ", "))
-}
-
-// Resolved implements the interface sql.Node.
-func (n *RevokeAll) Resolved() bool {
-	return true
-}
-
-// Children implements the interface sql.Node.
-func (n *RevokeAll) Children() []sql.Node {
-	return nil
-}
-
-// WithChildren implements the interface sql.Node.
-func (n *RevokeAll) WithChildren(children ...sql.Node) (sql.Node, error) {
-	if len(children) != 0 {
-		return nil, sql.ErrInvalidChildrenNumber.New(n, len(children), 0)
-	}
-	return n, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (n *RevokeAll) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	createUser := sql.NewPrivilegedOperation(sql.PrivilegeCheckSubject{}, sql.PrivilegeType_CreateUser)
-	superUser := sql.NewPrivilegedOperation(sql.PrivilegeCheckSubject{}, sql.PrivilegeType_Super)
-
-	subject := sql.PrivilegeCheckSubject{Database: "mysql"}
-	mysqlUpdate := sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Update)
-
-	return opChecker.UserHasPrivileges(ctx, createUser) ||
-		opChecker.UserHasPrivileges(ctx, superUser) ||
-		opChecker.UserHasPrivileges(ctx, mysqlUpdate)
-}
-
-// CollationCoercibility implements the interface sql.CollationCoercible.
-func (*RevokeAll) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
-	return sql.Collation_binary, 7
-}
-
 // RevokeRole represents the statement REVOKE [role...] FROM [user...].
 type RevokeRole struct {
-	Roles       []UserName
-	TargetUsers []UserName
-	MySQLDb     sql.Database
+	MySQLDb           sql.Database
+	Roles             []UserName
+	TargetUsers       []UserName
+	IfExists          bool
+	IgnoreUnknownUser bool
 }
 
 var _ sql.Node = (*RevokeRole)(nil)
 var _ sql.Databaser = (*RevokeRole)(nil)
 var _ sql.CollationCoercible = (*RevokeRole)(nil)
+var _ sql.AuthorizationCheckerNode = (*RevokeRole)(nil)
 
 // NewRevokeRole returns a new RevokeRole node.
-func NewRevokeRole(roles []UserName, users []UserName) *RevokeRole {
+func NewRevokeRole(roles []UserName, users []UserName, ifExists, ignoreUnknownUser bool) *RevokeRole {
 	return &RevokeRole{
-		Roles:       roles,
-		TargetUsers: users,
-		MySQLDb:     sql.UnresolvedDatabase("mysql"),
+		Roles:             roles,
+		TargetUsers:       users,
+		IfExists:          ifExists,
+		IgnoreUnknownUser: ignoreUnknownUser,
+		MySQLDb:           sql.UnresolvedDatabase("mysql"),
 	}
 }
 
 // Schema implements the interface sql.Node.
-func (n *RevokeRole) Schema() sql.Schema {
+func (n *RevokeRole) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -559,20 +497,20 @@ func (n *RevokeRole) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (n *RevokeRole) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (n *RevokeRole) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(n, len(children), 0)
 	}
 	return n, nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (n *RevokeRole) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
+// CheckAuth implements the interface sql.AuthorizationCheckerNode.
+func (n *RevokeRole) CheckAuth(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
 	if opChecker.UserHasPrivileges(ctx,
 		sql.NewPrivilegedOperation(sql.PrivilegeCheckSubject{}, sql.PrivilegeType_Super)) {
 		return true
 	}
-	//TODO: only active roles may be revoked if the SUPER privilege is not held
+	// TODO: only active roles may be revoked if the SUPER privilege is not held
 	mysqlDb := n.MySQLDb.(*mysql_db.MySQLDb)
 	client := ctx.Session.Client()
 
@@ -610,23 +548,28 @@ func (*RevokeRole) CollationCoercibility(ctx *sql.Context) (collation sql.Collat
 
 // RevokeProxy represents the statement REVOKE PROXY.
 type RevokeProxy struct {
-	On   UserName
-	From []UserName
+	On                UserName
+	From              []UserName
+	IfExists          bool
+	ignoreUnknownUser bool
 }
 
 var _ sql.Node = (*RevokeProxy)(nil)
 var _ sql.CollationCoercible = (*RevokeProxy)(nil)
+var _ sql.AuthorizationCheckerNode = (*RevokeProxy)(nil)
 
 // NewRevokeProxy returns a new RevokeProxy node.
-func NewRevokeProxy(on UserName, from []UserName) *RevokeProxy {
+func NewRevokeProxy(on UserName, from []UserName, ifExists, ignoreUnknownUser bool) *RevokeProxy {
 	return &RevokeProxy{
-		On:   on,
-		From: from,
+		On:                on,
+		From:              from,
+		IfExists:          ifExists,
+		ignoreUnknownUser: ignoreUnknownUser,
 	}
 }
 
 // Schema implements the interface sql.Node.
-func (n *RevokeProxy) Schema() sql.Schema {
+func (n *RevokeProxy) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -654,25 +597,20 @@ func (n *RevokeProxy) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (n *RevokeProxy) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (n *RevokeProxy) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(n, len(children), 0)
 	}
 	return n, nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (n *RevokeProxy) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	//TODO: add this when proxy support is added
+// CheckAuth implements the interface sql.AuthorizationCheckerNode.
+func (n *RevokeProxy) CheckAuth(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
+	// TODO: add this when proxy support is added
 	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (*RevokeProxy) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.Collation_binary, 7
-}
-
-// RowIter implements the interface sql.Node.
-func (n *RevokeProxy) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
-	return nil, fmt.Errorf("not yet implemented")
 }

@@ -23,9 +23,9 @@ import (
 
 // AlterUser represents the statement ALTER USER.
 type AlterUser struct {
-	IfExists bool
-	User     AuthenticatedUser
 	MySQLDb  sql.Database
+	User     AuthenticatedUser
+	IfExists bool
 }
 
 var _ sql.Node = (*AlterUser)(nil)
@@ -33,7 +33,7 @@ var _ sql.Databaser = (*AlterUser)(nil)
 var _ sql.CollationCoercible = (*AlterUser)(nil)
 
 // Schema implements the interface sql.Node.
-func (a *AlterUser) Schema() sql.Schema {
+func (a *AlterUser) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -75,35 +75,11 @@ func (a *AlterUser) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (a *AlterUser) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (a *AlterUser) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(a, len(children), 0)
 	}
 	return a, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (a *AlterUser) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	// From the MySQL reference on ALTER USER:
-	// https://dev.mysql.com/doc/refman/8.0/en/alter-user.html
-	// ALTER USER generally requires either the global `CREATE USER` privilege, or the `UPDATE` privilege
-	// for the `mysql` system schema.
-	if opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(
-		sql.PrivilegeCheckSubject{Database: "mysql"}, sql.PrivilegeType_Update)) {
-		return true
-	} else if opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(
-		sql.PrivilegeCheckSubject{}, sql.PrivilegeType_CreateUser)) {
-		return true
-	}
-
-	// There are several exceptions to the general privilege requirements. Currently, the only relevant one is
-	// that any client who connects to the server using a non-anonymous account can change the password for that account.
-	authenticatedUser := ctx.Session.Client()
-	if a.User.Name == authenticatedUser.User {
-		return true
-	}
-
-	return false
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

@@ -1,17 +1,14 @@
 package analyzer
 
 import (
-	"strings"
-
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/transform"
 )
 
-// modifyUpdateExpressionsForJoin searches for a JOIN for UPDATE query and updates the child of the original update
+// modifyUpdateExprsForJoin searches for a JOIN for UPDATE query and updates the child of the original update
 // node to use a plan.UpdateJoin node as a child.
-func modifyUpdateExpressionsForJoin(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
+func modifyUpdateExprsForJoin(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
 	switch n := n.(type) {
 	case *plan.Update:
 		us, ok := n.Child.(*plan.UpdateSource)
@@ -20,7 +17,7 @@ func modifyUpdateExpressionsForJoin(ctx *sql.Context, a *Analyzer, n sql.Node, s
 		}
 
 		var jn sql.Node
-		transform.Inspect(us, func(node sql.Node) bool {
+		transform.InspectWithOpaque(ctx, us, func(ctx *sql.Context, node sql.Node) bool {
 			switch node.(type) {
 			case *plan.JoinNode:
 				jn = node
@@ -34,13 +31,13 @@ func modifyUpdateExpressionsForJoin(ctx *sql.Context, a *Analyzer, n sql.Node, s
 			return n, transform.SameTree, nil
 		}
 
-		updaters, err := rowUpdatersByTable(ctx, us, jn)
+		updateTargets, err := getUpdateTargetsByTable(ctx, us, jn, n.IsJoin)
 		if err != nil {
 			return nil, transform.SameTree, err
 		}
 
-		uj := plan.NewUpdateJoin(updaters, us)
-		ret, err := n.WithChildren(uj)
+		uj := plan.NewUpdateJoin(updateTargets, us)
+		ret, err := n.WithChildren(ctx, uj)
 		if err != nil {
 			return nil, transform.SameTree, err
 		}
@@ -51,12 +48,12 @@ func modifyUpdateExpressionsForJoin(ctx *sql.Context, a *Analyzer, n sql.Node, s
 	return n, transform.SameTree, nil
 }
 
-// rowUpdatersByTable maps a set of tables to their RowUpdater objects.
-func rowUpdatersByTable(ctx *sql.Context, node sql.Node, ij sql.Node) (map[string]sql.RowUpdater, error) {
-	namesOfTableToBeUpdated := getTablesToBeUpdated(node)
-	resolvedTables := getTablesByName(ij)
+// getUpdateTargetsByTable maps a set of table names and aliases to their corresponding update target Node
+func getUpdateTargetsByTable(ctx *sql.Context, node sql.Node, ij sql.Node, isJoin bool) (map[string]sql.Node, error) {
+	namesOfTableToBeUpdated := plan.GetTablesToBeUpdated(ctx, node)
+	resolvedTables := getResolvedTablesByName(ctx, ij)
 
-	rowUpdatersByTable := make(map[string]sql.RowUpdater)
+	updateTargets := make(map[string]sql.Node)
 	for tableToBeUpdated, _ := range namesOfTableToBeUpdated {
 		resolvedTable, ok := resolvedTables[tableToBeUpdated]
 		if !ok {
@@ -71,31 +68,13 @@ func rowUpdatersByTable(ctx *sql.Context, node sql.Node, ij sql.Node) (map[strin
 			return nil, plan.ErrUpdateForTableNotSupported.New(tableToBeUpdated)
 		}
 
-		keyless := sql.IsKeyless(updatable.Schema())
-		if keyless {
+		keyless := sql.IsKeyless(updatable.Schema(ctx))
+		if keyless && isJoin {
 			return nil, sql.ErrUnsupportedFeature.New("error: keyless tables unsupported for UPDATE JOIN")
 		}
 
-		rowUpdatersByTable[tableToBeUpdated] = updatable.Updater(ctx)
+		updateTargets[tableToBeUpdated] = resolvedTable
 	}
 
-	return rowUpdatersByTable, nil
-}
-
-// getTablesToBeUpdated takes a node and looks for the tables to modified by a SetField.
-func getTablesToBeUpdated(node sql.Node) map[string]struct{} {
-	ret := make(map[string]struct{})
-
-	transform.InspectExpressions(node, func(e sql.Expression) bool {
-		switch e := e.(type) {
-		case *expression.SetField:
-			gf := e.LeftChild.(*expression.GetField)
-			ret[strings.ToLower(gf.Table())] = struct{}{}
-			return false
-		}
-
-		return true
-	})
-
-	return ret
+	return updateTargets, nil
 }

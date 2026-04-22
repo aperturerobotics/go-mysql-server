@@ -29,9 +29,10 @@ import (
 )
 
 func TestRand(t *testing.T) {
-	r, _ := NewRand()
+	ctx := sql.NewEmptyContext()
+	r, _ := NewRand(ctx)
 
-	assert.Equal(t, types.Float64, r.Type())
+	assert.Equal(t, types.Float64, r.Type(ctx))
 	assert.Equal(t, "rand()", r.String())
 
 	f, err := r.Eval(nil, nil)
@@ -51,9 +52,10 @@ func TestRand(t *testing.T) {
 }
 
 func TestRandWithSeed(t *testing.T) {
-	r, _ := NewRand(expression.NewLiteral(10, types.Int8))
+	ctx := sql.NewEmptyContext()
+	r, _ := NewRand(ctx, expression.NewLiteral(10, types.Int8))
 
-	assert.Equal(t, types.Float64, r.Type())
+	assert.Equal(t, types.Float64, r.Type(ctx))
 	assert.Equal(t, "rand(10)", r.String())
 
 	f, err := r.Eval(nil, nil)
@@ -69,8 +71,24 @@ func TestRandWithSeed(t *testing.T) {
 
 	assert.Equal(t, f64, f642)
 
-	r, _ = NewRand(expression.NewLiteral("not a number", types.LongText))
+	r, _ = NewRand(ctx, expression.NewLiteral("not a number", types.LongText))
 	assert.Equal(t, `rand('not a number')`, r.String())
+
+	f, err = r.Eval(nil, nil)
+	require.NoError(t, err)
+	f64 = f.(float64)
+
+	assert.GreaterOrEqual(t, f64, float64(0))
+	assert.Less(t, f64, float64(1))
+
+	f, err = r.Eval(nil, nil)
+	require.NoError(t, err)
+	f642 = f.(float64)
+
+	assert.Equal(t, f64, f642)
+
+	r, _ = NewRand(ctx, expression.NewLiteral("10 not a number", types.LongText))
+	assert.Equal(t, `rand('10 not a number')`, r.String())
 
 	f, err = r.Eval(nil, nil)
 	require.NoError(t, err)
@@ -94,6 +112,7 @@ func TestRadians(t *testing.T) {
 	tf.AddSucceeding(math.Pi, int16(180))
 	tf.AddSucceeding(math.Pi/2.0, (90))
 	tf.AddSucceeding(2*math.Pi, 360.0)
+	tf.AddSucceeding(math.Pi, "180.0abc")
 	tf.Test(t, nil, nil)
 }
 
@@ -107,13 +126,14 @@ func TestDegrees(t *testing.T) {
 		{"decimal 2pi", decimal.NewFromFloat(2 * math.Pi), 360.0},
 		{"float64 pi/2", math.Pi / 2.0, 90.0},
 		{"float32 3*pi/2", float32(3.0 * math.Pi / 2.0), 270.0},
+		{"string truncates", "3.1415926536ABC", 180.0},
 	}
 
 	f := sql.Function1{Name: "degrees", Fn: NewDegrees}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			degrees := f.Fn(expression.NewLiteral(test.input, nil))
+			degrees := f.Fn(sql.NewEmptyContext(), expression.NewLiteral(test.input, nil))
 			res, err := degrees.Eval(nil, nil)
 			require.NoError(t, err)
 			assert.True(t, withinRoundingErr(test.expected, res.(float64)))
@@ -148,23 +168,24 @@ func TestCRC32(t *testing.T) {
 	}
 
 	f := sql.Function1{Name: "crc32", Fn: NewCrc32}
+	ctx := sql.NewEmptyContext()
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			crc32 := f.Fn(expression.NewLiteral(test.input, nil))
+			crc32 := f.Fn(ctx, expression.NewLiteral(test.input, nil))
 			res, err := crc32.Eval(nil, nil)
 			assert.NoError(t, err)
 			assert.Equal(t, test.expected, res)
 		})
 	}
 
-	crc32 := f.Fn(nil)
+	crc32 := f.Fn(ctx, nil)
 	res, err := crc32.Eval(nil, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, nil, res)
 
 	nullLiteral := expression.NewLiteral(nil, types.Null)
-	crc32 = f.Fn(nullLiteral)
+	crc32 = f.Fn(ctx, nullLiteral)
 	res, err = crc32.Eval(nil, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, nil, res)
@@ -181,14 +202,15 @@ func TestTrigFunctions(t *testing.T) {
 
 	const numChecks = 24
 	delta := (2 * math.Pi) / float64(numChecks)
+	ctx := sql.NewEmptyContext()
 	for i := 0; i <= numChecks; i++ {
 		theta := delta * float64(i)
 		thetaLiteral := expression.NewLiteral(theta, nil)
-		sinVal, err := sin.Fn(thetaLiteral).Eval(nil, nil)
+		sinVal, err := sin.Fn(ctx, thetaLiteral).Eval(nil, nil)
 		assert.NoError(t, err)
-		cosVal, err := cos.Fn(thetaLiteral).Eval(nil, nil)
+		cosVal, err := cos.Fn(ctx, thetaLiteral).Eval(nil, nil)
 		assert.NoError(t, err)
-		tanVal, err := tan.Fn(thetaLiteral).Eval(nil, nil)
+		tanVal, err := tan.Fn(ctx, thetaLiteral).Eval(nil, nil)
 		assert.NoError(t, err)
 
 		sinF, _ := sinVal.(float64)
@@ -199,17 +221,17 @@ func TestTrigFunctions(t *testing.T) {
 		assert.True(t, withinRoundingErr(math.Cos(theta), cosF))
 		assert.True(t, withinRoundingErr(math.Tan(theta), tanF))
 
-		asinVal, err := asin.Fn(expression.NewLiteral(sinF, nil)).Eval(nil, nil)
+		asinVal, err := asin.Fn(ctx, expression.NewLiteral(sinF, nil)).Eval(nil, nil)
 		assert.NoError(t, err)
-		acosVal, err := acos.Fn(expression.NewLiteral(cosF, nil)).Eval(nil, nil)
+		acosVal, err := acos.Fn(ctx, expression.NewLiteral(cosF, nil)).Eval(nil, nil)
 		assert.NoError(t, err)
-		atanFn, err := atan.Fn(expression.NewLiteral(tanF, nil))
+		atanFn, err := atan.Fn(ctx, expression.NewLiteral(tanF, nil))
 		assert.NoError(t, err)
-		atanVal, err := atanFn.Eval(nil, nil)
+		atanVal, err := atanFn.Eval(ctx, nil)
 		assert.NoError(t, err)
-		atan2Fn, err := atan2.Fn(expression.NewLiteral(tanF, nil), expression.NewLiteral(tanF-1, nil))
+		atan2Fn, err := atan2.Fn(ctx, expression.NewLiteral(tanF, nil), expression.NewLiteral(tanF-1, nil))
 		assert.NoError(t, err)
-		atan2Val, err := atan2Fn.Eval(nil, nil)
+		atan2Val, err := atan2Fn.Eval(ctx, nil)
 		assert.NoError(t, err)
 
 		assert.True(t, withinRoundingErr(math.Asin(sinF), asinVal.(float64)))
@@ -280,7 +302,7 @@ func TestMod(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mod, err := f.Fn(expression.NewLiteral(test.left, types.Int32), expression.NewLiteral(test.right, types.Int32))
+			mod, err := f.Fn(sql.NewEmptyContext(), expression.NewLiteral(test.left, types.Int32), expression.NewLiteral(test.right, types.Int32))
 			res, err := mod.Eval(nil, nil)
 			assert.NoError(t, err)
 			if r, ok := res.(decimal.Decimal); ok {
@@ -303,10 +325,11 @@ func TestPi(t *testing.T) {
 		},
 	}
 
+	ctx := sql.NewEmptyContext()
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := sql.NewEmptyContext()
-			pi := NewPi()
+			pi := NewPi(ctx)
 			res, err := pi.Eval(ctx, nil)
 			require.NoError(t, err)
 			assert.Equal(t, test.exp, res)
@@ -315,12 +338,12 @@ func TestPi(t *testing.T) {
 
 	var res interface{}
 	var err error
-	sin := NewSin(NewPi())
+	sin := NewSin(ctx, NewPi(ctx))
 	res, err = sin.Eval(nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1.2246467991473515e-16, res)
 
-	cos := NewCos(NewPi())
+	cos := NewCos(ctx, NewPi(ctx))
 	res, err = cos.Eval(nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, -1.0, res)
@@ -385,7 +408,7 @@ func TestExp(t *testing.T) {
 			exp:  math.Exp(0),
 		},
 		{
-			name: "empty string",
+			name: "empty string is 0",
 			arg:  expression.NewLiteral("", types.Text),
 			exp:  math.Exp(0),
 		},
@@ -395,13 +418,22 @@ func TestExp(t *testing.T) {
 			exp:  math.Exp(10),
 		},
 		{
-			// we don't do truncation yet
-			// https://github.com/dolthub/dolt/issues/7302
-			name: "scientific string is truncated",
+			name: "scientific float notation string is evaluated",
 			arg:  expression.NewLiteral("1e1", types.Text),
-			exp:  "",
+			exp:  math.Exp(10),
 			err:  false,
-			skip: true,
+		},
+		{
+			name: "string is truncated",
+			arg:  expression.NewLiteral("10abc", types.Text),
+			exp:  math.Exp(10),
+			err:  false,
+		},
+		{
+			name: "string is truncated",
+			arg:  expression.NewLiteral("+.123e+1abc", types.Text),
+			exp:  math.Exp(1.23),
+			err:  false,
 		},
 	}
 
@@ -412,7 +444,7 @@ func TestExp(t *testing.T) {
 			}
 
 			ctx := sql.NewEmptyContext()
-			f := NewExp(tt.arg)
+			f := NewExp(sql.NewEmptyContext(), tt.arg)
 
 			res, err := f.Eval(ctx, nil)
 			if tt.err {

@@ -19,6 +19,7 @@ import (
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
+	"github.com/dolthub/go-mysql-server/sql/hash"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
@@ -33,7 +34,7 @@ var _ sql.Expression = (*InSubquery)(nil)
 var _ sql.CollationCoercible = (*InSubquery)(nil)
 
 // Type implements sql.Expression
-func (in *InSubquery) Type() sql.Type {
+func (in *InSubquery) Type(ctx *sql.Context) sql.Type {
 	return types.Boolean
 }
 
@@ -47,11 +48,11 @@ func NewInSubquery(left sql.Expression, right sql.Expression) *InSubquery {
 	return &InSubquery{expression.BinaryExpressionStub{LeftChild: left, RightChild: right}}
 }
 
-var nilKey, _ = sql.HashOf(sql.NewRow(nil))
+var nilKey, _ = hash.HashOf(nil, nil, sql.NewRow(nil))
 
 // Eval implements the Expression interface.
 func (in *InSubquery) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
-	typ := in.LeftChild.Type().Promote()
+	typ := in.LeftChild.Type(ctx).Promote()
 	left, err := in.LeftChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -64,18 +65,18 @@ func (in *InSubquery) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	// However, there's a strange edge case. NULL IN (empty list) return 0, not NULL.
 	leftNull := left == nil
 
-	left, _, err = typ.Convert(left)
+	left, _, err = typ.Convert(ctx, left)
 	if err != nil {
 		return nil, err
 	}
 
 	switch right := in.RightChild.(type) {
 	case *Subquery:
-		if types.NumColumns(typ) != types.NumColumns(right.Type()) {
-			return nil, sql.ErrInvalidOperandColumns.New(types.NumColumns(typ), types.NumColumns(right.Type()))
+		if types.NumColumns(typ) != types.NumColumns(right.Type(ctx)) {
+			return nil, sql.ErrInvalidOperandColumns.New(types.NumColumns(typ), types.NumColumns(right.Type(ctx)))
 		}
 
-		typ := right.Type()
+		rTyp := right.Type(ctx)
 
 		values, err := right.HashMultiple(ctx, row)
 		if err != nil {
@@ -91,12 +92,12 @@ func (in *InSubquery) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		}
 
 		// convert left to right's type
-		nLeft, _, err := typ.Convert(left)
+		nLeft, _, err := rTyp.Convert(ctx, left)
 		if err != nil {
 			return false, nil
 		}
 
-		key, err := sql.HashOf(sql.NewRow(nLeft))
+		key, err := hash.HashOf(ctx, sql.Schema{&sql.Column{Type: rTyp}}, sql.NewRow(nLeft))
 		if err != nil {
 			return nil, err
 		}
@@ -109,12 +110,12 @@ func (in *InSubquery) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 			return false, nil
 		}
 
-		val, _, err = typ.Convert(val)
+		val, _, err = rTyp.Convert(ctx, val)
 		if err != nil {
 			return false, nil
 		}
 
-		cmp, err := typ.Compare(left, val)
+		cmp, err := rTyp.Compare(ctx, left, val)
 		if err != nil {
 			return nil, err
 		}
@@ -127,7 +128,7 @@ func (in *InSubquery) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 }
 
 // WithChildren implements the Expression interface.
-func (in *InSubquery) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (in *InSubquery) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(in, len(children), 2)
 	}
@@ -135,18 +136,21 @@ func (in *InSubquery) WithChildren(children ...sql.Expression) (sql.Expression, 
 }
 
 // Describe implements the sql.Describable interface
-func (in *InSubquery) Describe(options sql.DescribeOptions) string {
+func (in *InSubquery) Describe(ctx *sql.Context, options sql.DescribeOptions) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("InSubquery")
-	children := []string{fmt.Sprintf("left: %s", sql.Describe(in.Left(), options)),
-		fmt.Sprintf("right: %s", sql.Describe(in.Right(), options))}
+	children := []string{fmt.Sprintf("left: %s", sql.Describe(ctx, in.Left(), options)),
+		fmt.Sprintf("right: %s", sql.Describe(ctx, in.Right(), options))}
 	_ = pr.WriteChildren(children...)
 	return pr.String()
 }
 
 // String implements the fmt.Stringer interface
 func (in *InSubquery) String() string {
-	return in.Describe(sql.DescribeOptions{
+	// To maintain compatibility with fmt.Stringer we have to use an empty context, but this will fail in any case that
+	// requires a context to determine a string (such as an integrator using the context to contain type information).
+	ctx := sql.NewEmptyContext()
+	return in.Describe(ctx, sql.DescribeOptions{
 		Analyze:   false,
 		Estimates: false,
 		Debug:     false,
@@ -154,8 +158,8 @@ func (in *InSubquery) String() string {
 }
 
 // DebugString implements the sql.DebugStringer interface
-func (in *InSubquery) DebugString() string {
-	return in.Describe(sql.DescribeOptions{
+func (in *InSubquery) DebugString(ctx *sql.Context) string {
+	return in.Describe(ctx, sql.DescribeOptions{
 		Analyze:   false,
 		Estimates: false,
 		Debug:     true,
@@ -168,9 +172,9 @@ func (in *InSubquery) Children() []sql.Expression {
 }
 
 // Dispose implements sql.Disposable
-func (in *InSubquery) Dispose() {
+func (in *InSubquery) Dispose(ctx *sql.Context) {
 	if sq, ok := in.RightChild.(*Subquery); ok {
-		sq.Dispose()
+		sq.Dispose(ctx)
 	}
 }
 

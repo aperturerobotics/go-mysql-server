@@ -26,7 +26,7 @@ import (
 )
 
 func TestEmptyCoalesce(t *testing.T) {
-	_, err := NewCoalesce()
+	_, err := NewCoalesce(sql.NewEmptyContext())
 	require.True(t, sql.ErrInvalidArgumentNumber.Is(err))
 }
 
@@ -45,7 +45,7 @@ func TestCoalesce(t *testing.T) {
 				expression.NewLiteral(2, types.Int32),
 				expression.NewLiteral(3, types.Int32),
 			},
-			expected: 1,
+			expected: int32(1),
 			typ:      types.Int32,
 			nullable: false,
 		},
@@ -56,7 +56,7 @@ func TestCoalesce(t *testing.T) {
 				nil,
 				expression.NewLiteral(3, types.Int32),
 			},
-			expected: 3,
+			expected: int32(3),
 			typ:      types.Int32,
 			nullable: false,
 		},
@@ -100,7 +100,7 @@ func TestCoalesce(t *testing.T) {
 				expression.NewLiteral(decimal.NewFromFloat(2.0), types.MustCreateDecimalType(10, 0)),
 				expression.NewLiteral("3", types.LongText),
 			},
-			expected: 1,
+			expected: "1",
 			typ:      types.LongText,
 			nullable: false,
 		},
@@ -110,7 +110,7 @@ func TestCoalesce(t *testing.T) {
 				expression.NewLiteral(1, types.Int32),
 				expression.NewLiteral(2, types.Uint32),
 			},
-			expected: 1,
+			expected: decimal.New(1, 0),
 			typ:      types.MustCreateDecimalType(20, 0),
 			nullable: false,
 		},
@@ -120,7 +120,7 @@ func TestCoalesce(t *testing.T) {
 				expression.NewLiteral(1, types.Int32),
 				expression.NewLiteral(2, types.Uint32),
 			},
-			expected: 1,
+			expected: decimal.New(1, 0),
 			typ:      types.MustCreateDecimalType(20, 0),
 			nullable: false,
 		},
@@ -130,7 +130,7 @@ func TestCoalesce(t *testing.T) {
 				expression.NewLiteral(1, types.MustCreateDecimalType(10, 0)),
 				expression.NewLiteral(2, types.Float64),
 			},
-			expected: 1,
+			expected: float64(1),
 			typ:      types.Float64,
 			nullable: false,
 		},
@@ -139,7 +139,7 @@ func TestCoalesce(t *testing.T) {
 			input: []sql.Expression{
 				expression.NewLiteral(2, types.Float64),
 			},
-			expected: 2,
+			expected: float64(2),
 			typ:      types.Float64,
 			nullable: false,
 		},
@@ -148,51 +148,131 @@ func TestCoalesce(t *testing.T) {
 			input: []sql.Expression{
 				expression.NewLiteral(1, types.Float64),
 			},
-			expected: 1,
+			expected: float64(1),
 			typ:      types.Float64,
+			nullable: false,
+		},
+		{
+			name: "coalesce(json({'a': 'a \n b'}), '')",
+			input: []sql.Expression{
+				expression.NewLiteral("{\"a\": \"one \\n two\"}", types.JSON),
+				expression.NewLiteral("", types.LongText),
+			},
+			expected: "{\"a\": \"one \\n two\"}",
+			typ:      types.LongText,
+			nullable: false,
+		},
+		{
+			name: "coalesce(sysInt, sysInt)",
+			input: []sql.Expression{
+				expression.NewLiteral(1, types.NewSystemIntType("int1", 0, 10, false)),
+				expression.NewLiteral(2, types.NewSystemIntType("int2", 0, 10, false)),
+			},
+			expected: int64(1),
+			typ:      types.Int64,
+			nullable: false,
+		},
+		{
+			name: "coalesce(sysInt, sysUint)",
+			input: []sql.Expression{
+				expression.NewLiteral(1, types.NewSystemIntType("int1", 0, 10, false)),
+				expression.NewLiteral(2, types.NewSystemUintType("int2", 0, 10)),
+			},
+			expected: decimal.New(1, 0),
+			typ:      types.MustCreateDecimalType(20, 0),
+			nullable: false,
+		},
+		{
+			name: "coalesce(sysUint, sysUint)",
+			input: []sql.Expression{
+				expression.NewLiteral(1, types.NewSystemUintType("int1", 0, 10)),
+				expression.NewLiteral(2, types.NewSystemUintType("int2", 0, 10)),
+			},
+			expected: uint64(1),
+			typ:      types.Uint64,
+			nullable: false,
+		},
+		{
+			name: "coalesce(sysDouble, sysDouble)",
+			input: []sql.Expression{
+				expression.NewLiteral(1.0, types.NewSystemDoubleType("dbl1", 0.0, 10.0)),
+				expression.NewLiteral(2.0, types.NewSystemDoubleType("dbl2", 0.0, 10.0)),
+			},
+			expected: float64(1),
+			typ:      types.Float64,
+			nullable: false,
+		},
+		{
+			name: "coalesce(sysText)",
+			input: []sql.Expression{
+				expression.NewLiteral("abc", types.NewSystemStringType("str1")),
+			},
+			expected: "abc",
+			typ:      types.LongText,
+			nullable: false,
+		},
+		{
+			name: "coalesce(sysEnum)",
+			input: []sql.Expression{
+				expression.NewLiteral("abc", types.NewSystemEnumType("str1")),
+			},
+			expected: "abc",
+			typ:      types.EnumType{},
+			nullable: false,
+		},
+		{
+			name: "coalesce(sysSet)",
+			input: []sql.Expression{
+				expression.NewLiteral("abc", types.NewSystemSetType("str1", sql.Collation_Default, "abc")),
+			},
+			expected: "abc",
+			typ:      types.MustCreateSetType([]string{"abc"}, sql.Collation_Default),
 			nullable: false,
 		},
 	}
 
 	for _, tt := range testCases {
-		c, err := NewCoalesce(tt.input...)
-		require.NoError(t, err)
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := sql.NewEmptyContext()
+			c, err := NewCoalesce(ctx, tt.input...)
+			require.NoError(t, err)
 
-		require.Equal(t, tt.typ, c.Type())
-		require.Equal(t, tt.nullable, c.IsNullable())
-		v, err := c.Eval(sql.NewEmptyContext(), nil)
-		require.NoError(t, err)
-		require.Equal(t, tt.expected, v)
+			require.Equal(t, tt.typ, c.Type(ctx))
+			require.Equal(t, tt.nullable, c.IsNullable(ctx))
+			v, err := c.Eval(sql.NewEmptyContext(), nil)
+			require.NoError(t, err)
+			require.Equal(t, tt.expected, v)
+		})
 	}
 }
 
 func TestComposeCoalasce(t *testing.T) {
 	ctx := sql.NewEmptyContext()
-	c1, err := NewCoalesce(nil)
+	c1, err := NewCoalesce(ctx, nil)
 	require.NoError(t, err)
-	require.Equal(t, types.Null, c1.Type())
+	require.Equal(t, types.Null, c1.Type(ctx))
 	v, err := c1.Eval(ctx, nil)
 	require.NoError(t, err)
 	require.Equal(t, nil, v)
 
-	c2, err := NewCoalesce(nil, expression.NewLiteral(1, types.Int32))
+	c2, err := NewCoalesce(ctx, nil, expression.NewLiteral(1, types.Int32))
 	require.NoError(t, err)
-	require.Equal(t, types.Int32, c2.Type())
+	require.Equal(t, types.Int32, c2.Type(ctx))
 	v, err = c2.Eval(ctx, nil)
 	require.NoError(t, err)
-	require.Equal(t, 1, v)
+	require.Equal(t, int32(1), v)
 
-	c3, err := NewCoalesce(nil, c1, c2)
+	c3, err := NewCoalesce(ctx, nil, c1, c2)
 	require.NoError(t, err)
-	require.Equal(t, types.Int32, c3.Type())
+	require.Equal(t, types.Int32, c3.Type(ctx))
 	v, err = c3.Eval(ctx, nil)
 	require.NoError(t, err)
-	require.Equal(t, 1, v)
+	require.Equal(t, int32(1), v)
 
-	c4, err := NewCoalesce(expression.NewLiteral(nil, types.Null), c1, c2)
+	c4, err := NewCoalesce(ctx, expression.NewLiteral(nil, types.Null), c1, c2)
 	require.NoError(t, err)
-	require.Equal(t, types.Int32, c4.Type())
+	require.Equal(t, types.Int32, c4.Type(ctx))
 	v, err = c4.Eval(ctx, nil)
 	require.NoError(t, err)
-	require.Equal(t, 1, v)
+	require.Equal(t, int32(1), v)
 }

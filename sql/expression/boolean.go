@@ -23,7 +23,7 @@ import (
 
 // Not is a node that negates an expression.
 type Not struct {
-	UnaryExpression
+	UnaryExpressionStub
 }
 
 var _ sql.Expression = (*Not)(nil)
@@ -31,11 +31,14 @@ var _ sql.CollationCoercible = (*Not)(nil)
 
 // NewNot returns a new Not node.
 func NewNot(child sql.Expression) *Not {
-	return &Not{UnaryExpression{child}}
+	return &Not{UnaryExpressionStub{child}}
 }
 
 // Type implements the Expression interface.
-func (e *Not) Type() sql.Type {
+func (e *Not) Type(ctx *sql.Context) sql.Type {
+	if types.IsNull(ctx, e.Child) {
+		return types.Null
+	}
 	return types.Boolean
 }
 
@@ -69,16 +72,16 @@ func (e *Not) String() string {
 	return fmt.Sprintf("(NOT(%s))", e.Child)
 }
 
-func (e *Not) DebugString() string {
+func (e *Not) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("NOT")
-	children := []string{sql.DebugString(e.Child)}
+	children := []string{sql.DebugString(ctx, e.Child)}
 	_ = pr.WriteChildren(children...)
 	return pr.String()
 }
 
 // WithChildren implements the Expression interface.
-func (e *Not) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (e *Not) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(e, len(children), 1)
 	}

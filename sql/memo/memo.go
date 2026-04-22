@@ -16,6 +16,9 @@ package memo
 
 import (
 	"fmt"
+	"io"
+	"iter"
+	"slices"
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -37,31 +40,27 @@ type TableAndColumn struct {
 // an exprGroup, produce the same rows (possibly unordered) and schema.
 // Physical plans are stored in a linked list within an expression group.
 type Memo struct {
-	cnt  uint16
-	root *ExprGroup
-
-	hints *joinHints
-
-	c         Coster
-	statsProv sql.StatsProvider
-	Ctx       *sql.Context
-	scope     *plan.Scope
-	scopeLen  int
-
+	c          Coster
+	statsProv  sql.StatsProvider
+	root       *ExprGroup
+	hints      *joinHints
+	scope      *plan.Scope
 	TableProps *tableProps
 	QFlags     *sql.QueryFlags
+	cnt        uint16
+	Debug      bool
+	Tracer     *TraceLogger
 }
 
-func NewMemo(ctx *sql.Context, stats sql.StatsProvider, s *plan.Scope, scopeLen int, cost Coster, qFlags *sql.QueryFlags) *Memo {
+func NewMemo(ctx *sql.Context, stats sql.StatsProvider, s *plan.Scope, cost Coster, qFlags *sql.QueryFlags) *Memo {
 	return &Memo{
-		Ctx:        ctx,
 		c:          cost,
 		statsProv:  stats,
 		scope:      s,
-		scopeLen:   scopeLen,
 		TableProps: newTableProps(),
 		hints:      &joinHints{},
 		QFlags:     qFlags,
+		Tracer:     &TraceLogger{},
 	}
 }
 
@@ -73,6 +72,10 @@ func (m *Memo) HandleErr(err error) {
 	panic(MemoErr{Err: err})
 }
 
+func (m *Memo) EnableTrace(enable bool) {
+	m.Tracer.TraceEnabled = enable
+}
+
 func (m *Memo) Root() *ExprGroup {
 	return m.root
 }
@@ -81,15 +84,24 @@ func (m *Memo) StatsProvider() sql.StatsProvider {
 	return m.statsProv
 }
 
+// SessionHints returns any hints that have been enabled in the session for join planning,
+// such as the @@disable_merge_join SQL system variable.
+func (m *Memo) SessionHints(ctx *sql.Context) (hints []Hint) {
+	if val, _ := ctx.GetSessionVariable(ctx, sql.DisableMergeJoin); val.(int8) != 0 {
+		hints = append(hints, Hint{Typ: HintTypeNoMergeJoin})
+	}
+	return hints
+}
+
 // newExprGroup creates a new logical expression group to encapsulate the
 // action of a SQL clause.
 // TODO: this is supposed to deduplicate logically equivalent table scans
 // and scalar expressions, replacing references with a pointer. Currently
 // a hacky format to quickly support memoizing join trees.
-func (m *Memo) NewExprGroup(rel exprType) *ExprGroup {
+func (m *Memo) NewExprGroup(ctx *sql.Context, rel exprType) *ExprGroup {
 	m.cnt++
 	id := GroupId(m.cnt)
-	grp := newExprGroup(m, id, rel)
+	grp := newExprGroup(ctx, m, id, rel)
 
 	if s, ok := rel.(SourceRel); ok {
 		m.TableProps.addTable(s.Name(), id)
@@ -97,8 +109,8 @@ func (m *Memo) NewExprGroup(rel exprType) *ExprGroup {
 	return grp
 }
 
-func (m *Memo) memoizeSourceRel(rel SourceRel) *ExprGroup {
-	grp := m.NewExprGroup(rel)
+func (m *Memo) memoizeSourceRel(ctx *sql.Context, rel SourceRel) *ExprGroup {
+	grp := m.NewExprGroup(ctx, rel)
 	return grp
 }
 
@@ -106,7 +118,7 @@ func (m *Memo) getTableId(table string) (GroupId, bool) {
 	return m.TableProps.GetId(table)
 }
 
-func (m *Memo) MemoizeLeftJoin(grp, left, right *ExprGroup, op plan.JoinType, filter []sql.Expression) *ExprGroup {
+func (m *Memo) MemoizeLeftJoin(ctx *sql.Context, grp, left, right *ExprGroup, op plan.JoinType, filter []sql.Expression) *ExprGroup {
 	newJoin := &LeftJoin{
 		JoinBase: &JoinBase{
 			relBase: &relBase{},
@@ -118,14 +130,14 @@ func (m *Memo) MemoizeLeftJoin(grp, left, right *ExprGroup, op plan.JoinType, fi
 	}
 	// todo intern relExprs? add to appropriate group?
 	if grp == nil {
-		return m.NewExprGroup(newJoin)
+		return m.NewExprGroup(ctx, newJoin)
 	}
 	newJoin.g = grp
 	grp.Prepend(newJoin)
 	return grp
 }
 
-func (m *Memo) MemoizeInnerJoin(grp, left, right *ExprGroup, op plan.JoinType, filter []sql.Expression) *ExprGroup {
+func (m *Memo) MemoizeInnerJoin(ctx *sql.Context, grp, left, right *ExprGroup, op plan.JoinType, filter []sql.Expression) *ExprGroup {
 	newJoin := &InnerJoin{
 		JoinBase: &JoinBase{
 			relBase: &relBase{},
@@ -137,14 +149,14 @@ func (m *Memo) MemoizeInnerJoin(grp, left, right *ExprGroup, op plan.JoinType, f
 	}
 	// todo intern relExprs? add to appropriate group?
 	if grp == nil {
-		return m.NewExprGroup(newJoin)
+		return m.NewExprGroup(ctx, newJoin)
 	}
 	newJoin.g = grp
 	grp.Prepend(newJoin)
 	return grp
 }
 
-func (m *Memo) MemoizeLookupJoin(grp, left, right *ExprGroup, op plan.JoinType, filter []sql.Expression, lookup *IndexScan) *ExprGroup {
+func (m *Memo) MemoizeLookupJoin(ctx *sql.Context, grp, left, right *ExprGroup, op plan.JoinType, filter []sql.Expression, lookup *IndexScan) *ExprGroup {
 	if right.RelProps.reqIdxCols.Difference(lookup.Index.set).Len() > 0 {
 		// the index lookup does not cover the requested RHS indexScan columns,
 		// so this physical plan is invalid.
@@ -162,19 +174,19 @@ func (m *Memo) MemoizeLookupJoin(grp, left, right *ExprGroup, op plan.JoinType, 
 	}
 
 	if grp == nil {
-		return m.NewExprGroup(newJoin)
+		return m.NewExprGroup(ctx, newJoin)
 	}
 	newJoin.g = grp
 	grp.Prepend(newJoin)
 
-	if isInjectiveLookup(lookup.Index, newJoin.JoinBase, lookup.Table.Expressions(), lookup.Table.NullMask()) {
+	if isInjectiveLookup(ctx, lookup.Index, newJoin.JoinBase, lookup.Table.Expressions(), lookup.Table.NullMask()) {
 		newJoin.Injective = true
 	}
 
 	return grp
 }
 
-func (m *Memo) MemoizeHashJoin(grp *ExprGroup, join *JoinBase, toExpr, fromExpr []sql.Expression) *ExprGroup {
+func (m *Memo) MemoizeHashJoin(ctx *sql.Context, grp *ExprGroup, join *JoinBase, toExpr, fromExpr []sql.Expression) *ExprGroup {
 	if join.Right.RelProps.reqIdxCols.Len() > 0 {
 		// HASH_JOIN's RHS will be a table scan, so this physical
 		// plan will not provide the requested indexScan
@@ -188,7 +200,7 @@ func (m *Memo) MemoizeHashJoin(grp *ExprGroup, join *JoinBase, toExpr, fromExpr 
 	newJoin.Op = newJoin.Op.AsHash()
 
 	if grp == nil {
-		return m.NewExprGroup(newJoin)
+		return m.NewExprGroup(ctx, newJoin)
 	}
 	newJoin.g = grp
 	grp.Prepend(newJoin)
@@ -198,7 +210,7 @@ func (m *Memo) MemoizeHashJoin(grp *ExprGroup, join *JoinBase, toExpr, fromExpr 
 
 // MemoizeConcatLookupJoin creates a lookup join over a set of disjunctions.
 // If a LOOKUP_JOIN simulates x = v1, a concat lookup performs x in (v1, v2, v3, ...)
-func (m *Memo) MemoizeConcatLookupJoin(grp, left, right *ExprGroup, op plan.JoinType, filter []sql.Expression, lookups []*IndexScan) *ExprGroup {
+func (m *Memo) MemoizeConcatLookupJoin(ctx *sql.Context, grp, left, right *ExprGroup, op plan.JoinType, filter []sql.Expression, lookups []*IndexScan) *ExprGroup {
 	newJoin := &ConcatJoin{
 		JoinBase: &JoinBase{
 			relBase: &relBase{},
@@ -211,14 +223,14 @@ func (m *Memo) MemoizeConcatLookupJoin(grp, left, right *ExprGroup, op plan.Join
 	}
 
 	if grp == nil {
-		return m.NewExprGroup(newJoin)
+		return m.NewExprGroup(ctx, newJoin)
 	}
 	newJoin.g = grp
 	grp.Prepend(newJoin)
 	return grp
 }
 
-func (m *Memo) MemoizeRangeHeapJoin(grp, left, right *ExprGroup, op plan.JoinType, filter []sql.Expression, rangeHeap *RangeHeap) *ExprGroup {
+func (m *Memo) MemoizeRangeHeapJoin(ctx *sql.Context, grp, left, right *ExprGroup, op plan.JoinType, filter []sql.Expression, rangeHeap *RangeHeap) *ExprGroup {
 	newJoin := &RangeHeapJoin{
 		JoinBase: &JoinBase{
 			relBase: &relBase{},
@@ -232,14 +244,14 @@ func (m *Memo) MemoizeRangeHeapJoin(grp, left, right *ExprGroup, op plan.JoinTyp
 	newJoin.RangeHeap.Parent = newJoin.JoinBase
 
 	if grp == nil {
-		return m.NewExprGroup(newJoin)
+		return m.NewExprGroup(ctx, newJoin)
 	}
 	newJoin.g = grp
 	grp.Prepend(newJoin)
 	return grp
 }
 
-func (m *Memo) MemoizeMergeJoin(grp, left, right *ExprGroup, lIdx, rIdx *IndexScan, op plan.JoinType, filter []sql.Expression, swapCmp bool) *ExprGroup {
+func (m *Memo) MemoizeMergeJoin(ctx *sql.Context, grp, left, right *ExprGroup, lIdx, rIdx *IndexScan, op plan.JoinType, filter []sql.Expression, swapCmp bool) *ExprGroup {
 	rel := &MergeJoin{
 		JoinBase: &JoinBase{
 			relBase: &relBase{},
@@ -253,8 +265,8 @@ func (m *Memo) MemoizeMergeJoin(grp, left, right *ExprGroup, lIdx, rIdx *IndexSc
 		SwapCmp:   swapCmp,
 	}
 
-	comparer, ok := filter[0].(*expression.Equals)
-	if !ok {
+	eq, ok := filter[0].(expression.Equality)
+	if !ok || !eq.RepresentsEquality() {
 		err := sql.ErrMergeJoinExpectsComparerFilters.New(filter[0])
 		m.HandleErr(err)
 	}
@@ -262,45 +274,64 @@ func (m *Memo) MemoizeMergeJoin(grp, left, right *ExprGroup, lIdx, rIdx *IndexSc
 	var leftCompareExprs []sql.Expression
 	var rightCompareExprs []sql.Expression
 
-	leftTuple, isTuple := comparer.Left().(expression.Tuple)
+	leftTuple, isTuple := eq.Left().(expression.Tuple)
 	if isTuple {
-		rightTuple, _ := comparer.Right().(expression.Tuple)
+		rightTuple, _ := eq.Right().(expression.Tuple)
 		leftCompareExprs = leftTuple.Children()
 		rightCompareExprs = rightTuple.Children()
 	} else {
-		leftCompareExprs = []sql.Expression{comparer.Left()}
-		rightCompareExprs = []sql.Expression{comparer.Right()}
+		leftCompareExprs = []sql.Expression{eq.Left()}
+		rightCompareExprs = []sql.Expression{eq.Right()}
 	}
 
 	if grp == nil {
-		grp = m.NewExprGroup(rel)
-		rel.Injective = isInjectiveMerge(rel, leftCompareExprs, rightCompareExprs)
+		grp = m.NewExprGroup(ctx, rel)
+		rel.Injective = isInjectiveMerge(ctx, rel, leftCompareExprs, rightCompareExprs)
 		return grp
 	}
 	rel.g = grp
-	rel.Injective = isInjectiveMerge(rel, leftCompareExprs, rightCompareExprs)
+	rel.Injective = isInjectiveMerge(ctx, rel, leftCompareExprs, rightCompareExprs)
 	rel.CmpCnt = len(leftCompareExprs)
 	grp.Prepend(rel)
 	return grp
 }
 
-func (m *Memo) MemoizeProject(grp, child *ExprGroup, projections []sql.Expression) *ExprGroup {
+func (m *Memo) MemoizeProject(ctx *sql.Context, grp, child *ExprGroup, projections []sql.Expression) *ExprGroup {
 	rel := &Project{
 		relBase:     &relBase{},
 		Child:       child,
 		Projections: projections,
 	}
 	if grp == nil {
-		return m.NewExprGroup(rel)
+		return m.NewExprGroup(ctx, rel)
 	}
 	rel.g = grp
 	grp.Prepend(rel)
 	return grp
 }
 
+func (m *Memo) MemoizeDistinctProject(ctx *sql.Context, grp, child *ExprGroup, projections []sql.Expression) *ExprGroup {
+	proj := &Project{
+		relBase:     &relBase{},
+		Child:       child,
+		Projections: projections,
+	}
+	projGrp := m.NewExprGroup(ctx, proj)
+	distinct := &Distinct{
+		relBase: &relBase{},
+		Child:   projGrp,
+	}
+	if grp == nil {
+		return m.NewExprGroup(ctx, distinct)
+	}
+	distinct.g = grp
+	grp.Prepend(distinct)
+	return grp
+}
+
 // memoizeIndexScan creates a source node that uses a specific index to
 // access data
-func (m *Memo) memoizeIndexScan(grp *ExprGroup, ita *plan.IndexedTableAccess, alias string, index *Index, stat sql.Statistic) *ExprGroup {
+func (m *Memo) memoizeIndexScan(ctx *sql.Context, grp *ExprGroup, ita *plan.IndexedTableAccess, alias string, index *Index, stat sql.Statistic) *ExprGroup {
 	rel := &IndexScan{
 		sourceBase: &sourceBase{relBase: &relBase{}},
 		Table:      ita,
@@ -309,7 +340,7 @@ func (m *Memo) memoizeIndexScan(grp *ExprGroup, ita *plan.IndexedTableAccess, al
 		Stats:      stat,
 	}
 	if grp == nil {
-		return m.NewExprGroup(rel)
+		return m.NewExprGroup(ctx, rel)
 	}
 	rel.g = grp
 	grp.Prepend(rel)
@@ -319,46 +350,51 @@ func (m *Memo) memoizeIndexScan(grp *ExprGroup, ita *plan.IndexedTableAccess, al
 // MemoizeStaticIndexAccess creates or adds a static index scan to an expression
 // group. This is distinct from memoizeIndexScan so that we can mark ITA groups
 // as done early.
-func (m *Memo) MemoizeStaticIndexAccess(grp *ExprGroup, aliasName string, idx *Index, ita *plan.IndexedTableAccess, filters []sql.Expression, stat sql.Statistic) {
+func (m *Memo) MemoizeStaticIndexAccess(ctx *sql.Context, grp *ExprGroup, aliasName string, idx *Index, ita *plan.IndexedTableAccess, filters []sql.Expression, stat sql.Statistic) {
+	if m.Debug {
+		ctx.GetLogger().Debugf("new indexed table: %s/%s/%s", ita.Index().Database(), ita.Index().Table(), ita.Index().ID())
+		ctx.GetLogger().Debugf("index stats cnt: %d: ", stat.RowCount())
+		ctx.GetLogger().Debugf("index stats histogram: %s", stat.Histogram().DebugString(ctx))
+	}
 	if len(filters) > 0 {
 		// set the indexed path as best. correct for cases where
 		// indexScan is incompatible with best join operator
-		itaGrp := m.memoizeIndexScan(nil, ita, aliasName, idx, stat)
+		itaGrp := m.memoizeIndexScan(ctx, nil, ita, aliasName, idx, stat)
 		itaGrp.Best = itaGrp.First
 		itaGrp.Done = true
 		itaGrp.HintOk = true
 		itaGrp.Best.SetDistinct(NoDistinctOp)
-		fGrp := m.MemoizeFilter(grp, itaGrp, filters)
+		fGrp := m.MemoizeFilter(ctx, grp, itaGrp, filters)
 		fGrp.Best = fGrp.First
 		fGrp.Done = true
 		fGrp.HintOk = true
 		fGrp.Best.SetDistinct(NoDistinctOp)
 	} else {
-		m.memoizeIndexScan(grp, ita, aliasName, idx, stat)
+		m.memoizeIndexScan(ctx, grp, ita, aliasName, idx, stat)
 	}
 }
 
-func (m *Memo) MemoizeFilter(grp, child *ExprGroup, filters []sql.Expression) *ExprGroup {
+func (m *Memo) MemoizeFilter(ctx *sql.Context, grp, child *ExprGroup, filters []sql.Expression) *ExprGroup {
 	rel := &Filter{
 		relBase: &relBase{},
 		Child:   child,
 		Filters: filters,
 	}
 	if grp == nil {
-		return m.NewExprGroup(rel)
+		return m.NewExprGroup(ctx, rel)
 	}
 	rel.g = grp
 	grp.Prepend(rel)
 	return grp
 }
 
-func (m *Memo) MemoizeMax1Row(grp, child *ExprGroup) *ExprGroup {
+func (m *Memo) MemoizeMax1Row(ctx *sql.Context, grp, child *ExprGroup) *ExprGroup {
 	rel := &Max1Row{
 		relBase: &relBase{},
 		Child:   child,
 	}
 	if grp == nil {
-		return m.NewExprGroup(rel)
+		return m.NewExprGroup(ctx, rel)
 	}
 	rel.g = grp
 	grp.Prepend(rel)
@@ -367,8 +403,11 @@ func (m *Memo) MemoizeMax1Row(grp, child *ExprGroup) *ExprGroup {
 
 // OptimizeRoot finds the implementation for the root expression
 // that has the lowest cost.
-func (m *Memo) OptimizeRoot() error {
-	err := m.optimizeMemoGroup(m.root)
+func (m *Memo) OptimizeRoot(ctx *sql.Context) error {
+	m.Tracer.PushDebugContext("OptimizeRoot")
+	defer m.Tracer.PopDebugContext()
+
+	err := m.optimizeMemoGroup(ctx, m.root)
 	if err != nil {
 		return err
 	}
@@ -387,12 +426,14 @@ func (m *Memo) OptimizeRoot() error {
 // into its parents.
 // TODO: we should not have to cost every plan, sometimes there is a provably
 // best case implementation
-func (m *Memo) optimizeMemoGroup(grp *ExprGroup) error {
+func (m *Memo) optimizeMemoGroup(ctx *sql.Context, grp *ExprGroup) error {
 	if grp.Done {
 		return nil
 	}
 
-	var err error
+	m.Tracer.PushDebugContextFmt("optimizeMemoGroup/%d", grp.Id)
+	defer m.Tracer.PopDebugContext()
+
 	n := grp.First
 	if _, ok := n.(SourceRel); ok {
 		// We should order the search bottom-up so that physical operators
@@ -404,47 +445,47 @@ func (m *Memo) optimizeMemoGroup(grp *ExprGroup) error {
 		grp.HintOk = true
 		grp.Best = grp.First
 		grp.Best.SetDistinct(NoDistinctOp)
+		m.Tracer.Log("source relation, setting as best plan", grp)
 		return nil
 	}
 
 	for n != nil {
+		m.Tracer.Log("Evaluating plan (%s)", n)
 		var cost float64
 		for _, g := range n.Children() {
-			err = m.optimizeMemoGroup(g)
+			err := m.optimizeMemoGroup(ctx, g)
 			if err != nil {
 				return err
 			}
 			cost += g.Cost
 		}
-		relCost, err := m.c.EstimateCost(m.Ctx, n, m.statsProv)
+		relCost, err := m.c.EstimateCost(ctx, n, m.statsProv)
 		if err != nil {
 			return err
 		}
 
 		if grp.RelProps.Distinct.IsHash() {
-			var dCost float64
-			if sortedInputs(n) {
+			if sortedInputs(ctx, n) && len(grp.RelProps.DistinctOn) == 0 {
 				n.SetDistinct(SortedDistinctOp)
+				m.Tracer.Log("Plan %s: using sorted distinct", n)
 			} else {
-				n.SetDistinct(HashDistinctOp)
+				n.SetDistinct(HashDistinctOp, grp.RelProps.DistinctOn...)
 				d := &Distinct{Child: grp}
-				dCost = float64(statsForRel(d).RowCount())
+				relCost += float64(m.statsForRel(ctx, d).RowCount())
+				m.Tracer.Log("Plan %s: using hash distinct", n)
 			}
-			relCost += dCost
 		} else {
 			n.SetDistinct(NoDistinctOp)
 		}
 
 		n.SetCost(relCost)
 		cost += relCost
+		m.Tracer.Log("Plan %s: relCost=%.2f, totalCost=%.2f", n, relCost, cost)
 		m.updateBest(grp, n, cost)
 		n = n.Next()
 	}
 
 	grp.Done = true
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -458,25 +499,32 @@ func (m *Memo) updateBest(grp *ExprGroup, n RelExpr, cost float64) {
 				grp.Best = n
 				grp.Cost = cost
 				grp.HintOk = true
+				m.Tracer.Log("Set best plan for group %d to hinted plan %s with cost %.2f", grp.Id, n, cost)
 				return
 			}
-			grp.updateBest(n, cost)
+			if grp.updateBest(n, cost) {
+				m.Tracer.Log("Updated best plan for group %d to hinted plan %s with cost %.2f", grp.Id, n, cost)
+			}
 		} else if grp.Best == nil || !grp.HintOk {
-			grp.updateBest(n, cost)
+			if grp.updateBest(n, cost) {
+				m.Tracer.Log("Updated best plan for group %d to plan %s with cost %.2f (no hints satisfied)", grp.Id, n, cost)
+			}
 		}
 		return
 	}
-	grp.updateBest(n, cost)
+	if grp.updateBest(n, cost) {
+		m.Tracer.Log("Updated best plan for group %d to plan %s with cost %.2f", grp.Id, n, cost)
+	}
 }
 
 func (m *Memo) BestRootPlan(ctx *sql.Context) (sql.Node, error) {
 	b := NewExecBuilder()
-	return buildBestJoinPlan(b, m.root, nil)
+	return buildBestJoinPlan(ctx, b, m.root, nil)
 }
 
 // buildBestJoinPlan converts group's lowest cost implementation into a
 // tree node with a recursive DFS.
-func buildBestJoinPlan(b *ExecBuilder, grp *ExprGroup, input sql.Schema) (sql.Node, error) {
+func buildBestJoinPlan(ctx *sql.Context, b *ExecBuilder, grp *ExprGroup, input sql.Schema) (sql.Node, error) {
 	if !grp.Done {
 		return nil, fmt.Errorf("expected expression group plans to be fixed")
 	}
@@ -484,18 +532,18 @@ func buildBestJoinPlan(b *ExecBuilder, grp *ExprGroup, input sql.Schema) (sql.No
 	var err error
 	children := make([]sql.Node, len(n.Children()))
 	for i, g := range n.Children() {
-		children[i], err = buildBestJoinPlan(b, g, input)
+		children[i], err = buildBestJoinPlan(ctx, b, g, input)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return b.buildRel(n, children...)
+	return b.buildRel(ctx, n, children...)
 }
 
-func getProjectColset(p *Project) sql.ColSet {
+func getProjectColset(ctx *sql.Context, p *Project) sql.ColSet {
 	var colset sql.ColSet
 	for _, e := range p.Projections {
-		transform.InspectExpr(e, func(e sql.Expression) bool {
+		transform.InspectExpr(ctx, e, func(ctx *sql.Context, e sql.Expression) bool {
 			if gf, ok := e.(*expression.GetField); ok && gf.Id() > 0 {
 				colset.Add(gf.Id())
 			}
@@ -505,20 +553,24 @@ func getProjectColset(p *Project) sql.ColSet {
 	return colset
 }
 
+// ApplyHint applies |hint| to this memo, converting the parsed hint into an internal representation and updating
+// the internal data to match the memo metadata. Note that this function MUST be called only after memo groups have
+// been fully built out, otherwise the group information set in the internal join hint structures will be incomplete.
 func (m *Memo) ApplyHint(hint Hint) {
 	switch hint.Typ {
 	case HintTypeJoinOrder:
-		m.WithJoinOrder(hint.Args)
+		m.SetJoinOrder(hint.Args)
 	case HintTypeJoinFixedOrder:
+	case HintTypeNoMergeJoin:
+		m.hints.disableMergeJoin = true
 	case HintTypeInnerJoin, HintTypeMergeJoin, HintTypeLookupJoin, HintTypeHashJoin, HintTypeSemiJoin, HintTypeAntiJoin, HintTypeLeftOuterLookupJoin:
-		m.WithJoinOp(hint.Typ, hint.Args[0], hint.Args[1])
+		m.SetJoinOp(hint.Typ, hint.Args[0], hint.Args[1])
 	case HintTypeLeftDeep:
 		m.hints.leftDeep = true
-	default:
 	}
 }
 
-func (m *Memo) WithJoinOrder(tables []string) {
+func (m *Memo) SetJoinOrder(tables []string) {
 	// order maps groupId -> table dependencies
 	order := make(map[sql.TableId]uint64)
 	for i, t := range tables {
@@ -536,7 +588,7 @@ func (m *Memo) WithJoinOrder(tables []string) {
 	}
 }
 
-func (m *Memo) WithJoinOp(op HintType, left, right string) {
+func (m *Memo) SetJoinOp(op HintType, left, right string) {
 	var lTab, rTab sql.TableId
 	for _, n := range m.root.RelProps.TableIdNodes() {
 		if strings.EqualFold(left, n.Name()) {
@@ -556,17 +608,16 @@ func (m *Memo) WithJoinOp(op HintType, left, right string) {
 	m.hints.ops = append(m.hints.ops, hint)
 }
 
+var _ fmt.Stringer = (*Memo)(nil)
+
 func (m *Memo) String() string {
 	exprs := make([]string, m.cnt)
 	groups := make([]*ExprGroup, 0)
 	if m.root != nil {
-		r := m.root.First
-		for r != nil {
-			groups = append(groups, r.Group())
-			groups = append(groups, r.Children()...)
-			r = r.Next()
-		}
+		groups = append(groups, m.root.First.Group())
 	}
+
+	// breadth-first traversal of memo groups via their children
 	for len(groups) > 0 {
 		newGroups := make([]*ExprGroup, 0)
 		for _, g := range groups {
@@ -574,7 +625,7 @@ func (m *Memo) String() string {
 				continue
 			}
 			exprs[int(TableIdForSource(g.Id))] = g.String()
-			newGroups = append(newGroups, g.children()...)
+			newGroups = slices.AppendSeq(newGroups, g.children)
 		}
 		groups = newGroups
 	}
@@ -588,6 +639,67 @@ func (m *Memo) String() string {
 		b.WriteString(fmt.Sprintf("%s G%d: %s\n", beg, i+1, g))
 	}
 	return b.String()
+}
+
+// LogCostDebugString logs a string representation of the memo with cost
+// information for each expression, ordered by best to worst for each group,
+// displayed in a tree structure.
+// Only logs if tracing is enabled.
+func (m *Memo) LogCostDebugString() {
+	if m.root == nil || !m.Tracer.TraceEnabled {
+		return
+	}
+
+	exprs := make([]string, m.cnt)
+	groups := make([]*ExprGroup, 0)
+
+	b := strings.Builder{}
+	b.WriteString(fmt.Sprintf("costed memo (root group %d):\n", m.root.Id))
+
+	if m.root != nil {
+		groups = append(groups, m.root.First.Group())
+	}
+
+	// breadth-first traversal of memo groups via their children
+	for len(groups) > 0 {
+		newGroups := make([]*ExprGroup, 0)
+		for _, g := range groups {
+			if exprs[int(TableIdForSource(g.Id))] != "" {
+				continue
+			}
+
+			prefix := "|   "
+			if int(g.Id) == int(m.cnt) {
+				prefix = "    "
+			}
+
+			exprs[int(TableIdForSource(g.Id))] = g.CostTreeString(prefix)
+			newGroups = slices.AppendSeq(newGroups, g.children)
+		}
+		groups = newGroups
+	}
+
+	beg := "├──"
+	for i, g := range exprs {
+		if i == len(exprs)-1 {
+			beg = "└──"
+		}
+		b.WriteString(fmt.Sprintf("%s G%d: %s\n", beg, i+1, g))
+	}
+
+	m.Tracer.Log("Completed cost-based optimization:\n%s", b.String())
+}
+
+// LogBestPlanDebugString logs a physical tree representation of the best plan for each group in the tree that is
+// referenced by the best plan in the root. This differs from other debug strings in that it represents the groups
+// as children of their parents, rather than as a flat list, and only includes groups that are part of the best plan.
+// Only logs if tracing is enabled.
+func (m *Memo) LogBestPlanDebugString() {
+	if m.root == nil || !m.Tracer.TraceEnabled {
+		return
+	}
+
+	m.Tracer.Log("Best root plan:\n%s", m.root.BestPlanDebugString())
 }
 
 type tableProps struct {
@@ -636,7 +748,8 @@ type RelExpr interface {
 	SetCost(c float64)
 	Cost() float64
 	Distinct() distinctOp
-	SetDistinct(distinctOp)
+	DistinctOn() []sql.Expression
+	SetDistinct(distinctOp, ...sql.Expression)
 }
 
 type relBase struct {
@@ -648,6 +761,8 @@ type relBase struct {
 	c float64
 	// d indicates a RelExpr should be checked for distinctness
 	d distinctOp
+	// distinctOn, when not empty, indicates the expressions that should be used for distinctness (otherwise it's the projections)
+	distinctOn []sql.Expression
 }
 
 // relKey is a quick identifier for avoiding duplicate work on the same
@@ -662,6 +777,19 @@ func relKey(r RelExpr) uint64 {
 		i *= 1<<16 - 1
 	}
 	return uint64(key)
+}
+
+// IterRelExprs returns an iterator over the linked list of RelExprs beginning at the head e
+func IterRelExprs(e RelExpr) iter.Seq[RelExpr] {
+	curr := e
+	return func(yield func(RelExpr) bool) {
+		for curr != nil {
+			if !yield(curr) {
+				return
+			}
+			curr = curr.Next()
+		}
+	}
 }
 
 type distinctOp uint8
@@ -681,8 +809,13 @@ func (r *relBase) Distinct() distinctOp {
 	return r.d
 }
 
-func (r *relBase) SetDistinct(d distinctOp) {
+func (r *relBase) DistinctOn() []sql.Expression {
+	return r.distinctOn
+}
+
+func (r *relBase) SetDistinct(d distinctOp, on ...sql.Expression) {
 	r.d = d
+	r.distinctOn = on
 }
 
 func (r *relBase) Group() *ExprGroup {
@@ -733,7 +866,7 @@ type SourceRel interface {
 	// outputCols retuns the output schema of this data source.
 	// TODO: this is more useful as a relExpr property, but we need
 	// this to fix up expression indexes currently
-	OutputCols() sql.Schema
+	OutputCols(ctx *sql.Context) sql.Schema
 	Name() string
 	TableId() sql.TableId
 	Indexes() []*Index
@@ -742,15 +875,14 @@ type SourceRel interface {
 }
 
 type Index struct {
-	// ordered list of index columns
-	order []sql.ColumnId
-	// unordered column set
-	set sql.ColSet
-	idx sql.Index
+	set   sql.ColSet
+	idx   sql.Index
+	cols  []sql.ColumnId
+	order sql.IndexOrder
 }
 
 func (i *Index) Cols() []sql.ColumnId {
-	return i.order
+	return i.cols
 }
 
 func (i *Index) ColSet() sql.ColSet {
@@ -759,6 +891,10 @@ func (i *Index) ColSet() sql.ColSet {
 
 func (i *Index) SqlIdx() sql.Index {
 	return i.idx
+}
+
+func (i *Index) Order(ctx *sql.Context) sql.IndexOrder {
+	return i.order
 }
 
 type sourceBase struct {
@@ -794,11 +930,10 @@ var _ JoinRel = (*SemiJoin)(nil)
 
 type JoinBase struct {
 	*relBase
-
-	Op     plan.JoinType
-	Filter []sql.Expression
 	Left   *ExprGroup
 	Right  *ExprGroup
+	Filter []sql.Expression
+	Op     plan.JoinType
 }
 
 func (r *JoinBase) Children() []*ExprGroup {
@@ -836,16 +971,84 @@ func (r *LookupJoin) Children() []*ExprGroup {
 // of MinIndex and MinExpr is non-nil. If the index is non-nil, we will use it to construct
 // a plan.IndexedTableAccess. Otherwise we use the expression to construct a plan.Sort.
 type RangeHeap struct {
-	ValueIndex *IndexScan
-	ValueExpr  sql.Expression
-
-	MinIndex *IndexScan
-	MinExpr  sql.Expression
-
+	ValueExpr               sql.Expression
+	MinExpr                 sql.Expression
+	ValueIndex              *IndexScan
+	MinIndex                *IndexScan
 	ValueCol                *expression.GetField
 	MinColRef               *expression.GetField
 	MaxColRef               *expression.GetField
+	Parent                  *JoinBase
 	RangeClosedOnLowerBound bool
 	RangeClosedOnUpperBound bool
-	Parent                  *JoinBase
+}
+
+// FormatExpr formats an exprType for debugging purposes, compatible with fmt.Formatter
+func FormatExpr(r exprType, s fmt.State, verb rune) {
+	verbString := fmt.Sprintf("%%%c", verb)
+	if verb == 'v' && s.Flag('+') {
+		verbString = "%+v"
+	}
+	switch r := r.(type) {
+	case *CrossJoin:
+		io.WriteString(s, fmt.Sprintf("crossjoin "+verbString+" "+verbString, r.Left, r.Right))
+	case *InnerJoin:
+		io.WriteString(s, fmt.Sprintf("innerjoin "+verbString+" "+verbString, r.Left, r.Right))
+	case *LeftJoin:
+		io.WriteString(s, fmt.Sprintf("leftjoin "+verbString+" "+verbString, r.Left, r.Right))
+	case *SemiJoin:
+		io.WriteString(s, fmt.Sprintf("semijoin "+verbString+" "+verbString, r.Left, r.Right))
+	case *AntiJoin:
+		io.WriteString(s, fmt.Sprintf("antijoin "+verbString+" "+verbString, r.Left, r.Right))
+	case *LookupJoin:
+		io.WriteString(s, fmt.Sprintf("lookupjoin "+verbString+" "+verbString+" on %s",
+			r.Left, r.Right, r.Lookup.Index.idx.ID()))
+	case *RangeHeapJoin:
+		io.WriteString(s, fmt.Sprintf("rangeheapjoin "+verbString+" "+verbString, r.Left, r.Right))
+	case *ConcatJoin:
+		io.WriteString(s, fmt.Sprintf("concatjoin "+verbString+" "+verbString, r.Left, r.Right))
+	case *HashJoin:
+		io.WriteString(s, fmt.Sprintf("hashjoin "+verbString+" "+verbString, r.Left, r.Right))
+	case *MergeJoin:
+		io.WriteString(s, fmt.Sprintf("mergejoin "+verbString+" "+verbString, r.Left, r.Right))
+	case *FullOuterJoin:
+		io.WriteString(s, fmt.Sprintf("fullouterjoin "+verbString+" "+verbString, r.Left, r.Right))
+	case *LateralJoin:
+		io.WriteString(s, fmt.Sprintf("lateraljoin "+verbString+" "+verbString, r.Left, r.Right))
+	case *TableScan:
+		io.WriteString(s, fmt.Sprintf("tablescan: %s", r.Name()))
+	case *IndexScan:
+		if r.Alias != "" {
+			io.WriteString(s, fmt.Sprintf("indexscan on %s: %s", r.Index.SqlIdx().ID(), r.Alias))
+		}
+		io.WriteString(s, fmt.Sprintf("indexscan on %s: %s", r.Index.SqlIdx().ID(), r.Name()))
+	case *Values:
+		io.WriteString(s, fmt.Sprintf("values: %s", r.Name()))
+	case *TableAlias:
+		io.WriteString(s, fmt.Sprintf("tablealias: %s", r.Name()))
+	case *RecursiveTable:
+		io.WriteString(s, fmt.Sprintf("recursivetable: %s", r.Name()))
+	case *RecursiveCte:
+		io.WriteString(s, fmt.Sprintf("recursivecte: %s", r.Name()))
+	case *SubqueryAlias:
+		io.WriteString(s, fmt.Sprintf("subqueryalias: %s", r.Name()))
+	case *TableFunc:
+		io.WriteString(s, fmt.Sprintf("tablefunc: %s", r.Name()))
+	case *JSONTable:
+		io.WriteString(s, fmt.Sprintf("jsontable: %s", r.Name()))
+	case *EmptyTable:
+		io.WriteString(s, fmt.Sprintf("emptytable: %s", r.Name()))
+	case *SetOp:
+		io.WriteString(s, fmt.Sprintf("setop: %s", r.Name()))
+	case *Project:
+		io.WriteString(s, fmt.Sprintf("project: %d", r.Child.Id))
+	case *Distinct:
+		io.WriteString(s, fmt.Sprintf("distinct: %d", r.Child.Id))
+	case *Max1Row:
+		io.WriteString(s, fmt.Sprintf("max1row: %d", r.Child.Id))
+	case *Filter:
+		io.WriteString(s, fmt.Sprintf("filter: %d", r.Child.Id))
+	default:
+		panic(fmt.Sprintf("unknown RelExpr type: %T", r))
+	}
 }

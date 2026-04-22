@@ -28,13 +28,13 @@ var ErrNotView = errors.NewKind("'%' is not VIEW")
 
 // ShowCreateTable is a node that shows the CREATE TABLE statement for a table.
 type ShowCreateTable struct {
+	asOf sql.Expression
 	*UnaryNode
-	IsView           bool
+	PrimaryKeySchema sql.PrimaryKeySchema
 	Indexes          []sql.Index
 	checks           sql.CheckConstraints
 	targetSchema     sql.Schema
-	PrimaryKeySchema sql.PrimaryKeySchema
-	asOf             sql.Expression
+	IsView           bool
 }
 
 var _ sql.Node = (*ShowCreateTable)(nil)
@@ -45,12 +45,12 @@ var _ sql.CollationCoercible = (*ShowCreateTable)(nil)
 var _ Versionable = (*ShowCreateTable)(nil)
 
 // NewShowCreateTable creates a new ShowCreateTable node.
-func NewShowCreateTable(table sql.Node, isView bool) *ShowCreateTable {
-	return NewShowCreateTableWithAsOf(table, isView, nil)
+func NewShowCreateTable(ctx *sql.Context, table sql.Node, isView bool) *ShowCreateTable {
+	return NewShowCreateTableWithAsOf(ctx, table, isView, nil)
 }
 
 // NewShowCreateTableWithAsOf creates a new ShowCreateTable node for a specific version of a table.
-func NewShowCreateTableWithAsOf(table sql.Node, isView bool, asOf sql.Expression) *ShowCreateTable {
+func NewShowCreateTableWithAsOf(ctx *sql.Context, table sql.Node, isView bool, asOf sql.Expression) *ShowCreateTable {
 	return &ShowCreateTable{
 		UnaryNode: &UnaryNode{table},
 		IsView:    isView,
@@ -77,7 +77,7 @@ func (sc *ShowCreateTable) IsReadOnly() bool {
 	return true
 }
 
-func (sc ShowCreateTable) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (sc ShowCreateTable) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(1, len(children))
 	}
@@ -91,12 +91,6 @@ func (sc ShowCreateTable) WithChildren(children ...sql.Node) (sql.Node, error) {
 
 	sc.Child = child
 	return &sc, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (sc *ShowCreateTable) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	// The table won't be visible during the resolution step if the user doesn't have the correct privileges
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -113,7 +107,7 @@ func (sc *ShowCreateTable) TargetSchema() sql.Schema {
 	return sc.targetSchema
 }
 
-func (sc ShowCreateTable) WithPrimaryKeySchema(schema sql.PrimaryKeySchema) (sql.Node, error) {
+func (sc ShowCreateTable) WithPrimaryKeySchema(ctx *sql.Context, schema sql.PrimaryKeySchema) (sql.Node, error) {
 	sc.PrimaryKeySchema = schema
 	return &sc, nil
 }
@@ -122,7 +116,7 @@ func (sc *ShowCreateTable) Expressions() []sql.Expression {
 	return transform.WrappedColumnDefaults(sc.targetSchema)
 }
 
-func (sc ShowCreateTable) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (sc ShowCreateTable) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != len(sc.targetSchema) {
 		return nil, sql.ErrInvalidChildrenNumber.New(sc, len(exprs), len(sc.targetSchema))
 	}
@@ -137,7 +131,7 @@ func (sc ShowCreateTable) WithExpressions(exprs ...sql.Expression) (sql.Node, er
 }
 
 // Schema implements the Node interface.
-func (sc *ShowCreateTable) Schema() sql.Schema {
+func (sc *ShowCreateTable) Schema(ctx *sql.Context) sql.Schema {
 	switch sc.Child.(type) {
 	case *SubqueryAlias:
 		return sql.Schema{
@@ -162,7 +156,7 @@ func (sc *ShowCreateTable) GetTargetSchema() sql.Schema {
 }
 
 // WithAsOf implements the Versionable interface.
-func (sc *ShowCreateTable) WithAsOf(asOf sql.Expression) (sql.Node, error) {
+func (sc *ShowCreateTable) WithAsOf(ctx *sql.Context, asOf sql.Expression) (sql.Node, error) {
 	nsc := *sc
 	nsc.asOf = asOf
 	return &nsc, nil

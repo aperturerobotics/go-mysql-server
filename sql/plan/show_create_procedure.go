@@ -24,8 +24,8 @@ import (
 
 type ShowCreateProcedure struct {
 	db                      sql.Database
-	ProcedureName           string
 	ExternalStoredProcedure *sql.ExternalStoredProcedureDetails
+	ProcedureName           string
 }
 
 var _ sql.Databaser = (*ShowCreateProcedure)(nil)
@@ -70,82 +70,13 @@ func (s *ShowCreateProcedure) Children() []sql.Node {
 }
 
 // Schema implements the sql.Node interface.
-func (s *ShowCreateProcedure) Schema() sql.Schema {
+func (s *ShowCreateProcedure) Schema(ctx *sql.Context) sql.Schema {
 	return showCreateProcedureSchema
 }
 
-// RowIter implements the sql.Node interface.
-func (s *ShowCreateProcedure) RowIter(ctx *sql.Context, _ sql.Row) (sql.RowIter, error) {
-	characterSetClient, err := ctx.GetSessionVariable(ctx, "character_set_client")
-	if err != nil {
-		return nil, err
-	}
-	collationConnection, err := ctx.GetSessionVariable(ctx, "collation_connection")
-	if err != nil {
-		return nil, err
-	}
-	collationServer, err := ctx.GetSessionVariable(ctx, "collation_server")
-	if err != nil {
-		return nil, err
-	}
-
-	if s.ExternalStoredProcedure != nil {
-		// If an external stored procedure has been plugged in by the analyzer, use that
-		fakeCreateProcedureStmt := s.ExternalStoredProcedure.FakeCreateProcedureStmt()
-		return sql.RowsToRowIter(sql.Row{
-			s.ExternalStoredProcedure.Name, // Procedure
-			"",                             // sql_mode
-			fakeCreateProcedureStmt,        // Create Procedure
-			characterSetClient,             // character_set_client
-			collationConnection,            // collation_connection
-			collationServer,                // Database Collation
-		}), nil
-	} else {
-		// Otherwise, search the StoredProcedureDatabase for a user-created stored procedure
-		procedureDb, ok := s.db.(sql.StoredProcedureDatabase)
-		if !ok {
-			return nil, sql.ErrStoredProceduresNotSupported.New(s.db.Name())
-		}
-		procedures, err := procedureDb.GetStoredProcedures(ctx)
-		if err != nil {
-			return nil, err
-		}
-		for _, procedure := range procedures {
-			if strings.ToLower(procedure.Name) == s.ProcedureName {
-				return sql.RowsToRowIter(sql.Row{
-					procedure.Name,            // Procedure
-					"",                        // sql_mode
-					procedure.CreateStatement, // Create Procedure
-					characterSetClient,        // character_set_client
-					collationConnection,       // collation_connection
-					collationServer,           // Database Collation
-				}), nil
-			}
-		}
-		return nil, sql.ErrStoredProcedureDoesNotExist.New(s.ProcedureName)
-	}
-}
-
 // WithChildren implements the sql.Node interface.
-func (s *ShowCreateProcedure) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (s *ShowCreateProcedure) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(s, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (s *ShowCreateProcedure) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	// TODO: set definer
-	// TODO: dynamic privilege SHOW ROUTINE
-	// According to: https://dev.mysql.com/doc/refman/8.0/en/show-create-procedure.html
-	// Must have Global SELECT, SHOW_ROUTINE, CREATE_ROUTINE, ALTER_ROUTINE, or EXECUTE privileges.
-
-	dbSubject := sql.PrivilegeCheckSubject{
-		Database: s.db.Name(),
-	}
-
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(sql.PrivilegeCheckSubject{}, sql.PrivilegeType_Select)) ||
-		opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(dbSubject, sql.PrivilegeType_CreateRoutine)) ||
-		opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(dbSubject, sql.PrivilegeType_AlterRoutine)) ||
-		opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(dbSubject, sql.PrivilegeType_Execute))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

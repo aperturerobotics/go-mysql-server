@@ -15,7 +15,7 @@
 package plan
 
 import (
-	"strings"
+	"bytes"
 
 	"github.com/dolthub/vitess/go/vt/sqlparser"
 
@@ -23,24 +23,24 @@ import (
 )
 
 type LoadData struct {
-	Local              bool
 	File               string
-	DestSch            sql.Schema
-	ColumnNames        []string
-	ResponsePacketSent bool
-	IgnoreNum          int64
-	IsIgnore           bool
-	IsReplace          bool
+	FieldsEscapedBy    string
+	LinesTerminatedBy  string
+	LinesStartingBy    string
+	Charset            string
+	FieldsTerminatedBy string
+	FieldsEnclosedBy   string
 
-	Charset string
+	DestSch  sql.Schema
+	ColNames []string
+	SetExprs []sql.Expression
+	UserVars []sql.Expression
 
-	FieldsTerminatedBy  string
-	FieldsEnclosedBy    string
+	IgnoreNum           int64
+	Local               bool
 	FieldsEnclosedByOpt bool
-	FieldsEscapedBy     string
-
-	LinesStartingBy   string
-	LinesTerminatedBy string
+	IsIgnore            bool
+	IsReplace           bool
 }
 
 var _ sql.Node = (*LoadData)(nil)
@@ -57,7 +57,7 @@ func (l *LoadData) String() string {
 	return pr.String()
 }
 
-func (l *LoadData) Schema() sql.Schema {
+func (l *LoadData) Schema(ctx *sql.Context) sql.Schema {
 	return l.DestSch
 }
 
@@ -76,11 +76,12 @@ func (l *LoadData) SplitLines(data []byte, atEOF bool) (advance int, token []byt
 	}
 
 	// Find the index of the LINES TERMINATED BY delim.
-	if i := strings.Index(string(data), l.LinesTerminatedBy); i >= 0 {
-		return i + len(l.LinesTerminatedBy), data[0:i], nil
+	if i := bytes.Index(data, []byte(l.LinesTerminatedBy)); i >= 0 {
+		// Include the terminator in the token so parser can detect EOF vs terminated lines
+		return i + len(l.LinesTerminatedBy), data[0 : i+len(l.LinesTerminatedBy)], nil
 	}
 
-	// If at end of file with data return the data.
+	// If at end of file with data return the data (no terminator present = EOF)
 	if atEOF {
 		return len(data), data, nil
 	}
@@ -88,7 +89,7 @@ func (l *LoadData) SplitLines(data []byte, atEOF bool) (advance int, token []byt
 	return
 }
 
-func (l *LoadData) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (l *LoadData) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(l, len(children), 0)
 	}
@@ -96,27 +97,23 @@ func (l *LoadData) WithChildren(children ...sql.Node) (sql.Node, error) {
 	return &nl, nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (l *LoadData) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(sql.PrivilegeCheckSubject{}, sql.PrivilegeType_File))
-}
-
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (*LoadData) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.Collation_binary, 7
 }
 
-func NewLoadData(local bool, file string, destSch sql.Schema, cols []string, ignoreNum int64, ignoreOrReplace string) *LoadData {
+func NewLoadData(local bool, file string, destSch sql.Schema, cols []string, userVars []sql.Expression, ignoreNum int64, ignoreOrReplace string) *LoadData {
 	isReplace := ignoreOrReplace == sqlparser.ReplaceStr
 	isIgnore := ignoreOrReplace == sqlparser.IgnoreStr || (local && !isReplace)
 	return &LoadData{
-		Local:       local,
-		File:        file,
-		DestSch:     destSch,
-		ColumnNames: cols,
-		IgnoreNum:   ignoreNum,
-		IsIgnore:    isIgnore,
-		IsReplace:   isReplace,
+		Local:     local,
+		File:      file,
+		DestSch:   destSch,
+		ColNames:  cols,
+		UserVars:  userVars,
+		IgnoreNum: ignoreNum,
+		IsIgnore:  isIgnore,
+		IsReplace: isReplace,
 
 		FieldsTerminatedBy:  defaultFieldsTerminatedBy,
 		FieldsEnclosedBy:    defaultFieldsEnclosedBy,

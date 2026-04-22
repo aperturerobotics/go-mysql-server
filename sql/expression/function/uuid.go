@@ -16,6 +16,7 @@ package function
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
@@ -23,6 +24,13 @@ import (
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/types"
+	"github.com/dolthub/go-mysql-server/sql/variables"
+)
+
+// Global state for UUID_SHORT function
+var (
+	uuidShortMu      sync.Mutex
+	uuidShortCounter uint64
 )
 
 // UUID()
@@ -57,7 +65,7 @@ type UUIDFunc struct{}
 var _ sql.FunctionExpression = &UUIDFunc{}
 var _ sql.CollationCoercible = &UUIDFunc{}
 
-func NewUUIDFunc() sql.Expression {
+func NewUUIDFunc(ctx *sql.Context) sql.Expression {
 	return &UUIDFunc{}
 }
 
@@ -70,7 +78,7 @@ func (u UUIDFunc) String() string {
 	return fmt.Sprintf("%s()", u.FunctionName())
 }
 
-func (u UUIDFunc) Type() sql.Type {
+func (u UUIDFunc) Type(ctx *sql.Context) sql.Type {
 	return types.MustCreateStringWithDefaults(sqltypes.VarChar, 36)
 }
 
@@ -83,7 +91,7 @@ func (u UUIDFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	return uuid.New().String(), nil
 }
 
-func (u UUIDFunc) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (u UUIDFunc) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(u, len(children), 0)
 	}
@@ -105,7 +113,7 @@ func (u UUIDFunc) Children() []sql.Expression {
 }
 
 // IsNullable returns whether the expression can be null.
-func (u UUIDFunc) IsNullable() bool {
+func (u UUIDFunc) IsNullable(ctx *sql.Context) bool {
 	return false
 }
 
@@ -128,7 +136,7 @@ type IsUUID struct {
 var _ sql.FunctionExpression = &IsUUID{}
 var _ sql.CollationCoercible = &IsUUID{}
 
-func NewIsUUID(arg sql.Expression) sql.Expression {
+func NewIsUUID(ctx *sql.Context, arg sql.Expression) sql.Expression {
 	return &IsUUID{child: arg}
 }
 
@@ -146,7 +154,7 @@ func (u IsUUID) String() string {
 	return fmt.Sprintf("%s(%s)", u.FunctionName(), u.child)
 }
 
-func (u IsUUID) Type() sql.Type {
+func (u IsUUID) Type(ctx *sql.Context) sql.Type {
 	return types.Boolean
 }
 
@@ -185,7 +193,7 @@ func (u IsUUID) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 }
 
-func (u IsUUID) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (u IsUUID) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(u, len(children), 1)
 	}
@@ -203,8 +211,8 @@ func (u IsUUID) Children() []sql.Expression {
 }
 
 // IsNullable returns whether the expression can be null.
-func (u IsUUID) IsNullable() bool {
-	return false
+func (u IsUUID) IsNullable(ctx *sql.Context) bool {
+	return u.child.IsNullable(ctx)
 }
 
 // UUID_TO_BIN(string_uuid), UUID_TO_BIN(string_uuid, swap_flag)
@@ -238,7 +246,7 @@ type UUIDToBin struct {
 var _ sql.FunctionExpression = (*UUIDToBin)(nil)
 var _ sql.CollationCoercible = (*UUIDToBin)(nil)
 
-func NewUUIDToBin(args ...sql.Expression) (sql.Expression, error) {
+func NewUUIDToBin(ctx *sql.Context, args ...sql.Expression) (sql.Expression, error) {
 	switch len(args) {
 	case 1:
 		return &UUIDToBin{inputUUID: args[0]}, nil
@@ -262,7 +270,7 @@ func (ub UUIDToBin) String() string {
 	}
 }
 
-func (ub UUIDToBin) Type() sql.Type {
+func (ub UUIDToBin) Type(ctx *sql.Context) sql.Type {
 	return types.MustCreateBinary(query.Type_VARBINARY, int64(16))
 }
 
@@ -278,7 +286,7 @@ func (ub *UUIDToBin) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	// Get the inputted uuid as a string.
-	converted, _, err := types.LongText.Convert(str)
+	converted, _, err := types.LongText.Convert(ctx, str)
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +320,7 @@ func (ub *UUIDToBin) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	sf, _, err = types.Int8.Convert(sf)
+	sf, _, err = types.Int8.Convert(ctx, sf)
 	if err != nil {
 		return nil, err
 	}
@@ -345,8 +353,8 @@ func swapUUIDBytes(cur uuid.UUID) []byte {
 	return ret
 }
 
-func (ub UUIDToBin) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return NewUUIDToBin(children...)
+func (ub UUIDToBin) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return NewUUIDToBin(ctx, children...)
 }
 
 func (ub UUIDToBin) FunctionName() string {
@@ -367,8 +375,8 @@ func (ub UUIDToBin) Children() []sql.Expression {
 }
 
 // IsNullable returns whether the expression can be null.
-func (ub UUIDToBin) IsNullable() bool {
-	return false
+func (ub UUIDToBin) IsNullable(ctx *sql.Context) bool {
+	return ub.inputUUID.IsNullable(ctx) || (ub.swapFlag != nil && ub.inputUUID.IsNullable(ctx))
 }
 
 // BIN_TO_UUID(binary_uuid), BIN_TO_UUID(binary_uuid, swap_flag)
@@ -399,7 +407,7 @@ type BinToUUID struct {
 var _ sql.FunctionExpression = (*BinToUUID)(nil)
 var _ sql.CollationCoercible = (*BinToUUID)(nil)
 
-func NewBinToUUID(args ...sql.Expression) (sql.Expression, error) {
+func NewBinToUUID(ctx *sql.Context, args ...sql.Expression) (sql.Expression, error) {
 	switch len(args) {
 	case 1:
 		return &BinToUUID{inputBinary: args[0]}, nil
@@ -428,7 +436,7 @@ func (bu BinToUUID) String() string {
 	}
 }
 
-func (bu BinToUUID) Type() sql.Type {
+func (bu BinToUUID) Type(ctx *sql.Context) sql.Type {
 	return types.MustCreateStringWithDefaults(sqltypes.VarChar, 36)
 }
 
@@ -448,7 +456,7 @@ func (bu BinToUUID) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	// Get the inputted uuid as a string.
-	converted, _, err := types.MustCreateBinary(query.Type_VARBINARY, int64(16)).Convert(str)
+	converted, _, err := types.MustCreateBinary(query.Type_VARBINARY, int64(16)).Convert(ctx, str)
 	if err != nil {
 		return nil, err
 	}
@@ -473,7 +481,7 @@ func (bu BinToUUID) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	sf, _, err = types.Int8.Convert(sf)
+	sf, _, err = types.Int8.Convert(ctx, sf)
 	if err != nil {
 		return nil, err
 	}
@@ -507,8 +515,8 @@ func unswapUUIDBytes(cur uuid.UUID) []byte {
 	return ret
 }
 
-func (bu BinToUUID) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return NewBinToUUID(children...)
+func (bu BinToUUID) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return NewBinToUUID(ctx, children...)
 }
 
 func (bu BinToUUID) Resolved() bool {
@@ -525,6 +533,104 @@ func (bu BinToUUID) Children() []sql.Expression {
 }
 
 // IsNullable returns whether the expression can be null.
-func (bu BinToUUID) IsNullable() bool {
+func (bu BinToUUID) IsNullable(ctx *sql.Context) bool {
+	return bu.inputBinary.IsNullable(ctx)
+}
+
+// UUID_SHORT()
+//
+// Returns a "short" universal identifier as a 64-bit unsigned integer. Values returned by UUID_SHORT() differ from the
+// string-format 128-bit identifiers returned by the UUID() function and have different uniqueness properties. The value
+// of UUID_SHORT() is guaranteed to be unique if the following conditions hold:
+//
+// The server_id value of the current server is between 0 and 255 and is unique among your set of source and replica servers
+//
+// The UUID_SHORT() return value is constructed this way:
+//   (server_id & 255) << 56
+// + (server_startup_time_in_seconds << 24)
+// + incremented_variable++;
+//
+// Note: UUID_SHORT() does not work with statement-based replication.
+// https://dev.mysql.com/doc/refman/8.4/en/miscellaneous-functions.html#function_uuid-short
+
+type UUIDShortFunc struct{}
+
+var _ sql.FunctionExpression = &UUIDShortFunc{}
+var _ sql.CollationCoercible = &UUIDShortFunc{}
+
+func NewUUIDShortFunc(ctx *sql.Context) sql.Expression {
+	return &UUIDShortFunc{}
+}
+
+// Description returns a human-readable description of the UUID_SHORT function.
+func (u *UUIDShortFunc) Description() string {
+	return "returns a short universal identifier as a 64-bit unsigned integer."
+}
+
+// String returns a string representation of the UUID_SHORT function call.
+func (u *UUIDShortFunc) String() string {
+	return "UUID_SHORT()"
+}
+
+// Type returns the data type of the UUID_SHORT function result (Uint64).
+func (u *UUIDShortFunc) Type(ctx *sql.Context) sql.Type {
+	return types.Uint64
+}
+
+// CollationCoercibility implements the interface sql.CollationCoercible.
+func (u *UUIDShortFunc) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
+	return sql.Collation_binary, 5
+}
+
+// Eval generates a 64-bit UUID_SHORT value using server_id, startup time, and counter.
+func (u *UUIDShortFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+	uuidShortMu.Lock()
+	defer uuidShortMu.Unlock()
+
+	uuidShortCounter++
+
+	serverID := uint64(1) // Default fallback
+	if _, val, ok := sql.SystemVariables.GetGlobal("server_id"); ok {
+		if serverIDVal, ok := val.(uint32); ok {
+			serverID = uint64(serverIDVal)
+		}
+	}
+
+	// Construct the UUID_SHORT value according to MySQL specification:
+	result := ((serverID & 255) << 56) + (uint64(variables.ServerStartUpTime.Unix()) << 24) + uuidShortCounter
+	return result, nil
+}
+
+// WithChildren returns a new UUID_SHORT function with the given children (must be empty).
+func (u *UUIDShortFunc) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	if len(children) != 0 {
+		return nil, sql.ErrInvalidChildrenNumber.New(u, len(children), 0)
+	}
+
+	return &UUIDShortFunc{}, nil
+}
+
+// FunctionName returns the name of the UUID_SHORT function.
+func (u *UUIDShortFunc) FunctionName() string {
+	return "UUID_SHORT"
+}
+
+// Resolved returns true since UUID_SHORT has no dependencies to resolve.
+func (u *UUIDShortFunc) Resolved() bool {
+	return true
+}
+
+// Children returns the children expressions of this expression.
+func (u *UUIDShortFunc) Children() []sql.Expression {
+	return nil
+}
+
+// IsNullable returns false since UUID_SHORT always returns a value.
+func (u *UUIDShortFunc) IsNullable(ctx *sql.Context) bool {
 	return false
+}
+
+// IsNonDeterministic returns true since UUID_SHORT generates different values on each call.
+func (u *UUIDShortFunc) IsNonDeterministic() bool {
+	return true
 }

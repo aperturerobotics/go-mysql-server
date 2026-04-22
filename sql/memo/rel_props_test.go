@@ -39,8 +39,8 @@ func TestPopulateFDs(t *testing.T) {
 			notNull: sql.NewColSet(1, 2, 3),
 			indexes: []*Index{
 				{
-					order: []sql.ColumnId{2, 1},
-					set:   sql.NewColSet(1, 2),
+					cols: []sql.ColumnId{2, 1},
+					set:  sql.NewColSet(1, 2),
 				},
 			},
 			key: sql.NewColSet(1, 2),
@@ -62,8 +62,8 @@ func TestPopulateFDs(t *testing.T) {
 			notNull: sql.NewColSet(1, 2, 3),
 			indexes: []*Index{
 				{
-					order: []sql.ColumnId{1, 2, 3},
-					set:   sql.NewColSet(1, 2, 3),
+					cols: []sql.ColumnId{1, 2, 3},
+					set:  sql.NewColSet(1, 2, 3),
 				},
 			},
 			key: sql.NewColSet(1, 2, 3),
@@ -87,7 +87,7 @@ func TestPopulateFDs(t *testing.T) {
 			name: "max1Row",
 			in: &Max1Row{
 				relBase: &relBase{},
-				Child: newExprGroup(NewMemo(nil, nil, nil, 0, nil, nil), 0, &TableScan{
+				Child: newExprGroup(sql.NewEmptyContext(), NewMemo(nil, nil, nil, nil, nil), 0, &TableScan{
 					sourceBase: &sourceBase{relBase: &relBase{}},
 					Table: plan.NewResolvedTable(
 						&dummyTable{
@@ -108,7 +108,7 @@ func TestPopulateFDs(t *testing.T) {
 			name: "values",
 			in: &Values{
 				sourceBase: &sourceBase{relBase: &relBase{}},
-				Table:      plan.NewValueDerivedTable(plan.NewValues([][]sql.Expression{{expression.NewLiteral(1, types.Int64)}}), "values").WithId(1).WithColumns(sql.NewColSet(1)).(*plan.ValueDerivedTable),
+				Table:      plan.NewValueDerivedTable(sql.NewEmptyContext(), plan.NewValues([][]sql.Expression{{expression.NewLiteral(1, types.Int64)}}), "values").WithId(1).WithColumns(sql.NewColSet(1)).(*plan.ValueDerivedTable),
 			},
 			all:     sql.NewColSet(1),
 			notNull: sql.NewColSet(1),
@@ -117,8 +117,8 @@ func TestPopulateFDs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.in.SetGroup(&ExprGroup{First: tt.in, m: NewMemo(nil, nil, nil, 0, nil, nil)})
-			props := newRelProps(tt.in)
+			tt.in.SetGroup(&ExprGroup{First: tt.in, m: NewMemo(nil, nil, nil, nil, nil)})
+			props := newRelProps(sql.NewEmptyContext(), tt.in)
 			require.Equal(t, tt.all, props.fds.All())
 			require.Equal(t, tt.notNull, props.fds.NotNull())
 
@@ -151,7 +151,7 @@ var _ sql.Table = (*dummyTable)(nil)
 var _ sql.PrimaryKeyTable = (*dummyTable)(nil)
 var _ sql.IndexAddressable = (*dummyTable)(nil)
 
-func (t *dummyTable) IndexedAccess(sql.IndexLookup) sql.IndexedTable {
+func (t *dummyTable) IndexedAccess(*sql.Context, sql.IndexLookup) sql.IndexedTable {
 	panic("implement me")
 }
 
@@ -167,7 +167,7 @@ func (t *dummyTable) GetIndexes(*sql.Context) ([]sql.Index, error) {
 	return []sql.Index{dummyIndex{cols: exprs}}, nil
 }
 
-func (t *dummyTable) PrimaryKeySchema() sql.PrimaryKeySchema {
+func (t *dummyTable) PrimaryKeySchema(ctx *sql.Context) sql.PrimaryKeySchema {
 	return t.schema
 }
 
@@ -181,7 +181,7 @@ func (*dummyTable) Insert(*sql.Context, sql.Row) error {
 	panic("not implemented")
 }
 
-func (t *dummyTable) Schema() sql.Schema { return t.schema.Schema }
+func (t *dummyTable) Schema(ctx *sql.Context) sql.Schema { return t.schema.Schema }
 
 func (t *dummyTable) Collation() sql.CollationID { return sql.Collation_Default }
 
@@ -197,7 +197,7 @@ type dummyIndex struct {
 	cols []string
 }
 
-func (dummyIndex) CanSupport(...sql.Range) bool {
+func (dummyIndex) CanSupport(*sql.Context, ...sql.Range) bool {
 	return true
 }
 
@@ -229,6 +229,14 @@ func (dummyIndex) IsFullText() bool {
 	return false
 }
 
+func (dummyIndex) IsVector() bool {
+	return false
+}
+
+func (dummyIndex) CanSupportOrderBy(sql.Expression) bool {
+	return false
+}
+
 func (dummyIndex) Comment() string {
 	return ""
 }
@@ -241,7 +249,7 @@ func (dummyIndex) IsGenerated() bool {
 	return false
 }
 
-func (i dummyIndex) ColumnExpressionTypes() []sql.ColumnExpressionType {
+func (i dummyIndex) ColumnExpressionTypes(ctx *sql.Context) []sql.ColumnExpressionType {
 	es := i.Expressions()
 	res := make([]sql.ColumnExpressionType, len(es))
 	for i := range es {

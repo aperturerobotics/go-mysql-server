@@ -19,25 +19,30 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net"
 	"regexp"
 	"runtime/trace"
 	"sync"
 	"time"
 
 	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/vitess/go/netutil"
 	"github.com/dolthub/vitess/go/sqltypes"
 	querypb "github.com/dolthub/vitess/go/vt/proto/query"
 	"github.com/dolthub/vitess/go/vt/sqlparser"
-	"github.com/go-kit/kit/metrics/discard"
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 	otel "go.opentelemetry.io/otel/trace"
 	"gopkg.in/src-d/go-errors.v1"
 
 	sqle "github.com/dolthub/go-mysql-server"
+	"github.com/dolthub/go-mysql-server/errguard"
+	"github.com/dolthub/go-mysql-server/internal/sockstate"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/analyzer"
+	"github.com/dolthub/go-mysql-server/sql/iters"
 	"github.com/dolthub/go-mysql-server/sql/plan"
+	"github.com/dolthub/go-mysql-server/sql/rowexec"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
@@ -63,43 +68,21 @@ const (
 
 // Handler is a connection handler for a SQLe engine, implementing the Vitess mysql.Handler interface.
 type Handler struct {
-	le *logrus.Entry
-	// mu                sync.Mutex
+	sel               ServerEventListener
+	queryCounter      Counter
+	queryErrorCounter Counter
+	queryHistogram    Histogram
 	e                 *sqle.Engine
 	sm                *SessionManager
 	readTimeout       time.Duration
-	disableMultiStmts bool
 	maxLoggedQueryLen int
+	disableMultiStmts bool
 	encodeLoggedQuery bool
-	sel               ServerEventListener
 }
 
 var _ mysql.Handler = (*Handler)(nil)
 var _ mysql.ExtendedHandler = (*Handler)(nil)
 var _ mysql.BinlogReplicaHandler = (*Handler)(nil)
-
-// NewHandler creates a new Handler given a SQLe engine.
-func NewHandler(
-	le *logrus.Entry,
-	e *sqle.Engine,
-	sm *SessionManager,
-	rt time.Duration,
-	disableMultiStmts bool,
-	maxLoggedQueryLen int,
-	encodeLoggedQuery bool,
-	listener ServerEventListener,
-) *Handler {
-	return &Handler{
-		le:                le,
-		e:                 e,
-		sm:                sm,
-		readTimeout:       rt,
-		disableMultiStmts: disableMultiStmts,
-		maxLoggedQueryLen: maxLoggedQueryLen,
-		encodeLoggedQuery: encodeLoggedQuery,
-		sel:               listener,
-	}
-}
 
 // NewConnection reports that a new connection has been established.
 func (h *Handler) NewConnection(c *mysql.Conn) {
@@ -112,7 +95,7 @@ func (h *Handler) NewConnection(c *mysql.Conn) {
 	sql.StatusVariables.IncrementGlobal("Connections", 1)
 
 	c.DisableClientMultiStatements = h.disableMultiStmts
-	h.le.WithField(sql.ConnectionIdLogField, c.ConnectionID).WithField("DisableClientMultiStatements", c.DisableClientMultiStatements).Infof("NewConnection")
+	logrus.WithField(sql.ConnectionIdLogField, c.ConnectionID).WithField("DisableClientMultiStatements", c.DisableClientMultiStatements).Infof("NewConnection")
 }
 
 func (h *Handler) ConnectionAborted(_ *mysql.Conn, _ string) error {
@@ -120,8 +103,22 @@ func (h *Handler) ConnectionAborted(_ *mysql.Conn, _ string) error {
 	return nil
 }
 
+// Called when a new connection successfully
+// authenticated. Responsible for creating the session associated with
+// the connection in the session manager and updating processlist with
+// the authenticated user and remote address.
+func (h *Handler) ConnectionAuthenticated(c *mysql.Conn) error {
+	err := h.sm.ConnReady(context.Background(), c)
+	if err != nil {
+		logrus.Errorf("unable to register new authenticated connection: %s", err.Error())
+		err = sql.CastSQLError(err)
+	}
+	return err
+}
+
 func (h *Handler) ComInitDB(c *mysql.Conn, schemaName string) error {
-	err := h.sm.SetDB(c, schemaName)
+	// SetDB itself handles session and processlist operation lifecycle callbacks.
+	err := h.sm.SetDB(context.Background(), c, schemaName)
 	if err != nil {
 		logrus.WithField("database", schemaName).Errorf("unable to process ComInitDB: %s", err.Error())
 		err = sql.CastSQLError(err)
@@ -140,6 +137,17 @@ func (h *Handler) ComPrepare(ctx context.Context, c *mysql.Conn, query string, p
 	if err != nil {
 		return nil, err
 	}
+	sqlCtx, err = sqlCtx.ProcessList.BeginOperation(sqlCtx)
+	if err != nil {
+		return nil, err
+	}
+	defer sqlCtx.ProcessList.EndOperation(sqlCtx)
+	err = sql.SessionCommandBegin(sqlCtx.Session)
+	if err != nil {
+		return nil, err
+	}
+	defer sql.SessionCommandEnd(sqlCtx.Session)
+
 	var analyzed sql.Node
 	if analyzer.PreparedStmtDisabled {
 		analyzed, err = h.e.AnalyzeQuery(sqlCtx, query)
@@ -153,18 +161,21 @@ func (h *Handler) ComPrepare(ctx context.Context, c *mysql.Conn, query string, p
 	}
 
 	// A nil result signals to the handler that the query is not a SELECT statement.
-	if nodeReturnsOkResultSchema(analyzed) || types.IsOkResultSchema(analyzed.Schema()) {
+	if nodeReturnsOkResultSchema(analyzed) || types.IsOkResultSchema(analyzed.Schema(sqlCtx)) {
 		return nil, nil
 	}
 
-	return schemaToFields(sqlCtx, analyzed.Schema()), nil
+	return schemaToFields(sqlCtx, analyzed.Schema(sqlCtx)), nil
 }
 
 // These nodes will eventually return an OK result, but their intermediate forms here return a different schema
 // than they will at execution time.
 func nodeReturnsOkResultSchema(node sql.Node) bool {
 	switch node.(type) {
-	case *plan.InsertInto, *plan.Update, *plan.UpdateJoin, *plan.DeleteFrom:
+	case *plan.InsertInto:
+		insertNode, _ := node.(*plan.InsertInto)
+		return insertNode.Returning == nil
+	case *plan.Update, *plan.UpdateJoin, *plan.DeleteFrom:
 		return true
 	}
 	return false
@@ -179,6 +190,16 @@ func (h *Handler) ComPrepareParsed(ctx context.Context, c *mysql.Conn, query str
 	if err != nil {
 		return nil, nil, err
 	}
+	sqlCtx, err = sqlCtx.ProcessList.BeginOperation(sqlCtx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer sqlCtx.ProcessList.EndOperation(sqlCtx)
+	err = sql.SessionCommandBegin(sqlCtx.Session)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer sql.SessionCommandEnd(sqlCtx.Session)
 
 	analyzed, err := h.e.PrepareParsedQuery(sqlCtx, query, query, parsed)
 	if err != nil {
@@ -190,10 +211,10 @@ func (h *Handler) ComPrepareParsed(ctx context.Context, c *mysql.Conn, query str
 	var fields []*querypb.Field
 	// The return result fields should only be directly translated if it doesn't correspond to an OK result.
 	// See comment in ComPrepare
-	if !(nodeReturnsOkResultSchema(analyzed) || types.IsOkResultSchema(analyzed.Schema())) {
+	if !(nodeReturnsOkResultSchema(analyzed) || types.IsOkResultSchema(analyzed.Schema(sqlCtx))) {
 		fields = nil
 	} else {
-		fields = schemaToFields(sqlCtx, analyzed.Schema())
+		fields = schemaToFields(sqlCtx, analyzed.Schema(sqlCtx))
 	}
 
 	return analyzed, fields, nil
@@ -204,18 +225,33 @@ func (h *Handler) ComBind(ctx context.Context, c *mysql.Conn, query string, pars
 	if err != nil {
 		return nil, nil, err
 	}
+	sqlCtx, err = sqlCtx.ProcessList.BeginOperation(sqlCtx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer sqlCtx.ProcessList.EndOperation(sqlCtx)
+	err = sql.SessionCommandBegin(sqlCtx.Session)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer sql.SessionCommandEnd(sqlCtx.Session)
 
 	stmt, ok := parsedQuery.(sqlparser.Statement)
 	if !ok {
 		return nil, nil, fmt.Errorf("parsedQuery must be a sqlparser.Statement, but got %T", parsedQuery)
 	}
 
-	queryPlan, err := h.e.BoundQueryPlan(sqlCtx, query, stmt, prepare.BindVars)
+	bindingExprs, err := bindingsToExprs(prepare.BindVars)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return queryPlan, schemaToFields(sqlCtx, queryPlan.Schema()), nil
+	queryPlan, err := h.e.BoundQueryPlan(sqlCtx, query, stmt, bindingExprs)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return queryPlan, schemaToFields(sqlCtx, queryPlan.Schema(sqlCtx)), nil
 }
 
 func (h *Handler) ComExecuteBound(ctx context.Context, conn *mysql.Conn, query string, boundQuery mysql.BoundQuery, callback mysql.ResultSpoolFn) error {
@@ -230,7 +266,7 @@ func (h *Handler) ComExecuteBound(ctx context.Context, conn *mysql.Conn, query s
 func (h *Handler) ComStmtExecute(ctx context.Context, c *mysql.Conn, prepare *mysql.PrepareData, callback func(*sqltypes.Result) error) error {
 	_, err := h.errorWrappedDoQuery(ctx, c, prepare.PrepareStmt, nil, MultiStmtModeOff, prepare.BindVars, func(res *sqltypes.Result, more bool) error {
 		return callback(res)
-	}, nil)
+	}, &sql.QueryFlags{})
 	return err
 }
 
@@ -245,25 +281,25 @@ func (h *Handler) ComResetConnection(c *mysql.Conn) error {
 	logrus.WithField("connectionId", c.ConnectionID).Debug("COM_RESET_CONNECTION command received")
 
 	// Grab the currently selected database name
-	s := h.sm.session(c)
-	db := s.GetCurrentDatabase()
+	db := h.sm.GetCurrentDB(c)
 
 	// Dispose of the connection's current session
 	h.maybeReleaseAllLocks(c)
 	h.e.CloseSession(c.ConnectionID)
 
+	ctx := context.Background()
+
 	// Create a new session and set the current database
-	err := h.sm.NewSession(context.Background(), c)
+	err := h.sm.NewSession(ctx, c)
 	if err != nil {
 		return err
 	}
-	s = h.sm.session(c)
-	s.SetCurrentDatabase(db)
-	return nil
+
+	return h.sm.SetDB(ctx, c, db)
 }
 
 func (h *Handler) ParserOptionsForConnection(c *mysql.Conn) (sqlparser.ParserOptions, error) {
-	ctx, err := h.sm.NewContext(context.Background(), c, "")
+	ctx, err := h.sm.NewContextWithQuery(context.Background(), c, "")
 	if err != nil {
 		return sqlparser.ParserOptions{}, err
 	}
@@ -291,6 +327,7 @@ func (h *Handler) ConnectionClosed(c *mysql.Conn) {
 func (h *Handler) maybeReleaseAllLocks(c *mysql.Conn) {
 	if ctx, err := h.sm.NewContextWithQuery(context.Background(), c, ""); err != nil {
 		logrus.Errorf("unable to release all locks on session close: %s", err)
+		logrus.Errorf("unable to unlock tables on session close: %s", err)
 	} else {
 		_, err = h.e.LS.ReleaseAll(ctx)
 		if err != nil {
@@ -308,7 +345,7 @@ func (h *Handler) ComMultiQuery(
 	query string,
 	callback mysql.ResultSpoolFn,
 ) (string, error) {
-	return h.errorWrappedDoQuery(ctx, c, query, nil, MultiStmtModeOn, nil, callback, nil)
+	return h.errorWrappedDoQuery(ctx, c, query, nil, MultiStmtModeOn, nil, callback, &sql.QueryFlags{})
 }
 
 // ComQuery executes a SQL query on the SQLe engine.
@@ -318,7 +355,7 @@ func (h *Handler) ComQuery(
 	query string,
 	callback mysql.ResultSpoolFn,
 ) error {
-	_, err := h.errorWrappedDoQuery(ctx, c, query, nil, MultiStmtModeOff, nil, callback, nil)
+	_, err := h.errorWrappedDoQuery(ctx, c, query, nil, MultiStmtModeOff, nil, callback, &sql.QueryFlags{})
 	return err
 }
 
@@ -330,7 +367,7 @@ func (h *Handler) ComParsedQuery(
 	parsed sqlparser.Statement,
 	callback mysql.ResultSpoolFn,
 ) error {
-	_, err := h.errorWrappedDoQuery(ctx, c, query, parsed, MultiStmtModeOff, nil, callback, nil)
+	_, err := h.errorWrappedDoQuery(ctx, c, query, parsed, MultiStmtModeOff, nil, callback, &sql.QueryFlags{})
 	return err
 }
 
@@ -349,7 +386,7 @@ func (h *Handler) ComRegisterReplica(c *mysql.Conn, replicaHost string, replicaP
 		return nil
 	}
 
-	newCtx := sql.NewContext(context.Background())
+	newCtx := sql.NewEmptyContext()
 	primaryController := h.e.Analyzer.Catalog.GetBinlogPrimaryController()
 	return primaryController.RegisterReplica(newCtx, c, replicaHost, replicaPort)
 }
@@ -365,7 +402,7 @@ func (h *Handler) ComBinlogDumpGTID(c *mysql.Conn, logFile string, logPos uint64
 		Debug("Handling COM_BINLOG_DUMP_GTID")
 
 	// TODO: is logfile and logpos ever actually needed for COM_BINLOG_DUMP_GTID?
-	newCtx := sql.NewContext(context.Background())
+	newCtx := sql.NewEmptyContext()
 	primaryController := h.e.Analyzer.Catalog.GetBinlogPrimaryController()
 	return primaryController.BinlogDumpGtid(newCtx, c, gtidSet)
 }
@@ -383,19 +420,31 @@ func (h *Handler) doQuery(
 	bindings map[string]*querypb.BindVariable,
 	callback func(*sqltypes.Result, bool) error,
 	qFlags *sql.QueryFlags,
-) (string, error) {
-	sqlCtx, err := h.sm.NewContext(ctx, c, query)
+) (remainder string, err error) {
+	var sqlCtx *sql.Context
+	sqlCtx, err = h.sm.NewContextWithQuery(ctx, c, query)
 	if err != nil {
 		return "", err
 	}
+	// TODO: it would be nice to put this logic in the engine, not the handler, but we don't want the process to be
+	//  marked done until we're done spooling rows over the wire
+	sqlCtx, err = sqlCtx.ProcessList.BeginQuery(sqlCtx, query)
+	if err != nil {
+		return remainder, err
+	}
+	defer sqlCtx.ProcessList.EndQuery(sqlCtx)
+	err = sql.SessionCommandBegin(sqlCtx.Session)
+	if err != nil {
+		return "", err
+	}
+	defer sql.SessionCommandEnd(sqlCtx.Session)
 
 	start := time.Now()
 
-	var remainder string
 	var prequery string
 	if parsed == nil {
-		_, inPreparedCache := h.e.PreparedDataCache.GetCachedStmt(sqlCtx.Session.ID(), query)
-		if mode == MultiStmtModeOn && !inPreparedCache {
+		_, isPrepared := sqlCtx.Session.GetPreparedQuery(query)
+		if mode == MultiStmtModeOn && !isPrepared {
 			parsed, prequery, remainder, err = h.e.Parser.Parse(sqlCtx, query, true)
 			if prequery != "" {
 				query = prequery
@@ -419,27 +468,21 @@ func (h *Handler) doQuery(
 	if queryStr != "" {
 		sqlCtx.SetLogger(sqlCtx.GetLogger().WithField("query", queryStr))
 	}
-	sqlCtx.GetLogger().Debugf("Starting query")
+	sqlCtx.GetLogger().WithField(sql.QueryTimeLogKey, time.Now()).Debugf("Starting query")
 
-	finish := observeQuery(sqlCtx, query)
-	defer finish(err)
-
-	sqlCtx.GetLogger().Tracef("beginning execution")
-
-	oCtx := ctx
-
-	// TODO: it would be nice to put this logic in the engine, not the handler, but we don't want the process to be
-	//  marked done until we're done spooling rows over the wire
-	ctx, err = sqlCtx.ProcessList.BeginQuery(sqlCtx, query)
+	finish := h.observeQuery(sqlCtx, query)
 	defer func() {
-		if err != nil && ctx != nil {
-			sqlCtx.ProcessList.EndQuery(sqlCtx)
-		}
+		finish(err)
 	}()
 
-	schema, rowIter, qFlags, err := queryExec(sqlCtx, query, parsed, analyzedPlan, bindings, qFlags)
+	sqlCtx.GetLogger().WithField(sql.QueryTimeLogKey, time.Now()).Tracef("beginning execution")
+
+	var schema sql.Schema
+	var rowIter sql.RowIter
+	qFlags.Set(sql.QFlagDeferProjections)
+	schema, rowIter, qFlags, err = queryExec(sqlCtx, query, parsed, analyzedPlan, bindings, qFlags)
 	if err != nil {
-		sqlCtx.GetLogger().WithError(err).Warn("error running query")
+		sqlCtx.GetLogger().WithField(sql.QueryTimeLogKey, time.Now()).WithError(err).Warn("error running query")
 		if verboseErrorLogging {
 			fmt.Printf("Err: %+v", err)
 		}
@@ -451,22 +494,27 @@ func (h *Handler) doQuery(
 	var r *sqltypes.Result
 	var processedAtLeastOneBatch bool
 
+	buf := sql.ByteBufPool.Get().(*sql.ByteBuffer)
+	defer func() {
+		buf.Reset()
+		sql.ByteBufPool.Put(buf)
+	}()
+
 	// zero/single return schema use spooling shortcut
 	if types.IsOkResultSchema(schema) {
 		r, err = resultForOkIter(sqlCtx, rowIter)
 	} else if schema == nil {
 		r, err = resultForEmptyIter(sqlCtx, rowIter, resultFields)
 	} else if analyzer.FlagIsSet(qFlags, sql.QFlagMax1Row) {
-		r, err = resultForMax1RowIter(sqlCtx, schema, rowIter, resultFields)
+		r, err = resultForMax1RowIter(sqlCtx, schema, rowIter, resultFields, buf)
+	} else if vr, ok := rowIter.(sql.ValueRowIter); ok && vr.IsValueRowIter(sqlCtx) {
+		r, processedAtLeastOneBatch, err = h.resultForValueRowIter(sqlCtx, c, schema, vr, resultFields, buf, callback, more)
 	} else {
-		r, processedAtLeastOneBatch, err = h.resultForDefaultIter(sqlCtx, c, schema, rowIter, callback, resultFields, more)
+		r, processedAtLeastOneBatch, err = h.resultForDefaultIter(sqlCtx, c, schema, rowIter, callback, resultFields, more, buf)
 	}
 	if err != nil {
 		return remainder, err
 	}
-
-	// errGroup context is now canceled
-	ctx = oCtx
 
 	if err = setConnStatusFlags(sqlCtx, c); err != nil {
 		return remainder, err
@@ -483,7 +531,7 @@ func (h *Handler) doQuery(
 		sqlCtx.GetLogger().Tracef("returning result %v", r)
 	}
 
-	sqlCtx.GetLogger().Debugf("Query finished in %d ms", time.Since(start).Milliseconds())
+	sqlCtx.GetLogger().WithField(sql.QueryTimeLogKey, time.Now()).Debugf("Query finished in %d ms", time.Since(start).Milliseconds())
 
 	// processedAtLeastOneBatch means we already called callback() at least
 	// once, so no need to call it if RowsAffected == 0.
@@ -524,9 +572,41 @@ func resultForEmptyIter(ctx *sql.Context, iter sql.RowIter, resultFields []*quer
 	return &sqltypes.Result{Fields: resultFields}, nil
 }
 
+// GetDeferredProjections looks for a top-level deferred projection, retrieves its projections, and removes it from the
+// iterator tree.
+func GetDeferredProjections(iter sql.RowIter) (sql.RowIter, []sql.Expression) {
+	switch i := iter.(type) {
+	case *rowexec.ExprCloserIter:
+		if newChild, projs := GetDeferredProjections(i.GetIter()); projs != nil {
+			return i.WithChildIter(newChild), projs
+		}
+	case *plan.TrackedRowIter:
+		if newChild, projs := GetDeferredProjections(i.GetIter()); projs != nil {
+			return i.WithChildIter(newChild), projs
+		}
+	case *rowexec.TransactionCommittingIter:
+		if newChild, projs := GetDeferredProjections(i.GetIter()); projs != nil {
+			return i.WithChildIter(newChild), projs
+		}
+	case *iters.LimitIter:
+		if newChild, projs := GetDeferredProjections(i.ChildIter); projs != nil {
+			i.ChildIter = newChild
+			return i, projs
+		}
+	case *rowexec.ProjectIter:
+		if i.CanDefer() {
+			return i.GetChildIter(), i.GetProjections()
+		}
+	}
+	return iter, nil
+}
+
 // resultForMax1RowIter ensures that an empty iterator returns at most one row
-func resultForMax1RowIter(ctx *sql.Context, schema sql.Schema, iter sql.RowIter, resultFields []*querypb.Field) (*sqltypes.Result, error) {
+func resultForMax1RowIter(ctx *sql.Context, schema sql.Schema, iter sql.RowIter, resultFields []*querypb.Field, buf *sql.ByteBuffer) (*sqltypes.Result, error) {
 	defer trace.StartRegion(ctx, "Handler.resultForMax1RowIter").End()
+
+	defer iter.Close(ctx)
+
 	row, err := iter.Next(ctx)
 	if err == io.EOF {
 		return &sqltypes.Result{Fields: resultFields}, nil
@@ -537,11 +617,8 @@ func resultForMax1RowIter(ctx *sql.Context, schema sql.Schema, iter sql.RowIter,
 	if _, err = iter.Next(ctx); err != io.EOF {
 		return nil, fmt.Errorf("result max1Row iterator returned more than one row")
 	}
-	if err := iter.Close(ctx); err != nil {
-		return nil, err
-	}
 
-	outputRow, err := rowToSQL(ctx, schema, row)
+	outputRow, err := RowToSQL(ctx, schema, row, nil, buf)
 	if err != nil {
 		return nil, err
 	}
@@ -553,54 +630,16 @@ func resultForMax1RowIter(ctx *sql.Context, schema sql.Schema, iter sql.RowIter,
 
 // resultForDefaultIter reads batches of rows from the iterator
 // and writes results into the callback function.
-func (h *Handler) resultForDefaultIter(
-	ctx *sql.Context,
-	c *mysql.Conn,
-	schema sql.Schema,
-	iter sql.RowIter,
-	callback func(*sqltypes.Result, bool) error,
-	resultFields []*querypb.Field,
-	more bool) (r *sqltypes.Result, processedAtLeastOneBatch bool, returnErr error) {
+func (h *Handler) resultForDefaultIter(ctx *sql.Context, c *mysql.Conn, schema sql.Schema, iter sql.RowIter, callback func(*sqltypes.Result, bool) error, resultFields []*querypb.Field, more bool, buf *sql.ByteBuffer) (*sqltypes.Result, bool, error) {
 	defer trace.StartRegion(ctx, "Handler.resultForDefaultIter").End()
 
 	eg, ctx := ctx.NewErrgroup()
-
-	var rowChan chan sql.Row
-
-	rowChan = make(chan sql.Row, 512)
-
-	pan2err := func() {
-		if recoveredPanic := recover(); recoveredPanic != nil {
-			returnErr = fmt.Errorf("handler caught panic: %v", recoveredPanic)
-		}
-	}
-
-	wg := sync.WaitGroup{}
-	wg.Add(2)
-	// Read rows off the row iterator and send them to the row channel.
-	eg.Go(func() error {
-		defer pan2err()
-		defer wg.Done()
-		defer close(rowChan)
-		for {
-			select {
-			case <-ctx.Done():
-				return nil
-			default:
-				row, err := iter.Next(ctx)
-				if err == io.EOF {
-					return nil
-				}
-				if err != nil {
-					return err
-				}
-				select {
-				case rowChan <- row:
-				case <-ctx.Done():
-					return nil
-				}
-			}
-		}
+	// TODO: poll for closed connections should obviously also run even if
+	// we're doing something with an OK result or a single row result, etc.
+	// This should be in the caller.
+	pollCtx, cancelF := ctx.NewSubContext()
+	errguard.Go(eg, func() error {
+		return h.pollForClosedConnection(pollCtx, c)
 	})
 
 	// Default waitTime is one minute if there is no timeout configured, in which case
@@ -611,69 +650,138 @@ func (h *Handler) resultForDefaultIter(
 	if h.readTimeout > 0 {
 		waitTime = h.readTimeout
 	}
-
 	timer := time.NewTimer(waitTime)
 	defer timer.Stop()
 
-	// reads rows from the channel, converts them to wire format,
-	// and calls |callback| to give them to vitess.
-	eg.Go(func() error {
-		defer pan2err()
+	// Wrap the callback to include a BytesBuffer.Reset() for non-cursor requests, to
+	// clean out rows that have already been spooled.
+	// A server-side cursor allows the caller to fetch results cached on the server-side,
+	// so if a cursor exists, we can't release the buffer memory yet.
+	if c.StatusFlags&uint16(mysql.ServerCursorExists) != 0 {
+		callback = func(r *sqltypes.Result, more bool) error {
+			defer buf.Reset()
+			return callback(r, more)
+		}
+	}
+
+	iter, projs := GetDeferredProjections(iter)
+
+	wg := sync.WaitGroup{}
+	wg.Add(3)
+
+	// Read rows off the row iterator and send them to the row channel.
+	var rowChan = make(chan sql.Row, 512)
+	errguard.Go(eg, func() error {
 		defer wg.Done()
+		defer close(rowChan)
 		for {
-			if r == nil {
-				r = &sqltypes.Result{Fields: resultFields}
-			}
-			if r.RowsAffected == rowsBatch {
-				if err := callback(r, more); err != nil {
-					return err
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			default:
+				row, iErr := iter.Next(ctx)
+				if iErr == io.EOF {
+					return nil
 				}
-				r = nil
-				processedAtLeastOneBatch = true
-				continue
+				if iErr != nil {
+					return iErr
+				}
+				select {
+				case rowChan <- row:
+				case <-ctx.Done():
+					return nil
+				}
+			}
+		}
+	})
+
+	// Drain rows from rowChan, convert to wire format, and send to resChan
+	var resChan = make(chan *sqltypes.Result, 4)
+	var res *sqltypes.Result
+	errguard.Go(eg, func() error {
+		defer wg.Done()
+		defer close(resChan)
+
+		for {
+			if res == nil {
+				res = &sqltypes.Result{
+					Fields: resultFields,
+					Rows:   make([][]sqltypes.Value, 0, rowsBatch),
+				}
 			}
 
 			select {
 			case <-ctx.Done():
-				return nil
+				return context.Cause(ctx)
+
+			case <-timer.C:
+				if h.readTimeout != 0 {
+					// Cancel and return so Vitess can call the CloseConnection callback
+					ctx.GetLogger().Warn("connection timeout")
+					return ErrRowTimeout.New()
+				}
+
 			case row, ok := <-rowChan:
 				if !ok {
 					return nil
 				}
+
 				if types.IsOkResult(row) {
-					if len(r.Rows) > 0 {
+					if res.RowsAffected > 0 {
 						panic("Got OkResult mixed with RowResult")
 					}
-					r = resultFromOkResult(row[0].(types.OkResult))
+					res = resultFromOkResult(row[0].(types.OkResult))
 					continue
 				}
 
-				outputRow, err := rowToSQL(ctx, schema, row)
+				outRow, sqlErr := RowToSQL(ctx, schema, row, projs, buf)
+				if sqlErr != nil {
+					return sqlErr
+				}
+
+				ctx.GetLogger().Tracef("spooling result row %s", outRow)
+				res.Rows = append(res.Rows, outRow)
+				res.RowsAffected++
+
+				if res.RowsAffected == rowsBatch {
+					select {
+					case <-ctx.Done():
+						return context.Cause(ctx)
+					case resChan <- res:
+						res = nil
+					}
+				}
+			}
+
+			timer.Reset(waitTime)
+		}
+	})
+
+	// Drain sqltypes.Result from resChan and call callback (send to client and potentially reset buffer)
+	var processedAtLeastOneBatch bool
+	errguard.Go(eg, func() (err error) {
+		defer cancelF()
+		defer wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			case r, ok := <-resChan:
+				if !ok {
+					return nil
+				}
+				processedAtLeastOneBatch = true
+				err = callback(r, more)
 				if err != nil {
 					return err
 				}
-
-				ctx.GetLogger().Tracef("spooling result row %s", outputRow)
-				r.Rows = append(r.Rows, outputRow)
-				r.RowsAffected++
-			case <-timer.C:
-				if h.readTimeout != 0 {
-					// Cancel and return so Vitess can call the CloseConnection callback
-					ctx.GetLogger().Tracef("connection timeout")
-					return ErrRowTimeout.New()
-				}
 			}
-			if !timer.Stop() {
-				<-timer.C
-			}
-			timer.Reset(waitTime)
 		}
 	})
 
 	// Close() kills this PID in the process list,
 	// wait until all rows have be sent over the wire
-	eg.Go(func() error {
-		defer pan2err()
+	errguard.Go(eg, func() error {
 		wg.Wait()
 		return iter.Close(ctx)
 	})
@@ -684,10 +792,168 @@ func (h *Handler) resultForDefaultIter(
 		if verboseErrorLogging {
 			fmt.Printf("Err: %+v", err)
 		}
-		returnErr = err
+		return nil, false, err
+	}
+	return res, processedAtLeastOneBatch, nil
+}
+
+func (h *Handler) resultForValueRowIter(ctx *sql.Context, c *mysql.Conn, schema sql.Schema, iter sql.ValueRowIter, resultFields []*querypb.Field, buf *sql.ByteBuffer, callback func(*sqltypes.Result, bool) error, more bool) (*sqltypes.Result, bool, error) {
+	defer trace.StartRegion(ctx, "Handler.resultForValueRowIter").End()
+
+	eg, ctx := ctx.NewErrgroup()
+	// TODO: poll for closed connections should obviously also run even if
+	// we're doing something with an OK result or a single row result, etc.
+	// This should be in the caller.
+	pollCtx, cancelF := ctx.NewSubContext()
+	errguard.Go(eg, func() error {
+		return h.pollForClosedConnection(pollCtx, c)
+	})
+
+	// Default waitTime is one minute if there is no timeout configured, in which case
+	// it will loop to iterate again unless the socket died by the OS timeout or other problems.
+	// If there is a timeout, it will be enforced to ensure that Vitess has a chance to
+	// call Handler.CloseConnection()
+	waitTime := 1 * time.Minute
+	if h.readTimeout > 0 {
+		waitTime = h.readTimeout
+	}
+	timer := time.NewTimer(waitTime)
+	defer timer.Stop()
+
+	// Wrap the callback to include a BytesBuffer.Reset() for non-cursor requests, to
+	// clean out rows that have already been spooled.
+	// A server-side cursor allows the caller to fetch results cached on the server-side,
+	// so if a cursor exists, we can't release the buffer memory yet.
+	if c.StatusFlags&uint16(mysql.ServerCursorExists) != 0 {
+		callback = func(r *sqltypes.Result, more bool) error {
+			defer buf.Reset()
+			return callback(r, more)
+		}
 	}
 
-	return
+	wg := sync.WaitGroup{}
+	wg.Add(3)
+
+	// Drain rows from iter and send to rowsChan
+	var rowChan = make(chan sql.ValueRow, 512)
+	errguard.Go(eg, func() error {
+		defer wg.Done()
+		defer close(rowChan)
+		for {
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			default:
+				row, iErr := iter.NextValueRow(ctx)
+				if iErr == io.EOF {
+					return nil
+				}
+				if iErr != nil {
+					return iErr
+				}
+				select {
+				case rowChan <- row:
+				case <-ctx.Done():
+					return nil
+				}
+			}
+		}
+	})
+
+	// Drain rows from rowChan, convert to wire format, and send to resChan
+	var resChan = make(chan *sqltypes.Result, 4)
+	var res *sqltypes.Result
+	errguard.Go(eg, func() error {
+		defer close(resChan)
+		defer wg.Done()
+
+		for {
+			if res == nil {
+				res = &sqltypes.Result{
+					Fields: resultFields,
+					Rows:   make([][]sqltypes.Value, rowsBatch),
+				}
+			}
+
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+
+			case <-timer.C:
+				if h.readTimeout != 0 {
+					// Cancel and return so Vitess can call the CloseConnection callback
+					ctx.GetLogger().Warn("connection timeout")
+					return ErrRowTimeout.New()
+				}
+
+			case row, ok := <-rowChan:
+				if !ok {
+					return nil
+				}
+
+				outRow, sqlErr := RowValueToSQLValues(ctx, schema, row, buf)
+				if sqlErr != nil {
+					return sqlErr
+				}
+
+				ctx.GetLogger().Tracef("spooling result row %s", outRow)
+				res.Rows[res.RowsAffected] = outRow
+				res.RowsAffected++
+
+				if res.RowsAffected == rowsBatch {
+					select {
+					case <-ctx.Done():
+						return context.Cause(ctx)
+					case resChan <- res:
+						res = nil
+					}
+				}
+			}
+
+			timer.Reset(waitTime)
+		}
+	})
+
+	// Drain sqltypes.Result from resChan and call callback (send to client and reset buffer)
+	var processedAtLeastOneBatch bool
+	errguard.Go(eg, func() (err error) {
+		defer cancelF()
+		defer wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			case r, ok := <-resChan:
+				if !ok {
+					return nil
+				}
+				processedAtLeastOneBatch = true
+				err = callback(r, more)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	})
+
+	// Close() kills this PID in the process list,
+	// wait until all rows have be sent over the wire
+	errguard.Go(eg, func() error {
+		wg.Wait()
+		return iter.Close(ctx)
+	})
+
+	err := eg.Wait()
+	if err != nil {
+		ctx.GetLogger().WithError(err).Warn("error running query")
+		if verboseErrorLogging {
+			fmt.Printf("Err: %+v", err)
+		}
+		return nil, false, err
+	}
+
+	res.Rows = res.Rows[:res.RowsAffected]
+	return res, processedAtLeastOneBatch, err
 }
 
 // See https://dev.mysql.com/doc/internals/en/status-flags.html
@@ -773,6 +1039,70 @@ func (h *Handler) errorWrappedComExec(
 	return err
 }
 
+// Periodically polls the connection socket to determine if it is has been closed by the client, returning an error
+// if it has been. Meant to be run in an errgroup from the query handler routine. Returns immediately with no error
+// on platforms that can't support TCP socket checks.
+func (h *Handler) pollForClosedConnection(ctx *sql.Context, c *mysql.Conn) error {
+	tcpConn, ok := maybeGetTCPConn(c.Conn)
+	if !ok {
+		ctx.GetLogger().Trace("Connection checker exiting, connection isn't TCP")
+		return nil
+	}
+
+	inode, err := sockstate.GetConnInode(tcpConn)
+	if err != nil || inode == 0 {
+		if !sockstate.ErrSocketCheckNotImplemented.Is(err) {
+			ctx.GetLogger().Trace("Connection checker exiting, connection isn't TCP")
+		}
+		return nil
+	}
+
+	t, ok := tcpConn.LocalAddr().(*net.TCPAddr)
+	if !ok {
+		ctx.GetLogger().Trace("Connection checker exiting, could not get local port")
+		return nil
+	}
+
+	timer := time.NewTimer(tcpCheckerSleepDuration)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-timer.C:
+		}
+
+		st, err := sockstate.GetInodeSockState(t.Port, inode)
+		switch st {
+		case sockstate.Broken:
+			ctx.GetLogger().Warn("socket state is broken, returning error")
+			return ErrConnectionWasClosed.New()
+		case sockstate.Error:
+			ctx.GetLogger().WithError(err).Warn("Connection checker exiting, got err checking sockstate")
+			return nil
+		default: // Established
+			// (juanjux) this check is not free, each iteration takes about 9 milliseconds to run on my machine
+			// thus the small wait between checks
+			timer.Reset(tcpCheckerSleepDuration)
+		}
+	}
+}
+
+func maybeGetTCPConn(conn net.Conn) (*net.TCPConn, bool) {
+	wrap, ok := conn.(netutil.ConnWithTimeouts)
+	if ok {
+		conn = wrap.Conn
+	}
+
+	tcp, ok := conn.(*net.TCPConn)
+	if ok {
+		return tcp, true
+	}
+
+	return nil, false
+}
+
 func resultFromOkResult(result types.OkResult) *sqltypes.Result {
 	infoStr := ""
 	if result.Info != nil {
@@ -847,24 +1177,85 @@ func updateMaxUsedConnectionsStatusVariable() {
 	}()
 }
 
-func rowToSQL(ctx *sql.Context, s sql.Schema, row sql.Row) ([]sqltypes.Value, error) {
-	o := make([]sqltypes.Value, len(row))
+func toSqlHelper(ctx *sql.Context, typ sql.Type, buf *sql.ByteBuffer, val interface{}) (sqltypes.Value, error) {
+	if buf == nil {
+		return typ.SQL(ctx, nil, val)
+	}
+	ret, err := typ.SQL(ctx, buf.Get(), val)
+	buf.Grow(ret.Len()) // TODO: shouldn't we check capacity beforehand?
+	return ret, err
+}
+
+func RowToSQL(ctx *sql.Context, sch sql.Schema, row sql.Row, projs []sql.Expression, buf *sql.ByteBuffer) ([]sqltypes.Value, error) {
+	// need to make sure the schema is not null as some plan schema is defined as null (e.g. IfElseBlock)
+	if len(sch) == 0 {
+		return []sqltypes.Value{}, nil
+	}
+
+	outVals := make([]sqltypes.Value, len(sch))
 	var err error
-	for i, v := range row {
-		if v == nil {
-			o[i] = sqltypes.NULL
-			continue
-		}
-		// need to make sure the schema is not null as some plan schema is defined as null (e.g. IfElseBlock)
-		if len(s) > 0 {
-			o[i], err = s[i].Type.SQL(ctx, nil, v)
+	if len(projs) == 0 {
+		for i, col := range sch {
+			if row[i] == nil {
+				outVals[i] = sqltypes.NULL
+				continue
+			}
+			outVals[i], err = toSqlHelper(ctx, col.Type, buf, row[i])
 			if err != nil {
 				return nil, err
 			}
 		}
+		return outVals, nil
 	}
 
-	return o, nil
+	for i, col := range sch {
+		field, err := projs[i].Eval(ctx, row)
+		if err != nil {
+			return nil, err
+		}
+		if field == nil {
+			outVals[i] = sqltypes.NULL
+			continue
+		}
+		outVals[i], err = toSqlHelper(ctx, col.Type, buf, field)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return outVals, nil
+}
+
+func RowValueToSQLValues(ctx *sql.Context, sch sql.Schema, row sql.ValueRow, buf *sql.ByteBuffer) ([]sqltypes.Value, error) {
+	if len(sch) == 0 {
+		return []sqltypes.Value{}, nil
+	}
+	var err error
+	outVals := make([]sqltypes.Value, len(sch))
+	for i, col := range sch {
+		// TODO: remove this check once all Types implement this
+		valType, ok := col.Type.(sql.ValueType)
+		if !ok {
+			if row[i].IsNull() {
+				outVals[i] = sqltypes.NULL
+				continue
+			}
+			outVals[i] = sqltypes.MakeTrusted(row[i].Typ, row[i].Val)
+			continue
+		}
+		if buf == nil {
+			outVals[i], err = valType.SQLValue(ctx, row[i], nil)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+		outVals[i], err = valType.SQLValue(ctx, row[i], buf.Get())
+		if err != nil {
+			return nil, err
+		}
+		buf.Grow(outVals[i].Len())
+	}
+	return outVals, nil
 }
 
 func schemaToFields(ctx *sql.Context, s sql.Schema) []*querypb.Field {
@@ -922,30 +1313,27 @@ func schemaToFields(ctx *sql.Context, s sql.Schema) []*querypb.Field {
 	return fields
 }
 
-var (
-	// QueryCounter describes a metric that accumulates number of queries monotonically.
-	QueryCounter = discard.NewCounter()
-
-	// QueryErrorCounter describes a metric that accumulates number of failed queries monotonically.
-	QueryErrorCounter = discard.NewCounter()
-
-	// QueryHistogram describes a queries latency.
-	QueryHistogram = discard.NewHistogram()
-)
-
-func observeQuery(ctx *sql.Context, query string) func(err error) {
+func (h *Handler) observeQuery(ctx *sql.Context, query string) func(err error) {
 	span, ctx := ctx.Span("query", otel.WithAttributes(attribute.String("query", query)))
 
 	t := time.Now()
 	return func(err error) {
+		defer span.End()
+
 		if err != nil {
-			QueryErrorCounter.With("query", query, "error", err.Error()).Add(1)
-		} else {
-			QueryCounter.With("query", query).Add(1)
-			QueryHistogram.With("query", query, "duration", "seconds").Observe(time.Since(t).Seconds())
+			if h.queryErrorCounter != nil {
+				h.queryErrorCounter.With("query", query, "error", err.Error()).Add(1)
+			}
+			return
 		}
 
-		span.End()
+		if h.queryCounter != nil {
+			h.queryCounter.With("query", query).Add(1)
+		}
+
+		if h.queryHistogram != nil {
+			h.queryHistogram.With("query", query, "duration", "seconds").Observe(time.Since(t).Seconds())
+		}
 	}
 }
 
@@ -963,7 +1351,11 @@ type QueryExecutor func(
 // executeQuery is a QueryExecutor that calls QueryWithBindings on the given engine using the given query and parsed
 // statement, which may be nil.
 func (h *Handler) executeQuery(ctx *sql.Context, query string, parsed sqlparser.Statement, _ sql.Node, bindings map[string]*querypb.BindVariable, qFlags *sql.QueryFlags) (sql.Schema, sql.RowIter, *sql.QueryFlags, error) {
-	return h.e.QueryWithBindings(ctx, query, parsed, bindings, qFlags)
+	bindingExprs, err := bindingsToExprs(bindings)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return h.e.QueryWithBindings(ctx, query, parsed, bindingExprs, qFlags)
 }
 
 // executeQuery is a QueryExecutor that calls QueryWithBindings on the given engine using the given query and parsed
@@ -974,7 +1366,23 @@ func (h *Handler) executeBoundPlan(
 	_ sqlparser.Statement,
 	plan sql.Node,
 	_ map[string]*querypb.BindVariable,
-	_ *sql.QueryFlags,
+	qFlags *sql.QueryFlags,
 ) (sql.Schema, sql.RowIter, *sql.QueryFlags, error) {
-	return h.e.PrepQueryPlanForExecution(ctx, query, plan)
+	return h.e.PrepQueryPlanForExecution(ctx, query, plan, qFlags)
+}
+
+func bindingsToExprs(bindings map[string]*querypb.BindVariable) (map[string]sqlparser.Expr, error) {
+	res := make(map[string]sqlparser.Expr, len(bindings))
+	for name, bv := range bindings {
+		val, err := sqltypes.BindVariableToValue(bv)
+		if err != nil {
+			return nil, err
+		}
+		expr, err := sqlparser.ExprFromValue(val)
+		if err != nil {
+			return nil, err
+		}
+		res[name] = expr
+	}
+	return res, nil
 }

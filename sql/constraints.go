@@ -36,7 +36,7 @@ const (
 // a number of referential actions, the majority of them are functionally ignored and default to RESTRICT.
 func (f ForeignKeyReferentialAction) IsEquivalentToRestrict() bool {
 	switch f {
-	case ForeignKeyReferentialAction_Cascade, ForeignKeyReferentialAction_SetNull:
+	case ForeignKeyReferentialAction_Cascade, ForeignKeyReferentialAction_SetNull, ForeignKeyReferentialAction_SetDefault:
 		return false
 	default:
 		return true
@@ -45,26 +45,41 @@ func (f ForeignKeyReferentialAction) IsEquivalentToRestrict() bool {
 
 // ForeignKeyConstraint declares a constraint between the columns of two tables.
 type ForeignKeyConstraint struct {
-	Name           string
-	Database       string
-	Table          string
-	Columns        []string
+	// Name is the name of the foreign key constraint
+	Name string
+	// Database is the name of the database of the table with the constraint
+	Database string
+	// SchemaName is the name of the schema of the table, for databases that support schemas.
+	SchemaName string
+	// Table is the name of the table with the constraint
+	Table string
+	// ParentDatabase is the name of the database of the parent table
 	ParentDatabase string
-	ParentTable    string
-	ParentColumns  []string
-	OnUpdate       ForeignKeyReferentialAction
-	OnDelete       ForeignKeyReferentialAction
-	IsResolved     bool
+	// ParentSchema is the name of the schema of the parent table, for databases that support schemas.
+	ParentSchema string
+	// ParentTable is the name of the parent table
+	ParentTable string
+	// OnUpdate is the action to take when the constraint is violated when a row in the parent table is updated
+	OnUpdate ForeignKeyReferentialAction
+	// OnDelete is the action to take when the constraint is violated when a row in the parent table is deleted
+	OnDelete ForeignKeyReferentialAction
+	// Columns is the list of columns in the table that are part of the foreign key
+	Columns []string
+	// ParentColumns is the list of columns in the parent table that are part of the foreign key
+	ParentColumns []string
+	// IsResolved is true if the foreign key has been resolved, false otherwise
+	IsResolved bool
 }
 
 // IsSelfReferential returns whether this foreign key represents a self-referential foreign key.
 func (f *ForeignKeyConstraint) IsSelfReferential() bool {
 	return strings.EqualFold(f.Database, f.ParentDatabase) &&
+		strings.EqualFold(f.SchemaName, f.ParentSchema) &&
 		strings.EqualFold(f.Table, f.ParentTable)
 }
 
 // DebugString implements the DebugStringer interface.
-func (f *ForeignKeyConstraint) DebugString() string {
+func (f *ForeignKeyConstraint) DebugString(ctx *Context) string {
 	return fmt.Sprintf(
 		"FOREIGN KEY %s (%s) REFERENCES %s (%s)",
 		f.Name,
@@ -76,8 +91,8 @@ func (f *ForeignKeyConstraint) DebugString() string {
 
 type ForeignKeyConstraints []*ForeignKeyConstraint
 
-// CheckDefinition defines a trigger. Integrators are not expected to parse or understand the trigger definitions,
-// but must store and return them when asked.
+// CheckDefinition defines a check constraint. Integrators are not expected to parse or
+// understand the check constraint definitions, but must store and return them when asked.
 type CheckDefinition struct {
 	Name            string // The name of this check. Check names in a database are unique.
 	CheckExpression string // String serialization of the check expression
@@ -86,13 +101,13 @@ type CheckDefinition struct {
 
 // CheckConstraint declares a boolean-eval constraint.
 type CheckConstraint struct {
-	Name     string
 	Expr     Expression
+	Name     string
 	Enforced bool
 }
 
 // DebugString implements the DebugStringer interface.
-func (c CheckConstraint) DebugString() string {
+func (c CheckConstraint) DebugString(ctx *Context) string {
 	name := c.Name
 	if len(name) > 0 {
 		name += " "
@@ -101,7 +116,7 @@ func (c CheckConstraint) DebugString() string {
 	if !c.Enforced {
 		not = "not "
 	}
-	return fmt.Sprintf("%sCHECK %s %sENFORCED", name, DebugString(c.Expr), not)
+	return fmt.Sprintf("%sCHECK %s %sENFORCED", name, DebugString(ctx, c.Expr), not)
 }
 
 type CheckConstraints []*CheckConstraint
@@ -119,7 +134,7 @@ func (cc CheckConstraints) ToExpressions() []Expression {
 // constraints with the expressions given, holding names and other properties constant.
 func (cc CheckConstraints) FromExpressions(exprs []Expression) (CheckConstraints, error) {
 	if len(cc) != len(exprs) {
-		return nil, ErrInvalidChildrenNumber.New(cc, len(exprs), len(cc))
+		return nil, ErrInvalidExpressionNumber.New(cc, len(exprs), len(cc))
 	}
 
 	newChecks := make(CheckConstraints, len(cc))

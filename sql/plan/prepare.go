@@ -19,24 +19,31 @@ import (
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/types"
+
+	"github.com/dolthub/vitess/go/vt/sqlparser"
 )
 
 // PrepareQuery is a node that prepares the query
 type PrepareQuery struct {
-	Name  string
-	Child sql.Node
+	Child    sql.Node
+	PrepStmt *sqlparser.Prepare
+	Name     string
 }
 
 var _ sql.Node = (*PrepareQuery)(nil)
 var _ sql.CollationCoercible = (*PrepareQuery)(nil)
 
 // NewPrepareQuery creates a new PrepareQuery node.
-func NewPrepareQuery(name string, child sql.Node) *PrepareQuery {
-	return &PrepareQuery{Name: name, Child: child}
+func NewPrepareQuery(name string, child sql.Node, prepStmt *sqlparser.Prepare) *PrepareQuery {
+	return &PrepareQuery{
+		Name:     name,
+		Child:    child,
+		PrepStmt: prepStmt,
+	}
 }
 
 // Schema implements the Node interface.
-func (p *PrepareQuery) Schema() sql.Schema {
+func (p *PrepareQuery) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -53,11 +60,6 @@ func (pi PrepareInfo) String() string {
 	return "Statement prepared"
 }
 
-// RowIter implements the Node interface.
-func (p *PrepareQuery) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
-	return sql.RowsToRowIter(sql.NewRow(types.OkResult{RowsAffected: 0, Info: PrepareInfo{}})), nil
-}
-
 func (p *PrepareQuery) Resolved() bool {
 	return true
 }
@@ -68,16 +70,11 @@ func (p *PrepareQuery) Children() []sql.Node {
 }
 
 // WithChildren implements the Node interface.
-func (p *PrepareQuery) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (p *PrepareQuery) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) > 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(p, len(children), 0)
 	}
 	return p, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (p *PrepareQuery) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return p.Child.CheckPrivileges(ctx, opChecker)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -104,12 +101,7 @@ func NewExecuteQuery(name string, bindVars ...sql.Expression) *ExecuteQuery {
 }
 
 // Schema implements the Node interface.
-func (p *ExecuteQuery) Schema() sql.Schema {
-	panic("ExecuteQuery methods shouldn't be used")
-}
-
-// RowIter implements the Node interface.
-func (p *ExecuteQuery) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
+func (p *ExecuteQuery) Schema(ctx *sql.Context) sql.Schema {
 	panic("ExecuteQuery methods shouldn't be used")
 }
 
@@ -127,12 +119,7 @@ func (p *ExecuteQuery) Children() []sql.Node {
 }
 
 // WithChildren implements the Node interface.
-func (p *ExecuteQuery) WithChildren(children ...sql.Node) (sql.Node, error) {
-	panic("ExecuteQuery methods shouldn't be used")
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (p *ExecuteQuery) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
+func (p *ExecuteQuery) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	panic("ExecuteQuery methods shouldn't be used")
 }
 
@@ -159,13 +146,8 @@ func NewDeallocateQuery(name string) *DeallocateQuery {
 }
 
 // Schema implements the Node interface.
-func (p *DeallocateQuery) Schema() sql.Schema {
+func (p *DeallocateQuery) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
-}
-
-// RowIter implements the Node interface.
-func (p *DeallocateQuery) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
-	return sql.RowsToRowIter(sql.NewRow(types.OkResult{})), nil
 }
 
 func (p *DeallocateQuery) Resolved() bool {
@@ -182,16 +164,11 @@ func (p *DeallocateQuery) Children() []sql.Node {
 }
 
 // WithChildren implements the Node interface.
-func (p *DeallocateQuery) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (p *DeallocateQuery) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) > 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(p, len(children), 0)
 	}
 	return p, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (p *DeallocateQuery) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

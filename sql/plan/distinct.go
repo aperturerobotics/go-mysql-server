@@ -16,20 +16,24 @@ package plan
 
 import (
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/hash"
 )
 
 // Distinct is a node that ensures all rows that come from it are unique.
 type Distinct struct {
 	UnaryNode
+	distinctOn []sql.Expression // If these have len() > 0, then these are used instead of the projection (Doltgres only)
 }
 
 var _ sql.Node = (*Distinct)(nil)
+var _ sql.Expressioner = (*Distinct)(nil)
 var _ sql.CollationCoercible = (*Distinct)(nil)
 
 // NewDistinct creates a new Distinct node.
-func NewDistinct(child sql.Node) *Distinct {
+func NewDistinct(child sql.Node, distinctOn ...sql.Expression) *Distinct {
 	return &Distinct{
-		UnaryNode: UnaryNode{Child: child},
+		UnaryNode:  UnaryNode{Child: child},
+		distinctOn: distinctOn,
 	}
 }
 
@@ -39,17 +43,27 @@ func (d *Distinct) Resolved() bool {
 }
 
 // WithChildren implements the Node interface.
-func (d *Distinct) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (d *Distinct) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(d, len(children), 1)
 	}
 
-	return NewDistinct(children[0]), nil
+	return NewDistinct(children[0], d.distinctOn...), nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (d *Distinct) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return d.Child.CheckPrivileges(ctx, opChecker)
+// DistinctOn returns any DISTINCT ON expressions.
+func (d *Distinct) DistinctOn() []sql.Expression {
+	return d.distinctOn
+}
+
+// Expressions implements the interface sql.Expressioner.
+func (d *Distinct) Expressions() []sql.Expression {
+	return d.DistinctOn()
+}
+
+// WithExpressions implements the interface sql.Expressioner.
+func (d *Distinct) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
+	return NewDistinct(d.Child, exprs...), nil
 }
 
 func (d *Distinct) IsReadOnly() bool {
@@ -62,10 +76,10 @@ func (d *Distinct) CollationCoercibility(ctx *sql.Context) (collation sql.Collat
 }
 
 // Describe implements sql.Describable
-func (d Distinct) Describe(options sql.DescribeOptions) string {
+func (d Distinct) Describe(ctx *sql.Context, options sql.DescribeOptions) string {
 	p := sql.NewTreePrinter()
 	_ = p.WriteNode("Distinct")
-	_ = p.WriteChildren(sql.Describe(d.Child, options))
+	_ = p.WriteChildren(sql.Describe(ctx, d.Child, options))
 	return p.String()
 }
 
@@ -78,11 +92,44 @@ func (d Distinct) String() string {
 }
 
 // DebugString implements sql.DebugStringer
-func (d Distinct) DebugString() string {
+func (d Distinct) DebugString(ctx *sql.Context) string {
 	p := sql.NewTreePrinter()
 	_ = p.WriteNode("Distinct")
-	_ = p.WriteChildren(sql.DebugString(d.Child))
+	_ = p.WriteChildren(sql.DebugString(ctx, d.Child))
 	return p.String()
+}
+
+// Hasher returns a new DistinctHasher created from this Distinct node.
+func (d *Distinct) Hasher() DistinctHasher {
+	var hashingRow sql.Row
+	if len(d.distinctOn) > 0 {
+		hashingRow = make(sql.Row, len(d.distinctOn))
+	}
+	return DistinctHasher{
+		distinctOn: d.distinctOn,
+		hashingRow: hashingRow,
+	}
+}
+
+// DistinctHasher handles hashing for Distinct nodes, taking any non-expression projections into account.
+type DistinctHasher struct {
+	distinctOn []sql.Expression
+	hashingRow sql.Row
+}
+
+// HashOf handles the hashing of the given row, taking any expressions into account.
+func (dh DistinctHasher) HashOf(ctx *sql.Context, row sql.Row) (uint64, error) {
+	if len(dh.distinctOn) > 0 {
+		var err error
+		for i, expr := range dh.distinctOn {
+			dh.hashingRow[i], err = expr.Eval(ctx, row)
+			if err != nil {
+				return 0, err
+			}
+		}
+		return hash.HashOf(ctx, nil, dh.hashingRow)
+	}
+	return hash.HashOf(ctx, nil, row)
 }
 
 // OrderedDistinct is a Distinct node optimized for sorted row sets.
@@ -110,17 +157,12 @@ func (d *OrderedDistinct) Resolved() bool {
 }
 
 // WithChildren implements the Node interface.
-func (d *OrderedDistinct) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (d *OrderedDistinct) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(d, len(children), 1)
 	}
 
 	return NewOrderedDistinct(children[0]), nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (d *OrderedDistinct) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return d.Child.CheckPrivileges(ctx, opChecker)
 }
 
 func (d *OrderedDistinct) IsReadOnly() bool {
@@ -139,9 +181,9 @@ func (d OrderedDistinct) String() string {
 	return p.String()
 }
 
-func (d OrderedDistinct) DebugString() string {
+func (d OrderedDistinct) DebugString(ctx *sql.Context) string {
 	p := sql.NewTreePrinter()
 	_ = p.WriteNode("OrderedDistinct")
-	_ = p.WriteChildren(sql.DebugString(d.Child))
+	_ = p.WriteChildren(sql.DebugString(ctx, d.Child))
 	return p.String()
 }

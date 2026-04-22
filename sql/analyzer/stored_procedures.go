@@ -17,9 +17,6 @@ package analyzer
 import (
 	"fmt"
 	"slices"
-	"strings"
-
-	"gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
@@ -33,7 +30,7 @@ func loadStoredProcedures(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan
 	if scope.ProceduresPopulating() {
 		return scope, nil
 	}
-	referencesProcedures := hasProcedureCall(n)
+	referencesProcedures := hasProcedureCall(ctx, n)
 	if !referencesProcedures {
 		return scope, nil
 	}
@@ -45,63 +42,40 @@ func loadStoredProcedures(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan
 
 	allDatabases := a.Catalog.AllDatabases(ctx)
 	for _, database := range allDatabases {
-		if pdb, ok := database.(sql.StoredProcedureDatabase); ok {
-			procedures, err := pdb.GetStoredProcedures(ctx)
+		pdb, ok := database.(sql.StoredProcedureDatabase)
+		if !ok {
+			continue
+		}
+		procedures, err := pdb.GetStoredProcedures(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, procedure := range procedures {
+			if procedure.Name != "" {
+			}
+			proc, _, err := planbuilder.BuildProcedureHelper(ctx, a.Catalog, false, nil, database, nil, procedure)
+			if err != nil {
+				// TODO: alternatively just have BuildProcedureHelper always return a procedure with validation error
+				proc = &plan.Procedure{
+					Name:                  procedure.Name,
+					CreateProcedureString: procedure.CreateStatement,
+					CreatedAt:             procedure.CreatedAt,
+					ModifiedAt:            procedure.ModifiedAt,
+					ValidationError:       err,
+				}
+			}
+			err = scope.Procedures.Register(database.Name(), proc)
 			if err != nil {
 				return nil, err
-			}
-
-			for _, procedure := range procedures {
-				var procToRegister *plan.Procedure
-				var parsedProcedure sql.Node
-				b := planbuilder.New(ctx, a.Catalog, sql.NewMysqlParser())
-				b.SetParserOptions(sql.NewSqlModeFromString(procedure.SqlMode).ParserOptions())
-				parsedProcedure, _, _, _, err = b.Parse(procedure.CreateStatement, false)
-				if err != nil {
-					procToRegister = &plan.Procedure{
-						CreateProcedureString: procedure.CreateStatement,
-					}
-					procToRegister.ValidationError = err
-				} else if cp, ok := parsedProcedure.(*plan.CreateProcedure); !ok {
-					return nil, sql.ErrProcedureCreateStatementInvalid.New(procedure.CreateStatement)
-				} else {
-					procToRegister = cp.Procedure
-				}
-
-				procToRegister.CreatedAt = procedure.CreatedAt
-				procToRegister.ModifiedAt = procedure.ModifiedAt
-
-				err = scope.Procedures.Register(database.Name(), procToRegister)
-				if err != nil {
-					return nil, err
-				}
 			}
 		}
 	}
 	return scope, nil
 }
 
-// analyzeCreateProcedure checks the plan.CreateProcedure and returns a valid plan.Procedure or an error
-func analyzeCreateProcedure(ctx *sql.Context, a *Analyzer, cp *plan.CreateProcedure, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (*plan.Procedure, error) {
-	err := validateStoredProcedure(ctx, cp.Procedure)
-	if err != nil {
-		return nil, err
-	}
-	var analyzedNode sql.Node
-	analyzedNode, _, err = analyzeProcedureBodies(ctx, a, cp.Procedure, false, scope, sel, qFlags)
-	if err != nil {
-		return nil, err
-	}
-	analyzedProc, ok := analyzedNode.(*plan.Procedure)
-	if !ok {
-		return nil, fmt.Errorf("analyzed node %T and expected *plan.Procedure", analyzedNode)
-	}
-	return analyzedProc, nil
-}
-
-func hasProcedureCall(n sql.Node) bool {
+func hasProcedureCall(ctx *sql.Context, n sql.Node) bool {
 	referencesProcedures := false
-	transform.Inspect(n, func(n sql.Node) bool {
+	transform.InspectWithOpaque(ctx, n, func(ctx *sql.Context, n sql.Node) bool {
 		if _, ok := n.(*plan.Call); ok {
 			referencesProcedures = true
 			return false
@@ -133,10 +107,9 @@ func analyzeProcedureBodies(ctx *sql.Context, a *Analyzer, node sql.Node, skipCa
 			if err != nil {
 				return nil, transform.SameTree, err
 			}
-			// Blocks may have expressions declared directly on them, so we explicitly analyze the block node for variables
-			rulesToRun := []RuleId{resolveVariablesId}
 			// If a block node also has expressions (e.g. IfConditional), then we need to run the
 			// finalizeSubqueries analyzer rule in case the expressions contain any subqueries.
+			var rulesToRun []RuleId
 			if _, ok := child.(sql.Expressioner); ok {
 				rulesToRun = append(rulesToRun, finalizeSubqueriesId, assignExecIndexesId)
 			}
@@ -149,93 +122,31 @@ func analyzeProcedureBodies(ctx *sql.Context, a *Analyzer, node sql.Node, skipCa
 			} else {
 				newChild, _, err = a.analyzeWithSelector(ctx, child, scope, SelectAllBatches, procSel, qFlags)
 			}
+		case *plan.InsertInto:
+			qFlags.Set(sql.QFlagInsert)
+			newChild, _, err = a.analyzeWithSelector(ctx, child, scope, SelectAllBatches, procSel, qFlags)
+			qFlags.Unset(sql.QFlagInsert)
+		case *plan.Update:
+			qFlags.Set(sql.QFlagUpdate)
+			newChild, _, err = a.analyzeWithSelector(ctx, child, scope, SelectAllBatches, procSel, qFlags)
+			qFlags.Unset(sql.QFlagUpdate)
+		case *plan.DeleteFrom:
+			qFlags.Set(sql.QFlagDelete)
+			newChild, _, err = a.analyzeWithSelector(ctx, child, scope, SelectAllBatches, procSel, qFlags)
+			qFlags.Unset(sql.QFlagDelete)
 		default:
 			newChild, _, err = a.analyzeWithSelector(ctx, child, scope, SelectAllBatches, procSel, qFlags)
 		}
 		if err != nil {
 			return nil, transform.SameTree, err
 		}
-		newChildren[i] = StripPassthroughNodes(newChild)
+		newChildren[i] = newChild
 	}
-	node, err = node.WithChildren(newChildren...)
+	node, err = node.WithChildren(ctx, newChildren...)
 	if err != nil {
 		return nil, transform.SameTree, err
 	}
 	return node, transform.NewTree, nil
-}
-
-// validateCreateProcedure handles CreateProcedure nodes, ensuring that all nodes in Procedure are supported.
-func validateCreateProcedure(ctx *sql.Context, a *Analyzer, node sql.Node, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
-	cp, ok := node.(*plan.CreateProcedure)
-	if !ok {
-		return node, transform.SameTree, nil
-	}
-
-	err := validateStoredProcedure(ctx, cp.Procedure)
-	if err != nil {
-		return nil, transform.SameTree, err
-	}
-
-	return node, transform.SameTree, nil
-}
-
-// validateStoredProcedure handles Procedure nodes, resolving references to the parameters, along with ensuring
-// that all logic contained within the stored procedure body is valid.
-func validateStoredProcedure(_ *sql.Context, proc *plan.Procedure) error {
-	// For now, we don't support creating any of the following within stored procedures.
-	// These will be removed in the future, but cause issues with the current execution plan.
-	var err error
-	spUnsupportedErr := errors.NewKind("creating %s in stored procedures is currently unsupported " +
-		"and will be added in a future release")
-	transform.Inspect(proc, func(n sql.Node) bool {
-		switch n.(type) {
-		case *plan.CreateTable:
-			err = spUnsupportedErr.New("tables")
-		case *plan.CreateTrigger:
-			err = spUnsupportedErr.New("triggers")
-		case *plan.CreateProcedure:
-			err = spUnsupportedErr.New("procedures")
-		case *plan.CreateDB:
-			err = spUnsupportedErr.New("databases")
-		case *plan.CreateForeignKey:
-			err = spUnsupportedErr.New("foreign keys")
-		case *plan.CreateIndex:
-			err = spUnsupportedErr.New("indexes")
-		case *plan.CreateView:
-			err = spUnsupportedErr.New("views")
-		default:
-			return true
-		}
-		return false
-	})
-	if err != nil {
-		return err
-	}
-
-	transform.Inspect(proc, func(n sql.Node) bool {
-		switch n := n.(type) {
-		case *plan.Call:
-			if proc.Name == strings.ToLower(n.Name) {
-				err = sql.ErrProcedureRecursiveCall.New(proc.Name)
-			}
-		case *plan.LockTables: // Blocked in vitess, but this is for safety
-			err = sql.ErrProcedureInvalidBodyStatement.New("LOCK TABLES")
-		case *plan.UnlockTables: // Blocked in vitess, but this is for safety
-			err = sql.ErrProcedureInvalidBodyStatement.New("UNLOCK TABLES")
-		case *plan.Use: // Blocked in vitess, but this is for safety
-			err = sql.ErrProcedureInvalidBodyStatement.New("USE")
-		case *plan.LoadData:
-			err = sql.ErrProcedureInvalidBodyStatement.New("LOAD DATA")
-		default:
-			return true
-		}
-		return false
-	})
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 // applyProcedures applies the relevant stored procedures to the node given (if necessary).
@@ -244,15 +155,16 @@ func applyProcedures(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scop
 		return n, transform.SameTree, nil
 	}
 
-	hasProcedureCall := hasProcedureCall(n)
-	_, isShowCreateProcedure := n.(*plan.ShowCreateProcedure)
-	if !hasProcedureCall && !isShowCreateProcedure {
+	if _, isShowCreateProcedure := n.(*plan.ShowCreateProcedure); !hasProcedureCall(ctx, n) && !isShowCreateProcedure {
 		return n, transform.SameTree, nil
 	}
 
-	call, newIdentity, err := transform.Node(n, func(n sql.Node) (sql.Node, transform.TreeIdentity, error) {
+	call, newIdentity, err := transform.Node(ctx, n, func(ctx *sql.Context, n sql.Node) (sql.Node, transform.TreeIdentity, error) {
 		call, ok := n.(*plan.Call)
 		if !ok {
+			return n, transform.SameTree, nil
+		}
+		if call.Analyzed {
 			return n, transform.SameTree, nil
 		}
 		if scope.IsEmpty() {
@@ -270,59 +182,34 @@ func applyProcedures(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scop
 			return nil, transform.SameTree, err
 		}
 		if esp != nil {
-			externalProcedure, err := resolveExternalStoredProcedure(ctx, *esp)
-			if err != nil {
-				return nil, transform.SameTree, err
-			}
-			return call.WithProcedure(externalProcedure), transform.NewTree, nil
+			return call, transform.SameTree, nil
 		}
 
-		if spdb, ok := call.Database().(sql.StoredProcedureDatabase); ok {
-			procedure, ok, err := spdb.GetStoredProcedure(ctx, call.Name)
-			if err != nil {
-				return nil, transform.SameTree, err
-			}
-			if !ok {
-				err := sql.ErrStoredProcedureDoesNotExist.New(call.Name)
-				if call.Database().Name() == "" {
-					return nil, transform.SameTree, fmt.Errorf("%w; this might be because no database is selected", err)
-				}
-				return nil, transform.SameTree, err
-			}
-			var parsedProcedure sql.Node
-			b := planbuilder.New(ctx, a.Catalog, sql.NewMysqlParser())
-			b.SetParserOptions(sql.NewSqlModeFromString(procedure.SqlMode).ParserOptions())
-			if call.AsOf() != nil {
-				asOf, err := call.AsOf().Eval(ctx, nil)
-				if err != nil {
-					return n, transform.SameTree, err
-				}
-				b.ProcCtx().AsOf = asOf
-			}
-			b.ProcCtx().DbName = call.Database().Name()
-			parsedProcedure, _, _, _, err = b.Parse(procedure.CreateStatement, false)
-			if err != nil {
-				return nil, transform.SameTree, err
-			}
-			cp, ok := parsedProcedure.(*plan.CreateProcedure)
-			if !ok {
-				return nil, transform.SameTree, sql.ErrProcedureCreateStatementInvalid.New(procedure.CreateStatement)
-			}
-			analyzedProc, err := analyzeCreateProcedure(ctx, a, cp, scope, sel, nil)
-			if err != nil {
-				return nil, transform.SameTree, err
-			}
-			return call.WithProcedure(analyzedProc), transform.NewTree, nil
-		} else {
+		if _, isStoredProcDb := call.Database().(sql.StoredProcedureDatabase); !isStoredProcDb {
 			return nil, transform.SameTree, sql.ErrStoredProceduresNotSupported.New(call.Database().Name())
 		}
+
+		qFlags.Set(sql.QFlagAnalyzeProcedure)
+		analyzedNode, _, err := analyzeProcedureBodies(ctx, a, call.Procedure, false, scope, sel, qFlags)
+		qFlags.Unset(sql.QFlagAnalyzeProcedure)
+		if err != nil {
+			return nil, transform.SameTree, err
+		}
+		analyzedProc, ok := analyzedNode.(*plan.Procedure)
+		if !ok {
+			return nil, transform.SameTree, fmt.Errorf("analyzed node %T and expected *plan.Procedure", analyzedNode)
+		}
+		// stored procedures nested within triggers may attempt to analyze this twice, causing problems like double projections
+		newCall := call.WithProcedure(analyzedProc)
+		newCall.Analyzed = true
+		return newCall, transform.NewTree, nil
 	})
 	if err != nil {
 		return nil, transform.SameTree, err
 	}
 	n = call
 
-	return transform.Node(n, func(n sql.Node) (sql.Node, transform.TreeIdentity, error) {
+	return transform.Node(ctx, n, func(ctx *sql.Context, n sql.Node) (sql.Node, transform.TreeIdentity, error) {
 		switch n := n.(type) {
 		case *plan.Call:
 			return applyProceduresCall(ctx, a, n, scope, sel, qFlags)
@@ -345,43 +232,7 @@ func applyProcedures(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scop
 
 // applyProceduresCall applies the relevant stored procedure to the given *plan.Call.
 func applyProceduresCall(ctx *sql.Context, a *Analyzer, call *plan.Call, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
-	var procedure *plan.Procedure
-	if call.Procedure == nil {
-		dbName := ctx.GetCurrentDatabase()
-		if call.Database() != nil {
-			dbName = call.Database().Name()
-		}
-
-		esp, err := a.Catalog.ExternalStoredProcedure(ctx, call.Name, len(call.Params))
-		if err != nil {
-			return nil, transform.SameTree, err
-		}
-
-		if esp != nil {
-			externalProcedure, err := resolveExternalStoredProcedure(ctx, *esp)
-			if err != nil {
-				return nil, false, err
-			}
-			procedure = externalProcedure
-		} else {
-			procedure = scope.Procedures.Get(dbName, call.Name, len(call.Params))
-		}
-
-		if procedure == nil {
-			err := sql.ErrStoredProcedureDoesNotExist.New(call.Name)
-			if dbName == "" {
-				return nil, transform.SameTree, fmt.Errorf("%w; this might be because no database is selected", err)
-			}
-			return nil, transform.SameTree, err
-		}
-
-		if procedure.ValidationError != nil {
-			return nil, transform.SameTree, procedure.ValidationError
-		}
-	} else {
-		procedure = call.Procedure
-	}
-
+	procedure := call.Procedure
 	if procedure.HasVariadicParameter() {
 		procedure = procedure.ExtendVariadic(ctx, len(call.Params))
 	}
@@ -389,7 +240,7 @@ func applyProceduresCall(ctx *sql.Context, a *Analyzer, call *plan.Call, scope *
 	call = call.WithParamReference(pRef)
 
 	var procParamTransformFunc transform.ExprFunc
-	procParamTransformFunc = func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+	procParamTransformFunc = func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 		switch expr := e.(type) {
 		case *expression.ProcedureParam:
 			return expr.WithParamReference(pRef), transform.NewTree, nil
@@ -397,7 +248,7 @@ func applyProceduresCall(ctx *sql.Context, a *Analyzer, call *plan.Call, scope *
 			children := expr.NodeChildren()
 			var newChildren []sql.Node
 			for i, child := range children {
-				newChild, same, err := transform.NodeExprsWithOpaque(child, procParamTransformFunc)
+				newChild, same, err := transform.NodeExprsWithOpaque(ctx, child, procParamTransformFunc)
 				if err != nil {
 					return nil, transform.SameTree, err
 				}
@@ -410,7 +261,7 @@ func applyProceduresCall(ctx *sql.Context, a *Analyzer, call *plan.Call, scope *
 				}
 			}
 			if len(newChildren) > 0 {
-				newExpr, err := expr.WithNodeChildren(newChildren...)
+				newExpr, err := expr.WithNodeChildren(ctx, newChildren...)
 				if err != nil {
 					return nil, transform.SameTree, err
 				}
@@ -421,12 +272,12 @@ func applyProceduresCall(ctx *sql.Context, a *Analyzer, call *plan.Call, scope *
 			return e, transform.SameTree, nil
 		}
 	}
-	transformedProcedure, _, err := transform.NodeExprsWithOpaque(procedure, procParamTransformFunc)
+	transformedProcedure, _, err := transform.NodeExprsWithOpaque(ctx, procedure, procParamTransformFunc)
 	if err != nil {
 		return nil, transform.SameTree, err
 	}
 	// Some nodes do not expose all of their children, so we need to handle them here.
-	transformedProcedure, _, err = transform.NodeWithOpaque(transformedProcedure, func(node sql.Node) (sql.Node, transform.TreeIdentity, error) {
+	transformedProcedure, _, err = transform.NodeWithOpaque(ctx, transformedProcedure, func(ctx *sql.Context, node sql.Node) (sql.Node, transform.TreeIdentity, error) {
 		switch n := node.(type) {
 		case plan.DisjointedChildrenNode:
 			same := transform.SameTree
@@ -436,7 +287,7 @@ func applyProceduresCall(ctx *sql.Context, a *Analyzer, call *plan.Call, scope *
 				newDisjointedChildGroups[groupIdx] = make([]sql.Node, len(disjointedChildGroup))
 				for childIdx, disjointedChild := range disjointedChildGroup {
 					var childIdentity transform.TreeIdentity
-					if newDisjointedChildGroups[groupIdx][childIdx], childIdentity, err = transform.NodeExprsWithOpaque(disjointedChild, procParamTransformFunc); err != nil {
+					if newDisjointedChildGroups[groupIdx][childIdx], childIdentity, err = transform.NodeExprsWithOpaque(ctx, disjointedChild, procParamTransformFunc); err != nil {
 						return nil, transform.SameTree, err
 					} else if childIdentity == transform.NewTree {
 						same = childIdentity
@@ -455,14 +306,14 @@ func applyProceduresCall(ctx *sql.Context, a *Analyzer, call *plan.Call, scope *
 			// BeginEndBlocks need to reference the same ParameterReference as the Call
 			return n.WithParamReference(pRef), transform.NewTree, nil
 		default:
-			return transform.NodeExprsWithOpaque(n, procParamTransformFunc)
+			return transform.NodeExprsWithOpaque(ctx, n, procParamTransformFunc)
 		}
 	})
 	if err != nil {
 		return nil, transform.SameTree, err
 	}
 
-	transformedProcedure, _, err = transform.Node(transformedProcedure, func(node sql.Node) (sql.Node, transform.TreeIdentity, error) {
+	transformedProcedure, _, err = transform.Node(ctx, transformedProcedure, func(ctx *sql.Context, node sql.Node) (sql.Node, transform.TreeIdentity, error) {
 		rt, ok := node.(*plan.ResolvedTable)
 		if !ok {
 			return node, transform.SameTree, nil

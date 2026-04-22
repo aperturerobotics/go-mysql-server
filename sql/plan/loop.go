@@ -22,10 +22,10 @@ import (
 
 // Loop represents the LOOP statement, which loops over a set of statements.
 type Loop struct {
-	Label          string
-	Condition      sql.Expression // We continue looping until the condition returns false
-	OnceBeforeEval bool           // Whether to run through the statements first before evaluating the condition
+	Condition sql.Expression // We continue looping until the condition returns false
 	*Block
+	Label          string
+	OnceBeforeEval bool // Whether to run through the statements first before evaluating the condition
 }
 
 var _ sql.Node = (*Loop)(nil)
@@ -51,7 +51,7 @@ func (l *Loop) String() string {
 		label = l.Label + ": "
 	}
 	p := sql.NewTreePrinter()
-	_ = p.WriteNode(label + "LOOP")
+	_ = p.WriteNode("%s", label+"LOOP")
 	var children []string
 	for _, s := range l.statements {
 		children = append(children, s.String())
@@ -61,16 +61,16 @@ func (l *Loop) String() string {
 }
 
 // DebugString implements the interface sql.DebugStringer.
-func (l *Loop) DebugString() string {
+func (l *Loop) DebugString(ctx *sql.Context) string {
 	label := ""
 	if len(l.Label) > 0 {
 		label = l.Label + ": "
 	}
 	p := sql.NewTreePrinter()
-	_ = p.WriteNode(label + ": LOOP")
+	_ = p.WriteNode("%s", label+": LOOP")
 	var children []string
 	for _, s := range l.statements {
-		children = append(children, sql.DebugString(s))
+		children = append(children, sql.DebugString(ctx, s))
 	}
 	_ = p.WriteChildren(children...)
 	return p.String()
@@ -82,8 +82,8 @@ func (l *Loop) Resolved() bool {
 }
 
 // WithChildren implements the interface sql.Node.
-func (l *Loop) WithChildren(children ...sql.Node) (sql.Node, error) {
-	newBlock, err := l.Block.WithChildren(children...)
+func (l *Loop) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
+	newBlock, err := l.Block.WithChildren(ctx, children...)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +101,7 @@ func (l *Loop) Expressions() []sql.Expression {
 }
 
 // WithExpressions implements the interface sql.Node.
-func (l *Loop) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (l *Loop) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(l, len(exprs), 1)
 	}
@@ -121,11 +121,6 @@ func (l *Loop) WithParamReference(pRef *expression.ProcedureReference) sql.Node 
 	newBlock.Pref = pRef
 	nl.Block = &newBlock
 	return &nl
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (l *Loop) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return l.Block.CheckPrivileges(ctx, opChecker)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

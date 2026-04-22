@@ -23,24 +23,28 @@ import (
 // SubqueryAlias is a node that gives a subquery a name.
 type SubqueryAlias struct {
 	UnaryNode
-	ColumnNames    []string
+	Correlated   sql.ColSet
+	cols         sql.ColSet
+	ScopeMapping map[sql.ColumnId]sql.Expression
+
 	name           string
 	TextDefinition string
+	ColumnNames    []string
+
+	id sql.TableId
+
 	// OuterScopeVisibility is true when a SubqueryAlias (i.e. derived table) is contained in a subquery
 	// expression and is eligible to have visibility to outer scopes of the query.
 	OuterScopeVisibility bool
-	Correlated           sql.ColSet
 	Volatile             bool
-	CacheableCTESource   bool
 	IsLateral            bool
-	ScopeMapping         map[sql.ColumnId]sql.Expression
-	id                   sql.TableId
-	cols                 sql.ColSet
 }
 
 var _ sql.Node = (*SubqueryAlias)(nil)
 var _ sql.CollationCoercible = (*SubqueryAlias)(nil)
 var _ sql.RenameableNode = (*SubqueryAlias)(nil)
+var _ sql.OpaqueNode = (*SubqueryAlias)(nil)
+var _ sql.Describable = (*SubqueryAlias)(nil)
 
 // NewSubqueryAlias creates a new SubqueryAlias node.
 func NewSubqueryAlias(name, textDefinition string, node sql.Node) *SubqueryAlias {
@@ -95,8 +99,8 @@ func (sq *SubqueryAlias) IsReadOnly() bool {
 }
 
 // Schema implements the Node interface.
-func (sq *SubqueryAlias) Schema() sql.Schema {
-	childSchema := sq.Child.Schema()
+func (sq *SubqueryAlias) Schema(ctx *sql.Context) sql.Schema {
+	childSchema := sq.Child.Schema(ctx)
 	schema := make(sql.Schema, len(childSchema))
 	for i, col := range childSchema {
 		c := *col
@@ -110,7 +114,7 @@ func (sq *SubqueryAlias) Schema() sql.Schema {
 }
 
 // WithChildren implements the Node interface.
-func (sq *SubqueryAlias) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (sq *SubqueryAlias) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(sq, len(children), 1)
 	}
@@ -118,11 +122,6 @@ func (sq *SubqueryAlias) WithChildren(children ...sql.Node) (sql.Node, error) {
 	nn := *sq
 	nn.Child = children[0]
 	return &nn, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (sq *SubqueryAlias) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return sq.Child.CheckPrivileges(ctx, opChecker)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -176,7 +175,7 @@ func (sq *SubqueryAlias) String() string {
 	return pr.String()
 }
 
-func (sq *SubqueryAlias) DebugString() string {
+func (sq *SubqueryAlias) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("SubqueryAlias")
 	children := make([]string, 7)
@@ -186,7 +185,22 @@ func (sq *SubqueryAlias) DebugString() string {
 	children[3] = fmt.Sprintf("cacheable: %t", sq.CanCacheResults())
 	children[4] = fmt.Sprintf("colSet: %s", sq.Columns())
 	children[5] = fmt.Sprintf("tableId: %d", sq.Id())
-	children[6] = sql.DebugString(sq.Child)
+	children[6] = sql.DebugString(ctx, sq.Child)
+	_ = pr.WriteChildren(children...)
+	return pr.String()
+}
+
+func (sq *SubqueryAlias) Describe(ctx *sql.Context, options sql.DescribeOptions) string {
+	pr := sql.NewTreePrinter()
+	_ = pr.WriteNode("SubqueryAlias")
+	children := make([]string, 7)
+	children[0] = fmt.Sprintf("name: %s", sq.name)
+	children[1] = fmt.Sprintf("outerVisibility: %t", sq.OuterScopeVisibility)
+	children[2] = fmt.Sprintf("isLateral: %t", sq.IsLateral)
+	children[3] = fmt.Sprintf("cacheable: %t", sq.CanCacheResults())
+	children[4] = fmt.Sprintf("colSet: %s", sq.Columns())
+	children[5] = fmt.Sprintf("tableId: %d", sq.Id())
+	children[6] = sql.Describe(ctx, sq.Child, options)
 	_ = pr.WriteChildren(children...)
 	return pr.String()
 }

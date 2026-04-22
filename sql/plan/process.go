@@ -22,91 +22,8 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 )
 
-// QueryProcess represents a running query process node. It will use a callback
-// to notify when it has finished running.
-// TODO: QueryProcess -> trackedRowIter is required to dispose certain iter caches.
-// Make a proper scheduler interface to perform lifecycle management, caching, and
-// scan attaching
-type QueryProcess struct {
-	UnaryNode
-	Notify NotifyFunc
-}
-
-var _ sql.Node = (*QueryProcess)(nil)
-var _ sql.CollationCoercible = (*QueryProcess)(nil)
-
 // NotifyFunc is a function to notify about some event.
 type NotifyFunc func()
-
-// NewQueryProcess creates a new QueryProcess node.
-func NewQueryProcess(node sql.Node, notify NotifyFunc) *QueryProcess {
-	return &QueryProcess{UnaryNode{Child: node}, notify}
-}
-
-func (p *QueryProcess) Child() sql.Node {
-	return p.UnaryNode.Child
-}
-
-func (p *QueryProcess) IsReadOnly() bool {
-	return p.Child().IsReadOnly()
-}
-
-// WithChildren implements the Node interface.
-func (p *QueryProcess) WithChildren(children ...sql.Node) (sql.Node, error) {
-	if len(children) != 1 {
-		return nil, sql.ErrInvalidChildrenNumber.New(p, len(children), 1)
-	}
-
-	return NewQueryProcess(children[0], p.Notify), nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (p *QueryProcess) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return p.Child().CheckPrivileges(ctx, opChecker)
-}
-
-// CollationCoercibility implements the interface sql.CollationCoercible.
-func (p *QueryProcess) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
-	return sql.GetCoercibility(ctx, p.Child())
-}
-
-func (p *QueryProcess) String() string { return p.Child().String() }
-
-func (p *QueryProcess) DebugString() string {
-	tp := sql.NewTreePrinter()
-	_ = tp.WriteNode("QueryProcess")
-	_ = tp.WriteChildren(sql.DebugString(p.Child()))
-	return tp.String()
-}
-
-// ShouldSetFoundRows returns whether the query process should set the FOUND_ROWS query variable. It should do this for
-// any select except a Limit with a SQL_CALC_FOUND_ROWS modifier, which is handled in the Limit node itself.
-func (p *QueryProcess) ShouldSetFoundRows() bool {
-	var fromLimit *bool
-	var fromTopN *bool
-	transform.Inspect(p.Child(), func(n sql.Node) bool {
-		switch n := n.(type) {
-		case *StartTransaction:
-			return true
-		case *Limit:
-			fromLimit = &n.CalcFoundRows
-			return true
-		case *TopN:
-			fromTopN = &n.CalcFoundRows
-			return true
-		default:
-			return true
-		}
-	})
-
-	if fromLimit == nil && fromTopN == nil {
-		return true
-	}
-	if fromTopN != nil {
-		return !*fromTopN
-	}
-	return !*fromLimit
-}
 
 // ProcessIndexableTable is a wrapper for sql.Tables inside a query process
 // that support indexing.
@@ -119,13 +36,13 @@ type ProcessIndexableTable struct {
 	OnRowNext        NamedNotifyFunc
 }
 
-func (t *ProcessIndexableTable) DebugString() string {
+func (t *ProcessIndexableTable) DebugString(ctx *sql.Context) string {
 	tp := sql.NewTreePrinter()
 	// This is a bit of a misnomer -- some db implementations get this node, rather than ProcessTable, but the two
 	// nodes are functionally equivalent for testing which is where this output is used. We could fix this by making a
 	// version of the memory package that doesn't implement sql.DriverIndexableTable
 	_ = tp.WriteNode("ProcessTable")
-	_ = tp.WriteChildren(TableDebugString(t.Underlying()))
+	_ = tp.WriteChildren(TableDebugString(ctx, t.Underlying()))
 	return tp.String()
 }
 
@@ -232,17 +149,17 @@ func (t *ProcessTable) PartitionRows(ctx *sql.Context, p sql.Partition) (sql.Row
 	return NewTrackedRowIter(nil, iter, onNext, onDone), nil
 }
 
-func (t *ProcessTable) DebugString() string {
+func (t *ProcessTable) DebugString(ctx *sql.Context) string {
 	tp := sql.NewTreePrinter()
 	_ = tp.WriteNode("ProcessTable")
 
 	underlying := t.Underlying()
 	if _, ok := underlying.(sql.TableWrapper); ok {
 		if _, ok := underlying.(sql.DebugStringer); ok {
-			_ = tp.WriteChildren(sql.DebugString(underlying))
+			_ = tp.WriteChildren(sql.DebugString(ctx, underlying))
 		}
 	} else {
-		_ = tp.WriteChildren(TableDebugString(underlying))
+		_ = tp.WriteChildren(TableDebugString(ctx, underlying))
 	}
 
 	return tp.String()
@@ -271,10 +188,10 @@ func (t *ProcessTable) notifyFuncsForPartition(p sql.Partition) (NotifyFunc, Not
 	return onDone, onNext
 }
 
-func GetQueryType(child sql.Node) queryType {
+func GetQueryType(ctx *sql.Context, child sql.Node) queryType {
 	// TODO: behavior of CALL is not specified in the docs. Needs investigation
 	var queryType queryType = QueryTypeSelect
-	transform.Inspect(child, func(node sql.Node) bool {
+	transform.InspectWithOpaque(ctx, child, func(ctx *sql.Context, node sql.Node) bool {
 		if IsNoRowNode(node) {
 			queryType = QueryTypeDdl
 			return false
@@ -306,14 +223,14 @@ const (
 	QueryTypeUpdate
 )
 
-type trackedRowIter struct {
+type TrackedRowIter struct {
 	node               sql.Node
 	iter               sql.RowIter
+	onDone             NotifyFunc
+	onNext             NotifyFunc
 	numRows            int64
 	QueryType          queryType
 	ShouldSetFoundRows bool
-	onDone             NotifyFunc
-	onNext             NotifyFunc
 }
 
 func NewTrackedRowIter(
@@ -321,39 +238,71 @@ func NewTrackedRowIter(
 	iter sql.RowIter,
 	onNext NotifyFunc,
 	onDone NotifyFunc,
-) *trackedRowIter {
-	return &trackedRowIter{node: node, iter: iter, onDone: onDone, onNext: onNext}
+) *TrackedRowIter {
+	return &TrackedRowIter{node: node, iter: iter, onDone: onDone, onNext: onNext}
 }
 
-func (i *trackedRowIter) done() {
+// ShouldSetFoundRows returns whether the query process should set the FOUND_ROWS query variable. It should do this for
+// any select except a Limit with a SQL_CALC_FOUND_ROWS modifier, which is handled in the Limit node itself.
+func shouldSetFoundRows(ctx *sql.Context, node sql.Node) bool {
+	result := true
+	transform.InspectWithOpaque(ctx, node, func(ctx *sql.Context, n sql.Node) bool {
+		switch nn := n.(type) {
+		case *Limit:
+			if nn.CalcFoundRows {
+				result = false
+			}
+		case *TopN:
+			if nn.CalcFoundRows {
+				result = false
+			}
+		}
+		return true
+	})
+	return result
+}
+
+func AddTrackedRowIter(ctx *sql.Context, node sql.Node, iter sql.RowIter) sql.RowIter {
+	trackedIter := NewTrackedRowIter(node, iter, nil, func() {
+		ctx.ProcessList.EndQuery(ctx)
+		if span := ctx.RootSpan(); span != nil {
+			span.End()
+		}
+	})
+	trackedIter.QueryType = GetQueryType(ctx, node)
+	trackedIter.ShouldSetFoundRows = trackedIter.QueryType == QueryTypeSelect && shouldSetFoundRows(ctx, node)
+	return trackedIter
+}
+
+func (i *TrackedRowIter) done(ctx *sql.Context) {
 	if i.onDone != nil {
 		i.onDone()
 		i.onDone = nil
 	}
 	if i.node != nil {
-		i.Dispose()
+		i.Dispose(ctx)
 		i.node = nil
 	}
 }
 
-func disposeNode(n sql.Node) {
-	transform.Inspect(n, func(node sql.Node) bool {
-		sql.Dispose(node)
+func disposeNode(ctx *sql.Context, n sql.Node) {
+	transform.InspectWithOpaque(ctx, n, func(ctx *sql.Context, node sql.Node) bool {
+		sql.Dispose(ctx, node)
 		return true
 	})
-	transform.InspectExpressions(n, func(e sql.Expression) bool {
-		sql.Dispose(e)
+	transform.InspectExpressions(ctx, n, func(ctx *sql.Context, e sql.Expression) bool {
+		sql.Dispose(ctx, e)
 		return true
 	})
 }
 
-func (i *trackedRowIter) Dispose() {
+func (i *TrackedRowIter) Dispose(ctx *sql.Context) {
 	if i.node != nil {
-		disposeNode(i.node)
+		disposeNode(ctx, i.node)
 	}
 }
 
-func (i *trackedRowIter) Next(ctx *sql.Context) (sql.Row, error) {
+func (i *TrackedRowIter) Next(ctx *sql.Context) (sql.Row, error) {
 	row, err := i.iter.Next(ctx)
 	if err != nil {
 		return nil, err
@@ -368,21 +317,49 @@ func (i *trackedRowIter) Next(ctx *sql.Context) (sql.Row, error) {
 	return row, nil
 }
 
-func (i *trackedRowIter) Close(ctx *sql.Context) error {
+// NextValueRow implements the sql.ValueRowIter interface.
+func (i *TrackedRowIter) NextValueRow(ctx *sql.Context) (sql.ValueRow, error) {
+	row, err := i.iter.(sql.ValueRowIter).NextValueRow(ctx)
+	if err != nil {
+		return nil, err
+	}
+	i.numRows++
+	if i.onNext != nil {
+		i.onNext()
+	}
+	return row, nil
+}
+
+// IsValueRowIter implements the sql.ValueRowIter interface.
+func (i *TrackedRowIter) IsValueRowIter(ctx *sql.Context) bool {
+	iter, ok := i.iter.(sql.ValueRowIter)
+	return ok && iter.IsValueRowIter(ctx)
+}
+
+func (i *TrackedRowIter) Close(ctx *sql.Context) error {
 	err := i.iter.Close(ctx)
 
 	i.updateSessionVars(ctx)
 
-	i.done()
+	i.done(ctx)
 	return err
 }
 
-func (i *trackedRowIter) updateSessionVars(ctx *sql.Context) {
+func (i *TrackedRowIter) GetNode() sql.Node {
+	return i.node
+}
+
+func (i *TrackedRowIter) GetIter() sql.RowIter {
+	return i.iter
+}
+
+func (i *TrackedRowIter) updateSessionVars(ctx *sql.Context) {
+	// TODO: possible to just remove switch entirely?
 	switch i.QueryType {
 	case QueryTypeSelect:
-		ctx.SetLastQueryInfoInt(sql.RowCount, -1)
+		ctx.GetLastQueryInfo().RowCount.Store(-1)
 	case QueryTypeDdl:
-		ctx.SetLastQueryInfoInt(sql.RowCount, 0)
+		ctx.GetLastQueryInfo().RowCount.Store(0)
 	case QueryTypeUpdate:
 		// This is handled by RowUpdateAccumulator
 	default:
@@ -390,8 +367,14 @@ func (i *trackedRowIter) updateSessionVars(ctx *sql.Context) {
 	}
 
 	if i.ShouldSetFoundRows {
-		ctx.SetLastQueryInfoInt(sql.FoundRows, i.numRows)
+		ctx.GetLastQueryInfo().FoundRows.Store(i.numRows)
 	}
+}
+
+func (i *TrackedRowIter) WithChildIter(childIter sql.RowIter) sql.RowIter {
+	ni := *i
+	ni.iter = childIter
+	return &ni
 }
 
 type trackedPartitionIndexKeyValueIter struct {

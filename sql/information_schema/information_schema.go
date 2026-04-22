@@ -16,7 +16,6 @@ package information_schema
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -25,7 +24,6 @@ import (
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/sqlparser"
 
-	gmstime "github.com/dolthub/go-mysql-server/internal/time"
 	. "github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/mysql_db"
 	"github.com/dolthub/go-mysql-server/sql/plan"
@@ -145,15 +143,15 @@ var sqlModeSetType = types.MustCreateSetType([]string{
 var _ Database = (*informationSchemaDatabase)(nil)
 
 type informationSchemaDatabase struct {
-	name   string
 	tables map[string]Table
+	name   string
 }
 
 type InformationSchemaTable struct {
-	TableName   string
-	TableSchema Schema
 	catalog     Catalog
 	Reader      func(*Context, Catalog) (RowIter, error)
+	TableName   string
+	TableSchema Schema
 }
 
 type informationSchemaPartition struct {
@@ -174,6 +172,8 @@ var (
 	_ PartitionIter   = (*informationSchemaPartitionIter)(nil)
 )
 
+var sqlCtx = NewEmptyContext()
+
 var administrableRoleAuthorizationsSchema = Schema{
 	{Name: "USER", Type: types.MustCreateString(sqltypes.VarChar, 97, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: AdministrableRoleAuthorizationsTableName},
 	{Name: "HOST", Type: types.MustCreateString(sqltypes.VarChar, 256, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: AdministrableRoleAuthorizationsTableName},
@@ -181,9 +181,9 @@ var administrableRoleAuthorizationsSchema = Schema{
 	{Name: "GRANTEE_HOST", Type: types.MustCreateString(sqltypes.VarChar, 256, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: AdministrableRoleAuthorizationsTableName},
 	{Name: "ROLE_NAME", Type: types.MustCreateString(sqltypes.VarChar, 255, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: AdministrableRoleAuthorizationsTableName},
 	{Name: "ROLE_HOST", Type: types.MustCreateString(sqltypes.VarChar, 256, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: AdministrableRoleAuthorizationsTableName},
-	{Name: "IS_GRANTABLE", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: AdministrableRoleAuthorizationsTableName},
+	{Name: "IS_GRANTABLE", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: AdministrableRoleAuthorizationsTableName},
 	{Name: "IS_DEFAULT", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: AdministrableRoleAuthorizationsTableName},
-	{Name: "IS_MANDATORY", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: AdministrableRoleAuthorizationsTableName},
+	{Name: "IS_MANDATORY", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: AdministrableRoleAuthorizationsTableName},
 }
 
 var applicableRolesSchema = Schema{
@@ -193,9 +193,9 @@ var applicableRolesSchema = Schema{
 	{Name: "GRANTEE_HOST", Type: types.MustCreateString(sqltypes.VarChar, 256, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ApplicableRolesTableName},
 	{Name: "ROLE_NAME", Type: types.MustCreateString(sqltypes.VarChar, 255, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ApplicableRolesTableName},
 	{Name: "ROLE_HOST", Type: types.MustCreateString(sqltypes.VarChar, 256, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ApplicableRolesTableName},
-	{Name: "IS_GRANTABLE", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: ApplicableRolesTableName},
+	{Name: "IS_GRANTABLE", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: ApplicableRolesTableName},
 	{Name: "IS_DEFAULT", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ApplicableRolesTableName},
-	{Name: "IS_MANDATORY", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: ApplicableRolesTableName},
+	{Name: "IS_MANDATORY", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: ApplicableRolesTableName},
 }
 
 var characterSetsSchema = Schema{
@@ -220,21 +220,21 @@ var collationCharacterSetApplicabilitySchema = Schema{
 var collationsSchema = Schema{
 	{Name: "COLLATION_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: CollationsTableName},
 	{Name: "CHARACTER_SET_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: CollationsTableName},
-	{Name: "ID", Type: types.Uint64, Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), "0", types.Uint64, false), Nullable: false, Source: CollationsTableName},
-	{Name: "IS_DEFAULT", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: CollationsTableName},
-	{Name: "IS_COMPILED", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: true, Source: CollationsTableName},
+	{Name: "ID", Type: types.Uint64, Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, "0", types.Uint64, false), Nullable: false, Source: CollationsTableName},
+	{Name: "IS_DEFAULT", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: CollationsTableName},
+	{Name: "IS_COMPILED", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: true, Source: CollationsTableName},
 	{Name: "SORTLEN", Type: types.Uint32, Default: nil, Nullable: false, Source: CollationsTableName},
 	{Name: "PAD_ATTRIBUTE", Type: types.MustCreateEnumType([]string{"PAD SPACE", "NO PAD"}, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: CollationsTableName},
 }
 
 var columnPrivilegesSchema = Schema{
-	{Name: "GRANTEE", Type: types.MustCreateString(sqltypes.VarChar, 292, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: ColumnPrivilegesTableName},
-	{Name: "TABLE_CATALOG", Type: types.MustCreateString(sqltypes.VarChar, 512, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: ColumnPrivilegesTableName},
-	{Name: "TABLE_SCHEMA", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: ColumnPrivilegesTableName},
-	{Name: "TABLE_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: ColumnPrivilegesTableName},
-	{Name: "COLUMN_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: ColumnPrivilegesTableName},
-	{Name: "PRIVILEGE_TYPE", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: ColumnPrivilegesTableName},
-	{Name: "IS_GRANTABLE", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: ColumnPrivilegesTableName},
+	{Name: "GRANTEE", Type: types.MustCreateString(sqltypes.VarChar, 292, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: ColumnPrivilegesTableName},
+	{Name: "TABLE_CATALOG", Type: types.MustCreateString(sqltypes.VarChar, 512, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: ColumnPrivilegesTableName},
+	{Name: "TABLE_SCHEMA", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: ColumnPrivilegesTableName},
+	{Name: "TABLE_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: ColumnPrivilegesTableName},
+	{Name: "COLUMN_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: ColumnPrivilegesTableName},
+	{Name: "PRIVILEGE_TYPE", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: ColumnPrivilegesTableName},
+	{Name: "IS_GRANTABLE", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: ColumnPrivilegesTableName},
 }
 
 var columnStatisticsSchema = Schema{
@@ -251,7 +251,7 @@ var columnsSchema = Schema{
 	{Name: "COLUMN_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ColumnsTableName},
 	{Name: "ORDINAL_POSITION", Type: types.Uint32, Default: nil, Nullable: false, Source: ColumnsTableName},
 	{Name: "COLUMN_DEFAULT", Type: types.Text, Default: nil, Nullable: true, Source: ColumnsTableName},
-	{Name: "IS_NULLABLE", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), false), Nullable: false, Source: ColumnsTableName},
+	{Name: "IS_NULLABLE", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), false), Nullable: false, Source: ColumnsTableName},
 	{Name: "DATA_TYPE", Type: types.LongText, Default: nil, Nullable: true, Source: ColumnsTableName},
 	{Name: "CHARACTER_MAXIMUM_LENGTH", Type: types.Int64, Default: nil, Nullable: true, Source: ColumnsTableName},
 	{Name: "CHARACTER_OCTET_LENGTH", Type: types.Int64, Default: nil, Nullable: true, Source: ColumnsTableName},
@@ -282,16 +282,16 @@ var enabledRolesSchema = Schema{
 	{Name: "ROLE_NAME", Type: types.MustCreateString(sqltypes.VarChar, 255, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: EnabledRolesTablesName},
 	{Name: "ROLE_HOST", Type: types.MustCreateString(sqltypes.VarChar, 255, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: EnabledRolesTablesName},
 	{Name: "IS_DEFAULT", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: EnabledRolesTablesName},
-	{Name: "IS_MANDATORY", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: EnabledRolesTablesName},
+	{Name: "IS_MANDATORY", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: EnabledRolesTablesName},
 }
 
 var enginesSchema = Schema{
-	{Name: "ENGINE", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: EnginesTableName},
-	{Name: "SUPPORT", Type: types.MustCreateString(sqltypes.VarChar, 8, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: EnginesTableName},
-	{Name: "COMMENT", Type: types.MustCreateString(sqltypes.VarChar, 80, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: EnginesTableName},
-	{Name: "TRANSACTIONS", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: true, Source: EnginesTableName},
-	{Name: "XA", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: true, Source: EnginesTableName},
-	{Name: "SAVEPOINTS", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: true, Source: EnginesTableName},
+	{Name: "ENGINE", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: EnginesTableName},
+	{Name: "SUPPORT", Type: types.MustCreateString(sqltypes.VarChar, 8, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: EnginesTableName},
+	{Name: "COMMENT", Type: types.MustCreateString(sqltypes.VarChar, 80, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: EnginesTableName},
+	{Name: "TRANSACTIONS", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: true, Source: EnginesTableName},
+	{Name: "XA", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: true, Source: EnginesTableName},
+	{Name: "SAVEPOINTS", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: true, Source: EnginesTableName},
 }
 
 var eventsSchema = Schema{
@@ -300,9 +300,9 @@ var eventsSchema = Schema{
 	{Name: "EVENT_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: EventsTableName},
 	{Name: "DEFINER", Type: types.MustCreateString(sqltypes.VarChar, 288, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: EventsTableName},
 	{Name: "TIME_ZONE", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: EventsTableName},
-	{Name: "EVENT_BODY", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: EventsTableName},
+	{Name: "EVENT_BODY", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: EventsTableName},
 	{Name: "EVENT_DEFINITION", Type: types.LongText, Default: nil, Nullable: false, Source: EventsTableName},
-	{Name: "EVENT_TYPE", Type: types.MustCreateString(sqltypes.VarChar, 9, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.LongText, false), Nullable: false, Source: EventsTableName},
+	{Name: "EVENT_TYPE", Type: types.MustCreateString(sqltypes.VarChar, 9, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.LongText, false), Nullable: false, Source: EventsTableName},
 	{Name: "EXECUTE_AT", Type: types.Datetime, Default: nil, Nullable: true, Source: EventsTableName},
 	{Name: "INTERVAL_VALUE", Type: types.MustCreateString(sqltypes.VarChar, 256, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: EventsTableName},
 	{Name: "INTERVAL_FIELD", Type: types.MustCreateEnumType([]string{
@@ -313,7 +313,7 @@ var eventsSchema = Schema{
 	{Name: "STARTS", Type: types.Datetime, Default: nil, Nullable: true, Source: EventsTableName},
 	{Name: "ENDS", Type: types.Datetime, Default: nil, Nullable: true, Source: EventsTableName},
 	{Name: "STATUS", Type: types.MustCreateEnumType([]string{"ENABLED", "DISABLED", "SLAVESIDE_DISABLED"}, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: EventsTableName},
-	{Name: "ON_COMPLETION", Type: types.MustCreateString(sqltypes.VarChar, 12, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.MustCreateString(sqltypes.VarChar, 12, Collation_Information_Schema_Default), false), Nullable: false, Source: EventsTableName},
+	{Name: "ON_COMPLETION", Type: types.MustCreateString(sqltypes.VarChar, 12, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.MustCreateString(sqltypes.VarChar, 12, Collation_Information_Schema_Default), false), Nullable: false, Source: EventsTableName},
 	{Name: "CREATED", Type: types.Timestamp, Default: nil, Nullable: false, Source: EventsTableName},
 	{Name: "LAST_ALTERED", Type: types.Timestamp, Default: nil, Nullable: false, Source: EventsTableName},
 	{Name: "LAST_EXECUTED", Type: types.Datetime, Default: nil, Nullable: true, Source: EventsTableName},
@@ -329,7 +329,7 @@ var filesSchema = Schema{
 	{Name: "FILE_NAME", Type: types.Text, Default: nil, Nullable: true, Source: FilesTableName},
 	{Name: "FILE_TYPE", Type: types.MustCreateString(sqltypes.VarChar, 256, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: FilesTableName},
 	{Name: "TABLESPACE_NAME", Type: types.MustCreateString(sqltypes.VarChar, 268, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: FilesTableName},
-	{Name: "TABLE_CATALOG", Type: types.MustCreateString(sqltypes.Char, 0, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.MustCreateString(sqltypes.Char, 0, Collation_Information_Schema_Default), false), Nullable: true, Source: FilesTableName},
+	{Name: "TABLE_CATALOG", Type: types.MustCreateString(sqltypes.Char, 0, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.MustCreateString(sqltypes.Char, 0, Collation_Information_Schema_Default), false), Nullable: true, Source: FilesTableName},
 	{Name: "TABLE_SCHEMA", Type: types.MustCreateBinary(sqltypes.Binary, 0), Default: nil, Nullable: true, Source: FilesTableName},
 	{Name: "TABLE_NAME", Type: types.MustCreateBinary(sqltypes.Binary, 0), Default: nil, Nullable: true, Source: FilesTableName},
 	{Name: "LOGFILE_GROUP_NAME", Type: types.MustCreateString(sqltypes.VarChar, 256, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: FilesTableName},
@@ -373,7 +373,7 @@ var keyColumnUsageSchema = Schema{
 	{Name: "TABLE_SCHEMA", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: KeyColumnUsageTableName},
 	{Name: "TABLE_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: KeyColumnUsageTableName},
 	{Name: "COLUMN_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: KeyColumnUsageTableName},
-	{Name: "ORDINAL_POSITION", Type: types.Uint32, Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), "0", types.Uint32, false), Nullable: false, Source: KeyColumnUsageTableName},
+	{Name: "ORDINAL_POSITION", Type: types.Uint32, Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, "0", types.Uint32, false), Nullable: false, Source: KeyColumnUsageTableName},
 	{Name: "POSITION_IN_UNIQUE_CONSTRAINT", Type: types.Uint32, Default: nil, Nullable: true, Source: KeyColumnUsageTableName},
 	{Name: "REFERENCED_TABLE_SCHEMA", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: KeyColumnUsageTableName},
 	{Name: "REFERENCED_TABLE_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: KeyColumnUsageTableName},
@@ -396,7 +396,7 @@ var parametersSchema = Schema{
 	{Name: "SPECIFIC_CATALOG", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ParametersTableName},
 	{Name: "SPECIFIC_SCHEMA", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ParametersTableName},
 	{Name: "SPECIFIC_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: ParametersTableName},
-	{Name: "ORDINAL_POSITION", Type: types.Uint64, Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), "0", types.Uint64, false), Nullable: false, Source: ParametersTableName},
+	{Name: "ORDINAL_POSITION", Type: types.Uint64, Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, "0", types.Uint64, false), Nullable: false, Source: ParametersTableName},
 	{Name: "PARAMETER_MODE", Type: types.MustCreateString(sqltypes.VarChar, 5, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ParametersTableName},
 	{Name: "PARAMETER_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ParametersTableName},
 	{Name: "DATA_TYPE", Type: types.LongText, Default: nil, Nullable: true, Source: ParametersTableName},
@@ -460,7 +460,7 @@ var processListSchema = Schema{
 	{Name: "DB", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ProcessListTableName},
 	{Name: "COMMAND", Type: types.MustCreateString(sqltypes.VarChar, 16, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: ProcessListTableName},
 	{Name: "TIME", Type: types.Int32, Default: nil, Nullable: false, Source: ProcessListTableName},
-	{Name: "STATE", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ProcessListTableName},
+	{Name: "STATE", Type: types.MustCreateString(sqltypes.VarChar, 65535, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ProcessListTableName},
 	{Name: "INFO", Type: types.MustCreateString(sqltypes.VarChar, 65535, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ProcessListTableName},
 }
 
@@ -562,10 +562,10 @@ var routinesSchema = Schema{
 	{Name: "CHARACTER_SET_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: RoutinesTableName},
 	{Name: "COLLATION_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: RoutinesTableName},
 	{Name: "DTD_IDENTIFIER", Type: types.LongText, Default: nil, Nullable: true, Source: RoutinesTableName},
-	{Name: "ROUTINE_BODY", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `""`, types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), false), Nullable: false, Source: RoutinesTableName},
+	{Name: "ROUTINE_BODY", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `""`, types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), false), Nullable: false, Source: RoutinesTableName},
 	{Name: "ROUTINE_DEFINITION", Type: types.LongText, Default: nil, Nullable: true, Source: RoutinesTableName},
 	{Name: "EXTERNAL_NAME", Type: types.MustCreateBinary(sqltypes.Binary, 0), Default: nil, Nullable: true, Source: RoutinesTableName},
-	{Name: "EXTERNAL_LANGUAGE", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(NewEmptyContext(), `"SQL"`, types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), false), Nullable: false, Source: RoutinesTableName},
+	{Name: "EXTERNAL_LANGUAGE", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: planbuilder.MustStringToColumnDefaultValue(sqlCtx, `"SQL"`, types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), false), Nullable: false, Source: RoutinesTableName},
 	{Name: "PARAMETER_STYLE", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: RoutinesTableName},
 	{Name: "IS_DETERMINISTIC", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: RoutinesTableName},
 	{Name: "SQL_DATA_ACCESS", Type: types.MustCreateEnumType([]string{"CONTAINS SQL", "NO SQL", "READS SQL DATA", "MODIFIES SQL DATA"}, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: RoutinesTableName},
@@ -670,30 +670,6 @@ var tablePrivilegesSchema = Schema{
 	{Name: "IS_GRANTABLE", Type: types.MustCreateString(sqltypes.VarChar, 3, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: TablePrivilegesTableName},
 }
 
-var tablesSchema = Schema{
-	{Name: "TABLE_CATALOG", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "TABLE_SCHEMA", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "TABLE_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "TABLE_TYPE", Type: types.MustCreateEnumType([]string{"BASE TABLE", "VIEW", "SYSTEM VIEW"}, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: TablesTableName},
-	{Name: "ENGINE", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "VERSION", Type: types.Int32, Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "ROW_FORMAT", Type: types.MustCreateEnumType([]string{"Fixed", "Dynamic", "Compressed", "Redundant", "Compact", "Paged"}, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "TABLE_ROWS", Type: types.Uint64, Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "AVG_ROW_LENGTH", Type: types.Uint64, Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "DATA_LENGTH", Type: types.Uint64, Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "MAX_DATA_LENGTH", Type: types.Uint64, Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "INDEX_LENGTH", Type: types.Uint64, Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "DATA_FREE", Type: types.Uint64, Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "AUTO_INCREMENT", Type: types.Uint64, Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "CREATE_TIME", Type: types.Timestamp, Default: nil, Nullable: false, Source: TablesTableName},
-	{Name: "UPDATE_TIME", Type: types.Datetime, Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "CHECK_TIME", Type: types.Datetime, Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "TABLE_COLLATION", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "CHECKSUM", Type: types.Int64, Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "CREATE_OPTIONS", Type: types.MustCreateString(sqltypes.VarChar, 256, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: TablesTableName},
-	{Name: "TABLE_COMMENT", Type: types.Text, Default: nil, Nullable: true, Source: TablesTableName},
-}
-
 var tablesExtensionsSchema = Schema{
 	{Name: "TABLE_CATALOG", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: TablesExtensionsTableName},
 	{Name: "TABLE_SCHEMA", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: TablesExtensionsTableName},
@@ -722,7 +698,9 @@ var tablespacesExtensionsSchema = Schema{
 var triggersSchema = Schema{
 	{Name: "TRIGGER_CATALOG", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: TriggersTableName},
 	{Name: "TRIGGER_SCHEMA", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: TriggersTableName},
-	{Name: "TRIGGER_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: TriggersTableName},
+	// NOTE: MySQL limits trigger names to 64 characters, but we limit them to 96 chars to avoid breaking existing customers who were
+	//       relying on us not enforcing the 64 character limit. This is a good candidate to change in a future major version bump.
+	{Name: "TRIGGER_NAME", Type: types.MustCreateString(sqltypes.VarChar, 96, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: TriggersTableName},
 	{Name: "EVENT_MANIPULATION", Type: types.MustCreateEnumType([]string{"INSERT", "UPDATE", "DELETE"}, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: TriggersTableName},
 	{Name: "EVENT_OBJECT_CATALOG", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: TriggersTableName},
 	{Name: "EVENT_OBJECT_SCHEMA", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: TriggersTableName},
@@ -775,19 +753,6 @@ var viewTableUsageSchema = Schema{
 	{Name: "TABLE_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ViewTableUsageTableName},
 }
 
-var viewsSchema = Schema{
-	{Name: "TABLE_CATALOG", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ViewsTableName},
-	{Name: "TABLE_SCHEMA", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ViewsTableName},
-	{Name: "TABLE_NAME", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ViewsTableName},
-	{Name: "VIEW_DEFINITION", Type: types.LongText, Default: nil, Nullable: true, Source: ViewsTableName},
-	{Name: "CHECK_OPTION", Type: types.MustCreateEnumType([]string{"NONE", "LOCAL", "CASCADED"}, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ViewsTableName},
-	{Name: "IS_UPDATABLE", Type: types.MustCreateEnumType([]string{"NO", "YES"}, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ViewsTableName},
-	{Name: "DEFINER", Type: types.MustCreateString(sqltypes.VarChar, 288, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ViewsTableName},
-	{Name: "SECURITY_TYPE", Type: types.MustCreateString(sqltypes.VarChar, 7, Collation_Information_Schema_Default), Default: nil, Nullable: true, Source: ViewsTableName},
-	{Name: "CHARACTER_SET_CLIENT", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: ViewsTableName},
-	{Name: "COLLATION_CONNECTION", Type: types.MustCreateString(sqltypes.VarChar, 64, Collation_Information_Schema_Default), Default: nil, Nullable: false, Source: ViewsTableName},
-}
-
 // characterSetsRowIter implements the sql.RowIter for the information_schema.CHARACTER_SETS table.
 func characterSetsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 	var rows []Row
@@ -806,7 +771,7 @@ func characterSetsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 func checkConstraintsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 	var rows []Row
 
-	databases, err := AllDatabases(ctx, c, false)
+	databases, err := AllDatabasesWithNames(ctx, c, false)
 	if err != nil {
 		return nil, err
 	}
@@ -887,7 +852,7 @@ func columnStatisticsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 		return RowsToRowIter(rows...), nil
 	}
 
-	databases, err := AllDatabases(ctx, c, false)
+	databases, err := AllDatabasesWithNames(ctx, c, false)
 	if err != nil {
 		return nil, err
 	}
@@ -929,7 +894,7 @@ func columnStatisticsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 func columnsExtensionsRowIter(ctx *Context, cat Catalog) (RowIter, error) {
 	var rows []Row
 
-	databases, err := AllDatabases(ctx, cat, false)
+	databases, err := AllDatabasesWithNames(ctx, cat, false)
 	if err != nil {
 		return nil, err
 	}
@@ -937,7 +902,7 @@ func columnsExtensionsRowIter(ctx *Context, cat Catalog) (RowIter, error) {
 	for _, db := range databases {
 		err := DBTableIter(ctx, db.Database, func(t Table) (cont bool, err error) {
 			tblName := t.Name()
-			for _, col := range t.Schema() {
+			for _, col := range t.Schema(ctx) {
 				rows = append(rows, Row{
 					db.CatalogName, // table_catalog
 					db.SchemaName,  // table_schema
@@ -982,7 +947,7 @@ func eventsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 	}
 	collationConnection, err := ctx.GetSessionVariable(ctx, "collation_connection")
 
-	databases, err := AllDatabases(ctx, c, false)
+	databases, err := AllDatabasesWithNames(ctx, c, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1001,7 +966,7 @@ func eventsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 			}
 
 			for _, e := range eventDefs {
-				ed := e.ConvertTimesFromUTCToTz(gmstime.SystemTimezoneOffset())
+				ed := e.ConvertTimesFromUTCToTz(SystemTimezoneOffset())
 				var at, intervalVal, intervalField, starts, ends interface{}
 				var eventType, status string
 				if ed.HasExecuteAt {
@@ -1080,7 +1045,7 @@ func eventsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 func keyColumnUsageRowIter(ctx *Context, c Catalog) (RowIter, error) {
 	var rows []Row
 
-	databases, err := AllDatabases(ctx, c, false)
+	databases, err := AllDatabasesWithNames(ctx, c, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1112,7 +1077,7 @@ func keyColumnUsageRowIter(ctx *Context, c Catalog) (RowIter, error) {
 						continue
 					}
 
-					colNames := getColumnNamesFromIndex(index, tbl)
+					colNames := getColumnNamesFromIndex(ctx, index, tbl)
 
 					// Create a Row for each column this index refers too.
 					for i, colName := range colNames {
@@ -1227,7 +1192,7 @@ func processListRowIter(ctx *Context, c Catalog) (RowIter, error) {
 func referentialConstraintsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 	var rows []Row
 
-	databases, err := AllDatabases(ctx, c, false)
+	databases, err := AllDatabasesWithNames(ctx, c, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1283,7 +1248,7 @@ func referentialConstraintsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 								if index.ID() != "PRIMARY" && !index.IsUnique() {
 									continue
 								}
-								colNames := getColumnNamesFromIndex(index, refTbl)
+								colNames := getColumnNamesFromIndex(ctx, index, refTbl)
 								if len(colNames) == len(referencedCols) {
 									var hasAll = true
 									for _, colName := range colNames {
@@ -1393,7 +1358,7 @@ func schemaPrivilegesRowIter(ctx *Context, c Catalog) (RowIter, error) {
 func schemataExtensionsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 	var rows []Row
 
-	databases, err := AllDatabases(ctx, c, false)
+	databases, err := AllDatabasesWithNames(ctx, c, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1419,7 +1384,7 @@ func schemataExtensionsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 func stGeometryColumnsRowIter(ctx *Context, cat Catalog) (RowIter, error) {
 	var rows []Row
 
-	databases, err := AllDatabases(ctx, cat, false)
+	databases, err := AllDatabasesWithNames(ctx, cat, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1428,7 +1393,7 @@ func stGeometryColumnsRowIter(ctx *Context, cat Catalog) (RowIter, error) {
 		err := DBTableIter(ctx, db.Database, func(t Table) (cont bool, err error) {
 			tblName := t.Name()
 
-			for _, col := range t.Schema() {
+			for _, col := range t.Schema(ctx) {
 				s, ok := col.Type.(SpatialColumnType)
 				if !ok {
 					continue
@@ -1501,7 +1466,7 @@ func stUnitsOfMeasureRowIter(ctx *Context, cat Catalog) (RowIter, error) {
 func statisticsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 	var rows []Row
 
-	databases, err := AllDatabases(ctx, c, false)
+	databases, err := AllDatabasesWithNames(ctx, c, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1547,7 +1512,7 @@ func statisticsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 					// Create a Row for each column this index refers too.
 					i := 0
 					for j, expr := range index.Expressions() {
-						col := plan.GetColumnFromIndexExpr(expr, tbl)
+						col := plan.GetColumnFromIndexExpr(ctx, expr, tbl)
 						if col != nil {
 							i += 1
 							var (
@@ -1612,7 +1577,7 @@ func statisticsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 func tableConstraintsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 	var rows []Row
 
-	databases, err := AllDatabases(ctx, c, false)
+	databases, err := AllDatabasesWithNames(ctx, c, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1717,7 +1682,7 @@ func tableConstraintsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 func tableConstraintsExtensionsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 	var rows []Row
 
-	databases, err := AllDatabases(ctx, c, false)
+	databases, err := AllDatabasesWithNames(ctx, c, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1881,144 +1846,6 @@ func tablePrivilegesRowIter(ctx *Context, c Catalog) (RowIter, error) {
 	return RowsToRowIter(rows...), nil
 }
 
-// tablesRowIter implements the sql.RowIter for the information_schema.TABLES table.
-func tablesRowIter(ctx *Context, cat Catalog) (RowIter, error) {
-	var rows []Row
-	var (
-		tableType      string
-		tableRows      uint64
-		avgRowLength   uint64
-		dataLength     uint64
-		engine         interface{}
-		rowFormat      interface{}
-		tableCollation interface{}
-		autoInc        interface{}
-	)
-
-	databases, err := AllDatabases(ctx, cat, true)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, db := range databases {
-		if db.Database.Name() == InformationSchemaDatabaseName {
-			tableType = "SYSTEM VIEW"
-		} else {
-			tableType = "BASE TABLE"
-			engine = "InnoDB"
-			rowFormat = "Dynamic"
-		}
-
-		y2k, _, _ := types.Timestamp.Convert("2000-01-01 00:00:00")
-		err := DBTableIter(ctx, db.Database, func(t Table) (cont bool, err error) {
-			tableCollation = t.Collation().String()
-			comment := ""
-			if db.Database.Name() != InformationSchemaDatabaseName {
-				if st, ok := t.(StatisticsTable); ok {
-					tableRows, _, err = st.RowCount(ctx)
-					if err != nil {
-						return false, err
-					}
-
-					// TODO: correct values for avg_row_length, data_length, max_data_length are missing (current values varies on gms vs Dolt)
-					//  index_length and data_free columns are not supported yet
-					//  the data length values differ from MySQL
-					// MySQL uses default page size (16384B) as data length, and it adds another page size, if table data fills the current page block.
-					// https://stackoverflow.com/questions/34211377/average-row-length-higher-than-possible has good explanation.
-					dataLength, err = st.DataLength(ctx)
-					if err != nil {
-						return false, err
-					}
-
-					if tableRows > uint64(0) {
-						avgRowLength = dataLength / tableRows
-					}
-				}
-
-				if ai, ok := t.(AutoIncrementTable); ok {
-					autoInc, err = ai.PeekNextAutoIncrementValue(ctx)
-					if !errors.Is(err, ErrNoAutoIncrementCol) && err != nil {
-						return false, err
-					}
-
-					// table with no auto incremented column is qualified as AutoIncrementTable, and the nextAutoInc value is 0
-					// table with auto incremented column and no rows, the nextAutoInc value is 1
-					if autoInc == uint64(0) || autoInc == uint64(1) {
-						autoInc = nil
-					}
-				}
-
-				if commentedTable, ok := t.(CommentedTable); ok {
-					comment = commentedTable.Comment()
-				}
-			}
-
-			rows = append(rows, Row{
-				db.CatalogName, // table_catalog
-				db.SchemaName,  // table_schema
-				t.Name(),       // table_name
-				tableType,      // table_type
-				engine,         // engine
-				10,             // version (protocol, always 10)
-				rowFormat,      // row_format
-				tableRows,      // table_rows
-				avgRowLength,   // avg_row_length
-				dataLength,     // data_length
-				0,              // max_data_length
-				0,              // index_length
-				0,              // data_free
-				autoInc,        // auto_increment
-				y2k,            // create_time
-				y2k,            // update_time
-				nil,            // check_time
-				tableCollation, // table_collation
-				nil,            // checksum
-				"",             // create_options
-				comment,        // table_comment
-			})
-
-			return true, nil
-		})
-
-		if err != nil {
-			return nil, err
-		}
-
-		views, err := ViewsInDatabase(ctx, db.Database)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, view := range views {
-			rows = append(rows, Row{
-				db.CatalogName, // table_catalog
-				db.SchemaName,  // table_schema
-				view.Name,      // table_name
-				"VIEW",         // table_type
-				nil,            // engine
-				nil,            // version (protocol, always 10)
-				nil,            // row_format
-				nil,            // table_rows
-				nil,            // avg_row_length
-				nil,            // data_length
-				nil,            // max_data_length
-				nil,            // max_data_length
-				nil,            // data_free
-				nil,            // auto_increment
-				y2k,            // create_time
-				nil,            // update_time
-				nil,            // check_time
-				nil,            // table_collation
-				nil,            // checksum
-				nil,            // create_options
-				"VIEW",         // table_comment
-			})
-		}
-	}
-
-	return RowsToRowIter(rows...), nil
-}
-
 // DbWithNames includes the Database with the catalog and schema names.
 type DbWithNames struct {
 	Database    Database
@@ -2026,50 +1853,24 @@ type DbWithNames struct {
 	SchemaName  string
 }
 
-// AllDatabases expands all databases in the catalog to include all schemas if
-// present. For Postgres, it will only return the schemas for the current database.
-func AllDatabases(ctx *Context, cat Catalog, privCheck bool) ([]DbWithNames, error) {
+// AllDatabasesWithNames is used by Doltgres to get the catalog and schema names
+// for the current database. In Dolt, this gets the names for all databases.
+var AllDatabasesWithNames = allDatabasesWithNames
+
+// allDatabasesWithNames gets all databases with their catalog and schema names.
+func allDatabasesWithNames(ctx *Context, cat Catalog, privCheck bool) ([]DbWithNames, error) {
 	var dbs []DbWithNames
 
-	currentDB := ctx.GetCurrentDatabase()
-
-	for _, db := range cat.AllDatabases(ctx) {
+	allDbs := cat.AllDatabases(ctx)
+	for _, db := range allDbs {
 		if privCheck {
 			if privDatabase, ok := db.(mysql_db.PrivilegedDatabase); ok {
 				db = privDatabase.Unwrap()
 			}
 		}
-
-		sdb, ok := db.(SchemaDatabase)
-		if ok {
-			var schemaDbs []DbWithNames
-			schemas, err := sdb.AllSchemas(ctx)
-			if err != nil {
-				return nil, err
-			}
-
-			for _, schema := range schemas {
-				if schema.SchemaName() != "" && db.Name() == currentDB {
-					schemaDbs = append(schemaDbs, DbWithNames{schema, schema.Name(), schema.SchemaName()})
-				} else {
-					dbs = append(dbs, DbWithNames{schema, "def", schema.Name()})
-				}
-			}
-
-			if len(schemaDbs) > 0 {
-				// TODO: information_schema should be included in the schema list
-				infoSchemaDB, err := cat.Database(ctx, InformationSchemaDatabaseName)
-				if err != nil {
-					return nil, err
-				}
-				schemaDbs = append(schemaDbs, DbWithNames{infoSchemaDB, sdb.Name(), InformationSchemaDatabaseName})
-
-				return schemaDbs, nil
-			}
-		} else {
-			dbs = append(dbs, DbWithNames{db, "def", db.Name()})
-		}
+		dbs = append(dbs, DbWithNames{db, "def", db.Name()})
 	}
+
 	return dbs, nil
 }
 
@@ -2077,7 +1878,7 @@ func AllDatabases(ctx *Context, cat Catalog, privCheck bool) ([]DbWithNames, err
 func tablesExtensionsRowIter(ctx *Context, cat Catalog) (RowIter, error) {
 	var rows []Row
 
-	databases, err := AllDatabases(ctx, cat, false)
+	databases, err := AllDatabasesWithNames(ctx, cat, false)
 	if err != nil {
 		return nil, err
 	}
@@ -2118,7 +1919,7 @@ func triggersRowIter(ctx *Context, c Catalog) (RowIter, error) {
 	}
 	hasGlobalTriggerPriv := privSet.Has(PrivilegeType_Trigger)
 
-	databases, err := AllDatabases(ctx, c, false)
+	databases, err := AllDatabasesWithNames(ctx, c, false)
 	if err != nil {
 		return nil, err
 	}
@@ -2138,10 +1939,21 @@ func triggersRowIter(ctx *Context, c Catalog) (RowIter, error) {
 				continue
 			}
 
+			// Capture the current database, so that we can ensure it gets set back to this value
+			// after we adjust it to parse each database's triggers.
+			originalDatabase := ctx.GetCurrentDatabase()
+			defer ctx.SetCurrentDatabase(originalDatabase)
+
 			var triggerPlans []*plan.CreateTrigger
 			for _, trigger := range triggers {
+				// Because we have to parse/resolve the CREATE TRIGGER statement again, we update the
+				// session's current database so that ParseWithOptions can correctly resolve references.
+				ctx.SetCurrentDatabase(db.Database.Name())
 				triggerSqlMode := NewSqlModeFromString(trigger.SqlMode)
-				parsedTrigger, _, err := planbuilder.ParseWithOptions(ctx, c, trigger.CreateStatement, triggerSqlMode.ParserOptions())
+				// TODO: figure out how auth works in this case
+				builder := planbuilder.New(ctx, c, nil)
+				builder.SetParserOptions(triggerSqlMode.ParserOptions())
+				parsedTrigger, _, _, _, err := builder.Parse(trigger.CreateStatement, nil, false)
 				if err != nil {
 					return nil, err
 				}
@@ -2153,6 +1965,9 @@ func triggersRowIter(ctx *Context, c Catalog) (RowIter, error) {
 				triggerPlan.SqlMode = triggerSqlMode.String()
 				triggerPlans = append(triggerPlans, triggerPlan)
 			}
+
+			// Set the context back to the original database, since we changed it to parse each database's triggers
+			ctx.SetCurrentDatabase(originalDatabase)
 
 			beforeTriggers, afterTriggers := plan.OrderTriggers(triggerPlans)
 			var beforeDelete []*plan.CreateTrigger
@@ -2320,481 +2135,408 @@ func userPrivilegesRowIter(ctx *Context, catalog Catalog) (RowIter, error) {
 	return RowsToRowIter(rows...), nil
 }
 
-// viewsRowIter implements the sql.RowIter for the information_schema.VIEWS table.
-func viewsRowIter(ctx *Context, catalog Catalog) (RowIter, error) {
-	var rows []Row
-	privSet, _ := ctx.GetPrivilegeSet()
-	if privSet == nil {
-		return RowsToRowIter(rows...), nil
-	}
-	hasGlobalShowViewPriv := privSet.Has(PrivilegeType_ShowView)
-
-	databases, err := AllDatabases(ctx, catalog, false)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, db := range databases {
-		privDbSet := privSet.Database(db.Database.Name())
-		hasDbShowViewPriv := privDbSet.Has(PrivilegeType_ShowView)
-
-		views, err := ViewsInDatabase(ctx, db.Database)
-		if err != nil {
-			return nil, err
-		}
-
-		dbCollation := plan.GetDatabaseCollation(ctx, db.Database)
-		charset := dbCollation.CharacterSet().String()
-		collation := dbCollation.String()
-
-		for _, view := range views {
-			privTblSet := privDbSet.Table(view.Name)
-			if !hasGlobalShowViewPriv && !hasDbShowViewPriv && !privTblSet.Has(PrivilegeType_ShowView) {
-				continue
-			}
-			parsedView, _, err := planbuilder.ParseWithOptions(ctx, catalog, view.CreateViewStatement, NewSqlModeFromString(view.SqlMode).ParserOptions())
-			if err != nil {
-				continue
-			}
-			viewPlan, ok := parsedView.(*plan.CreateView)
-			if !ok {
-				return nil, ErrTriggerCreateStatementInvalid.New(view.CreateViewStatement)
-			}
-
-			viewDef := viewPlan.Definition.TextDefinition
-			definer := removeBackticks(viewPlan.Definer)
-
-			// TODO: WITH CHECK OPTION is not supported yet.
-			checkOpt := viewPlan.CheckOpt
-			if checkOpt == "" {
-				checkOpt = "NONE"
-			}
-
-			isUpdatable := "YES"
-			// TODO: this function call should be done at CREATE VIEW time, not here
-			if !plan.GetIsUpdatableFromCreateView(viewPlan) {
-				isUpdatable = "NO"
-			}
-
-			securityType := viewPlan.Security
-			if securityType == "" {
-				securityType = "DEFINER"
-			}
-
-			rows = append(rows, Row{
-				db.CatalogName, // table_catalog
-				db.SchemaName,  // table_schema
-				view.Name,      // table_name
-				viewDef,        // view_definition
-				checkOpt,       // check_option
-				isUpdatable,    // is_updatable
-				definer,        // definer
-				securityType,   // security_type
-				charset,        // character_set_client
-				collation,      // collation_connection
-			})
-		}
-	}
-
-	return RowsToRowIter(rows...), nil
-}
-
 // emptyRowIter implements the sql.RowIter for empty table.
 func emptyRowIter(ctx *Context, c Catalog) (RowIter, error) {
 	return RowsToRowIter(), nil
 }
 
+// NewInformationSchemaTablesToAdd is used by Doltgres to inject Postgres-specific
+// tables and views. In Dolt, this just returns empty map.
+var NewInformationSchemaTablesToAdd = map[string]Table{}
+
+func GetInformationSchemaTables() map[string]Table {
+	return map[string]Table{
+		AdministrableRoleAuthorizationsTableName: &InformationSchemaTable{
+			TableName:   AdministrableRoleAuthorizationsTableName,
+			TableSchema: administrableRoleAuthorizationsSchema,
+			Reader:      emptyRowIter,
+		},
+		ApplicableRolesTableName: &InformationSchemaTable{
+			TableName:   ApplicableRolesTableName,
+			TableSchema: applicableRolesSchema,
+			Reader:      emptyRowIter,
+		},
+		CharacterSetsTableName: &InformationSchemaTable{
+			TableName:   CharacterSetsTableName,
+			TableSchema: characterSetsSchema,
+			Reader:      characterSetsRowIter,
+		},
+		CheckConstraintsTableName: &InformationSchemaTable{
+			TableName:   CheckConstraintsTableName,
+			TableSchema: checkConstraintsSchema,
+			Reader:      checkConstraintsRowIter,
+		},
+		CollationCharSetApplicabilityTableName: &InformationSchemaTable{
+			TableName:   CollationCharSetApplicabilityTableName,
+			TableSchema: collationCharacterSetApplicabilitySchema,
+			Reader:      collationCharacterSetApplicabilityRowIter,
+		},
+		CollationsTableName: &InformationSchemaTable{
+			TableName:   CollationsTableName,
+			TableSchema: collationsSchema,
+			Reader:      collationsRowIter,
+		},
+		ColumnPrivilegesTableName: &InformationSchemaTable{
+			TableName:   ColumnPrivilegesTableName,
+			TableSchema: columnPrivilegesSchema,
+			Reader:      emptyRowIter,
+		},
+		ColumnStatisticsTableName: &InformationSchemaTable{
+			TableName:   ColumnStatisticsTableName,
+			TableSchema: columnStatisticsSchema,
+			Reader:      columnStatisticsRowIter,
+		},
+		ColumnsTableName: NewColumnsTable(),
+		ColumnsExtensionsTableName: &InformationSchemaTable{
+			TableName:   ColumnsExtensionsTableName,
+			TableSchema: columnsExtensionsSchema,
+			Reader:      columnsExtensionsRowIter,
+		},
+		EnabledRolesTablesName: &InformationSchemaTable{
+			TableName:   EnabledRolesTablesName,
+			TableSchema: enabledRolesSchema,
+			Reader:      emptyRowIter,
+		},
+		EnginesTableName: &InformationSchemaTable{
+			TableName:   EnginesTableName,
+			TableSchema: enginesSchema,
+			Reader:      enginesRowIter,
+		},
+		EventsTableName: &InformationSchemaTable{
+			TableName:   EventsTableName,
+			TableSchema: eventsSchema,
+			Reader:      eventsRowIter,
+		},
+		FilesTableName: &InformationSchemaTable{
+			TableName:   FilesTableName,
+			TableSchema: filesSchema,
+			Reader:      emptyRowIter,
+		},
+		KeyColumnUsageTableName: &InformationSchemaTable{
+			TableName:   KeyColumnUsageTableName,
+			TableSchema: keyColumnUsageSchema,
+			Reader:      keyColumnUsageRowIter,
+		},
+		KeywordsTableName: &InformationSchemaTable{
+			TableName:   KeywordsTableName,
+			TableSchema: keywordsSchema,
+			Reader:      keywordsRowIter,
+		},
+		OptimizerTraceTableName: &InformationSchemaTable{
+			TableName:   OptimizerTraceTableName,
+			TableSchema: optimizerTraceSchema,
+			Reader:      emptyRowIter,
+		},
+		ParametersTableName: &routineTable{
+			name:    ParametersTableName,
+			schema:  parametersSchema,
+			rowIter: parametersRowIter,
+		},
+		PartitionsTableName: &InformationSchemaTable{
+			TableName:   PartitionsTableName,
+			TableSchema: partitionsSchema,
+			Reader:      emptyRowIter,
+		},
+		PluginsTableName: &InformationSchemaTable{
+			TableName:   PluginsTableName,
+			TableSchema: pluginsSchema,
+			Reader:      emptyRowIter,
+		},
+		ProcessListTableName: &InformationSchemaTable{
+			TableName:   ProcessListTableName,
+			TableSchema: processListSchema,
+			Reader:      processListRowIter,
+		},
+		ProfilingTableName: &InformationSchemaTable{
+			TableName:   ProfilingTableName,
+			TableSchema: profilingSchema,
+			Reader:      emptyRowIter,
+		},
+		ReferentialConstraintsTableName: &InformationSchemaTable{
+			TableName:   ReferentialConstraintsTableName,
+			TableSchema: referentialConstraintsSchema,
+			Reader:      referentialConstraintsRowIter,
+		},
+		ResourceGroupsTableName: &InformationSchemaTable{
+			TableName:   ResourceGroupsTableName,
+			TableSchema: resourceGroupsSchema,
+			Reader:      emptyRowIter,
+		},
+		RoleColumnGrantsTableName: &InformationSchemaTable{
+			TableName:   RoleColumnGrantsTableName,
+			TableSchema: roleColumnGrantsSchema,
+			Reader:      emptyRowIter,
+		},
+		RoleRoutineGrantsTableName: &InformationSchemaTable{
+			TableName:   RoleRoutineGrantsTableName,
+			TableSchema: roleRoutineGrantsSchema,
+			Reader:      emptyRowIter,
+		},
+		RoleTableGrantsTableName: &InformationSchemaTable{
+			TableName:   RoleTableGrantsTableName,
+			TableSchema: roleTableGrantsSchema,
+			Reader:      emptyRowIter,
+		},
+		RoutinesTableName: &routineTable{
+			name:    RoutinesTableName,
+			schema:  routinesSchema,
+			rowIter: routinesRowIter,
+		},
+		SchemaPrivilegesTableName: &InformationSchemaTable{
+			TableName:   SchemaPrivilegesTableName,
+			TableSchema: schemaPrivilegesSchema,
+			Reader:      schemaPrivilegesRowIter,
+		},
+		SchemataTableName: NewSchemataTable(),
+		SchemataExtensionsTableName: &InformationSchemaTable{
+			TableName:   SchemataExtensionsTableName,
+			TableSchema: schemataExtensionsSchema,
+			Reader:      schemataExtensionsRowIter,
+		},
+		StGeometryColumnsTableName: &InformationSchemaTable{
+			TableName:   StGeometryColumnsTableName,
+			TableSchema: stGeometryColumnsSchema,
+			Reader:      stGeometryColumnsRowIter,
+		},
+		StSpatialReferenceSystemsTableName: &InformationSchemaTable{
+			TableName:   StSpatialReferenceSystemsTableName,
+			TableSchema: stSpatialReferenceSystemsSchema,
+			Reader:      stSpatialReferenceSystemsRowIter,
+		},
+		StUnitsOfMeasureTableName: &InformationSchemaTable{
+			TableName:   StUnitsOfMeasureTableName,
+			TableSchema: stUnitsOfMeasureSchema,
+			Reader:      stUnitsOfMeasureRowIter,
+		},
+		TableConstraintsTableName: &InformationSchemaTable{
+			TableName:   TableConstraintsTableName,
+			TableSchema: tableConstraintsSchema,
+			Reader:      tableConstraintsRowIter,
+		},
+		TableConstraintsExtensionsTableName: &InformationSchemaTable{
+			TableName:   TableConstraintsExtensionsTableName,
+			TableSchema: tableConstraintsExtensionsSchema,
+			Reader:      tableConstraintsExtensionsRowIter,
+		},
+		TablePrivilegesTableName: &InformationSchemaTable{
+			TableName:   TablePrivilegesTableName,
+			TableSchema: tablePrivilegesSchema,
+			Reader:      tablePrivilegesRowIter,
+		},
+		TablesTableName: NewTablesTable(),
+		TablesExtensionsTableName: &InformationSchemaTable{
+			TableName:   TablesExtensionsTableName,
+			TableSchema: tablesExtensionsSchema,
+			Reader:      tablesExtensionsRowIter,
+		},
+		TablespacesTableName: &InformationSchemaTable{
+			TableName:   TablespacesTableName,
+			TableSchema: tablespacesSchema,
+			Reader:      emptyRowIter,
+		},
+		TablespacesExtensionsTableName: &InformationSchemaTable{
+			TableName:   TablespacesExtensionsTableName,
+			TableSchema: tablespacesExtensionsSchema,
+			Reader:      emptyRowIter,
+		},
+		TriggersTableName: &InformationSchemaTable{
+			TableName:   TriggersTableName,
+			TableSchema: triggersSchema,
+			Reader:      triggersRowIter,
+		},
+		UserAttributesTableName: &InformationSchemaTable{
+			TableName:   UserAttributesTableName,
+			TableSchema: userAttributesSchema,
+			Reader:      userAttributesRowIter,
+		},
+		UserPrivilegesTableName: &InformationSchemaTable{
+			TableName:   UserPrivilegesTableName,
+			TableSchema: userPrivilegesSchema,
+			Reader:      userPrivilegesRowIter,
+		},
+		ViewRoutineUsageTableName: &InformationSchemaTable{
+			TableName:   ViewRoutineUsageTableName,
+			TableSchema: viewRoutineUsageSchema,
+			Reader:      emptyRowIter,
+		},
+		ViewTableUsageTableName: &InformationSchemaTable{
+			TableName:   ViewTableUsageTableName,
+			TableSchema: viewTableUsageSchema,
+			Reader:      emptyRowIter,
+		},
+		ViewsTableName: NewViewsTable(),
+		InnoDBBufferPageName: &InformationSchemaTable{
+			TableName:   InnoDBBufferPageName,
+			TableSchema: innoDBBufferPageSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBBufferPageLRUName: &InformationSchemaTable{
+			TableName:   InnoDBBufferPageLRUName,
+			TableSchema: innoDBBufferPageLRUSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBBufferPoolStatsName: &InformationSchemaTable{
+			TableName:   InnoDBBufferPoolStatsName,
+			TableSchema: innoDBBufferPoolStatsSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBCachedIndexesName: &InformationSchemaTable{
+			TableName:   InnoDBCachedIndexesName,
+			TableSchema: innoDBCachedIndexesSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBCmpName: &InformationSchemaTable{
+			TableName:   InnoDBCmpName,
+			TableSchema: innoDBCmpSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBCmpResetName: &InformationSchemaTable{
+			TableName:   InnoDBCmpResetName,
+			TableSchema: innoDBCmpResetSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBCmpmemName: &InformationSchemaTable{
+			TableName:   InnoDBCmpmemName,
+			TableSchema: innoDBCmpmemSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBCmpmemResetName: &InformationSchemaTable{
+			TableName:   InnoDBCmpmemResetName,
+			TableSchema: innoDBCmpmemResetSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBCmpPerIndexName: &InformationSchemaTable{
+			TableName:   InnoDBCmpPerIndexName,
+			TableSchema: innoDBCmpPerIndexSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBCmpPerIndexResetName: &InformationSchemaTable{
+			TableName:   InnoDBCmpPerIndexResetName,
+			TableSchema: innoDBCmpPerIndexResetSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBColumnsName: &InformationSchemaTable{
+			TableName:   InnoDBColumnsName,
+			TableSchema: innoDBColumnsSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBDatafilesName: &InformationSchemaTable{
+			TableName:   InnoDBDatafilesName,
+			TableSchema: innoDBDatafilesSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBFieldsName: &InformationSchemaTable{
+			TableName:   InnoDBFieldsName,
+			TableSchema: innoDBFieldsSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBForeignName: &InformationSchemaTable{
+			TableName:   InnoDBForeignName,
+			TableSchema: innoDBForeignSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBForeignColsName: &InformationSchemaTable{
+			TableName:   InnoDBForeignColsName,
+			TableSchema: innoDBForeignColsSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBFtBeingDeletedName: &InformationSchemaTable{
+			TableName:   InnoDBFtBeingDeletedName,
+			TableSchema: innoDBFtBeingDeletedSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBFtConfigName: &InformationSchemaTable{
+			TableName:   InnoDBFtConfigName,
+			TableSchema: innoDBFtConfigSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBFtDefaultStopwordName: &InformationSchemaTable{
+			TableName:   InnoDBFtDefaultStopwordName,
+			TableSchema: innoDBFtDefaultStopwordSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBFtDeletedName: &InformationSchemaTable{
+			TableName:   InnoDBFtDeletedName,
+			TableSchema: innoDBFtDeletedSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBFtIndexCacheName: &InformationSchemaTable{
+			TableName:   InnoDBFtIndexCacheName,
+			TableSchema: innoDBFtIndexCacheSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBFtIndexTableName: &InformationSchemaTable{
+			TableName:   InnoDBFtIndexTableName,
+			TableSchema: innoDBFtIndexTableSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBIndexesName: &InformationSchemaTable{
+			TableName:   InnoDBIndexesName,
+			TableSchema: innoDBIndexesSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBMetricsName: &InformationSchemaTable{
+			TableName:   InnoDBMetricsName,
+			TableSchema: innoDBMetricsSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBSessionTempTablespacesName: &InformationSchemaTable{
+			TableName:   InnoDBSessionTempTablespacesName,
+			TableSchema: innoDBSessionTempTablespacesSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBTablesName: &InformationSchemaTable{
+			TableName:   InnoDBTablesName,
+			TableSchema: innoDBTablesSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBTablespacesName: &InformationSchemaTable{
+			TableName:   InnoDBTablespacesName,
+			TableSchema: innoDBTablespacesSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBTablespacesBriefName: &InformationSchemaTable{
+			TableName:   InnoDBTablespacesBriefName,
+			TableSchema: innoDBTablespacesBriefSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBTablestatsName: &InformationSchemaTable{
+			TableName:   InnoDBTablestatsName,
+			TableSchema: innoDBTablestatsSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBTempTableInfoName: &InformationSchemaTable{
+			TableName:   InnoDBTempTableInfoName,
+			TableSchema: innoDBTempTableSchema,
+			Reader:      innoDBTempTableRowIter,
+		},
+		InnoDBTrxName: &InformationSchemaTable{
+			TableName:   InnoDBTrxName,
+			TableSchema: innoDBTrxSchema,
+			Reader:      emptyRowIter,
+		},
+		InnoDBVirtualName: &InformationSchemaTable{
+			TableName:   InnoDBVirtualName,
+			TableSchema: innoDBVirtualSchema,
+			Reader:      emptyRowIter,
+		},
+	}
+}
+
 // NewInformationSchemaDatabase creates a new INFORMATION_SCHEMA Database.
 func NewInformationSchemaDatabase() Database {
 	isDb := &informationSchemaDatabase{
-		name: InformationSchemaDatabaseName,
-		tables: map[string]Table{
-			AdministrableRoleAuthorizationsTableName: &InformationSchemaTable{
-				TableName:   AdministrableRoleAuthorizationsTableName,
-				TableSchema: administrableRoleAuthorizationsSchema,
-				Reader:      emptyRowIter,
-			},
-			ApplicableRolesTableName: &InformationSchemaTable{
-				TableName:   ApplicableRolesTableName,
-				TableSchema: applicableRolesSchema,
-				Reader:      emptyRowIter,
-			},
-			CharacterSetsTableName: &InformationSchemaTable{
-				TableName:   CharacterSetsTableName,
-				TableSchema: characterSetsSchema,
-				Reader:      characterSetsRowIter,
-			},
-			CheckConstraintsTableName: &InformationSchemaTable{
-				TableName:   CheckConstraintsTableName,
-				TableSchema: checkConstraintsSchema,
-				Reader:      checkConstraintsRowIter,
-			},
-			CollationCharSetApplicabilityTableName: &InformationSchemaTable{
-				TableName:   CollationCharSetApplicabilityTableName,
-				TableSchema: collationCharacterSetApplicabilitySchema,
-				Reader:      collationCharacterSetApplicabilityRowIter,
-			},
-			CollationsTableName: &InformationSchemaTable{
-				TableName:   CollationsTableName,
-				TableSchema: collationsSchema,
-				Reader:      collationsRowIter,
-			},
-			ColumnPrivilegesTableName: &InformationSchemaTable{
-				TableName:   ColumnPrivilegesTableName,
-				TableSchema: columnPrivilegesSchema,
-				Reader:      emptyRowIter,
-			},
-			ColumnStatisticsTableName: &InformationSchemaTable{
-				TableName:   ColumnStatisticsTableName,
-				TableSchema: columnStatisticsSchema,
-				Reader:      columnStatisticsRowIter,
-			},
-			ColumnsTableName: NewColumnsTable(),
-			ColumnsExtensionsTableName: &InformationSchemaTable{
-				TableName:   ColumnsExtensionsTableName,
-				TableSchema: columnsExtensionsSchema,
-				Reader:      columnsExtensionsRowIter,
-			},
-			EnabledRolesTablesName: &InformationSchemaTable{
-				TableName:   EnabledRolesTablesName,
-				TableSchema: enabledRolesSchema,
-				Reader:      emptyRowIter,
-			},
-			EnginesTableName: &InformationSchemaTable{
-				TableName:   EnginesTableName,
-				TableSchema: enginesSchema,
-				Reader:      enginesRowIter,
-			},
-			EventsTableName: &InformationSchemaTable{
-				TableName:   EventsTableName,
-				TableSchema: eventsSchema,
-				Reader:      eventsRowIter,
-			},
-			FilesTableName: &InformationSchemaTable{
-				TableName:   FilesTableName,
-				TableSchema: filesSchema,
-				Reader:      emptyRowIter,
-			},
-			KeyColumnUsageTableName: &InformationSchemaTable{
-				TableName:   KeyColumnUsageTableName,
-				TableSchema: keyColumnUsageSchema,
-				Reader:      keyColumnUsageRowIter,
-			},
-			KeywordsTableName: &InformationSchemaTable{
-				TableName:   KeywordsTableName,
-				TableSchema: keywordsSchema,
-				Reader:      keywordsRowIter,
-			},
-			OptimizerTraceTableName: &InformationSchemaTable{
-				TableName:   OptimizerTraceTableName,
-				TableSchema: optimizerTraceSchema,
-				Reader:      emptyRowIter,
-			},
-			ParametersTableName: &routineTable{
-				name:    ParametersTableName,
-				schema:  parametersSchema,
-				rowIter: parametersRowIter,
-			},
-			PartitionsTableName: &InformationSchemaTable{
-				TableName:   PartitionsTableName,
-				TableSchema: partitionsSchema,
-				Reader:      emptyRowIter,
-			},
-			PluginsTableName: &InformationSchemaTable{
-				TableName:   PluginsTableName,
-				TableSchema: pluginsSchema,
-				Reader:      emptyRowIter,
-			},
-			ProcessListTableName: &InformationSchemaTable{
-				TableName:   ProcessListTableName,
-				TableSchema: processListSchema,
-				Reader:      processListRowIter,
-			},
-			ProfilingTableName: &InformationSchemaTable{
-				TableName:   ProfilingTableName,
-				TableSchema: profilingSchema,
-				Reader:      emptyRowIter,
-			},
-			ReferentialConstraintsTableName: &InformationSchemaTable{
-				TableName:   ReferentialConstraintsTableName,
-				TableSchema: referentialConstraintsSchema,
-				Reader:      referentialConstraintsRowIter,
-			},
-			ResourceGroupsTableName: &InformationSchemaTable{
-				TableName:   ResourceGroupsTableName,
-				TableSchema: resourceGroupsSchema,
-				Reader:      emptyRowIter,
-			},
-			RoleColumnGrantsTableName: &InformationSchemaTable{
-				TableName:   RoleColumnGrantsTableName,
-				TableSchema: roleColumnGrantsSchema,
-				Reader:      emptyRowIter,
-			},
-			RoleRoutineGrantsTableName: &InformationSchemaTable{
-				TableName:   RoleRoutineGrantsTableName,
-				TableSchema: roleRoutineGrantsSchema,
-				Reader:      emptyRowIter,
-			},
-			RoleTableGrantsTableName: &InformationSchemaTable{
-				TableName:   RoleTableGrantsTableName,
-				TableSchema: roleTableGrantsSchema,
-				Reader:      emptyRowIter,
-			},
-			RoutinesTableName: &routineTable{
-				name:    RoutinesTableName,
-				schema:  routinesSchema,
-				rowIter: routinesRowIter,
-			},
-			SchemaPrivilegesTableName: &InformationSchemaTable{
-				TableName:   SchemaPrivilegesTableName,
-				TableSchema: schemaPrivilegesSchema,
-				Reader:      schemaPrivilegesRowIter,
-			},
-			SchemataTableName: NewSchemataTable(),
-			SchemataExtensionsTableName: &InformationSchemaTable{
-				TableName:   SchemataExtensionsTableName,
-				TableSchema: schemataExtensionsSchema,
-				Reader:      schemataExtensionsRowIter,
-			},
-			StGeometryColumnsTableName: &InformationSchemaTable{
-				TableName:   StGeometryColumnsTableName,
-				TableSchema: stGeometryColumnsSchema,
-				Reader:      stGeometryColumnsRowIter,
-			},
-			StSpatialReferenceSystemsTableName: &InformationSchemaTable{
-				TableName:   StSpatialReferenceSystemsTableName,
-				TableSchema: stSpatialReferenceSystemsSchema,
-				Reader:      stSpatialReferenceSystemsRowIter,
-			},
-			StUnitsOfMeasureTableName: &InformationSchemaTable{
-				TableName:   StUnitsOfMeasureTableName,
-				TableSchema: stUnitsOfMeasureSchema,
-				Reader:      stUnitsOfMeasureRowIter,
-			},
-			TableConstraintsTableName: &InformationSchemaTable{
-				TableName:   TableConstraintsTableName,
-				TableSchema: tableConstraintsSchema,
-				Reader:      tableConstraintsRowIter,
-			},
-			TableConstraintsExtensionsTableName: &InformationSchemaTable{
-				TableName:   TableConstraintsExtensionsTableName,
-				TableSchema: tableConstraintsExtensionsSchema,
-				Reader:      tableConstraintsExtensionsRowIter,
-			},
-			TablePrivilegesTableName: &InformationSchemaTable{
-				TableName:   TablePrivilegesTableName,
-				TableSchema: tablePrivilegesSchema,
-				Reader:      tablePrivilegesRowIter,
-			},
-			TablesTableName: &InformationSchemaTable{
-				TableName:   TablesTableName,
-				TableSchema: tablesSchema,
-				Reader:      tablesRowIter,
-			},
-			TablesExtensionsTableName: &InformationSchemaTable{
-				TableName:   TablesExtensionsTableName,
-				TableSchema: tablesExtensionsSchema,
-				Reader:      tablesExtensionsRowIter,
-			},
-			TablespacesTableName: &InformationSchemaTable{
-				TableName:   TablespacesTableName,
-				TableSchema: tablespacesSchema,
-				Reader:      emptyRowIter,
-			},
-			TablespacesExtensionsTableName: &InformationSchemaTable{
-				TableName:   TablespacesExtensionsTableName,
-				TableSchema: tablespacesExtensionsSchema,
-				Reader:      emptyRowIter,
-			},
-			TriggersTableName: &InformationSchemaTable{
-				TableName:   TriggersTableName,
-				TableSchema: triggersSchema,
-				Reader:      triggersRowIter,
-			},
-			UserAttributesTableName: &InformationSchemaTable{
-				TableName:   UserAttributesTableName,
-				TableSchema: userAttributesSchema,
-				Reader:      userAttributesRowIter,
-			},
-			UserPrivilegesTableName: &InformationSchemaTable{
-				TableName:   UserPrivilegesTableName,
-				TableSchema: userPrivilegesSchema,
-				Reader:      userPrivilegesRowIter,
-			},
-			ViewRoutineUsageTableName: &InformationSchemaTable{
-				TableName:   ViewRoutineUsageTableName,
-				TableSchema: viewRoutineUsageSchema,
-				Reader:      emptyRowIter,
-			},
-			ViewTableUsageTableName: &InformationSchemaTable{
-				TableName:   ViewTableUsageTableName,
-				TableSchema: viewTableUsageSchema,
-				Reader:      emptyRowIter,
-			},
-			ViewsTableName: &InformationSchemaTable{
-				TableName:   ViewsTableName,
-				TableSchema: viewsSchema,
-				Reader:      viewsRowIter,
-			},
-			InnoDBBufferPageName: &InformationSchemaTable{
-				TableName:   InnoDBBufferPageName,
-				TableSchema: innoDBBufferPageSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBBufferPageLRUName: &InformationSchemaTable{
-				TableName:   InnoDBBufferPageLRUName,
-				TableSchema: innoDBBufferPageLRUSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBBufferPoolStatsName: &InformationSchemaTable{
-				TableName:   InnoDBBufferPoolStatsName,
-				TableSchema: innoDBBufferPoolStatsSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBCachedIndexesName: &InformationSchemaTable{
-				TableName:   InnoDBCachedIndexesName,
-				TableSchema: innoDBCachedIndexesSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBCmpName: &InformationSchemaTable{
-				TableName:   InnoDBCmpName,
-				TableSchema: innoDBCmpSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBCmpResetName: &InformationSchemaTable{
-				TableName:   InnoDBCmpResetName,
-				TableSchema: innoDBCmpResetSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBCmpmemName: &InformationSchemaTable{
-				TableName:   InnoDBCmpmemName,
-				TableSchema: innoDBCmpmemSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBCmpmemResetName: &InformationSchemaTable{
-				TableName:   InnoDBCmpmemResetName,
-				TableSchema: innoDBCmpmemResetSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBCmpPerIndexName: &InformationSchemaTable{
-				TableName:   InnoDBCmpPerIndexName,
-				TableSchema: innoDBCmpPerIndexSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBCmpPerIndexResetName: &InformationSchemaTable{
-				TableName:   InnoDBCmpPerIndexResetName,
-				TableSchema: innoDBCmpPerIndexResetSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBColumnsName: &InformationSchemaTable{
-				TableName:   InnoDBColumnsName,
-				TableSchema: innoDBColumnsSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBDatafilesName: &InformationSchemaTable{
-				TableName:   InnoDBDatafilesName,
-				TableSchema: innoDBDatafilesSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBFieldsName: &InformationSchemaTable{
-				TableName:   InnoDBFieldsName,
-				TableSchema: innoDBFieldsSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBForeignName: &InformationSchemaTable{
-				TableName:   InnoDBForeignName,
-				TableSchema: innoDBForeignSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBForeignColsName: &InformationSchemaTable{
-				TableName:   InnoDBForeignColsName,
-				TableSchema: innoDBForeignColsSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBFtBeingDeletedName: &InformationSchemaTable{
-				TableName:   InnoDBFtBeingDeletedName,
-				TableSchema: innoDBFtBeingDeletedSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBFtConfigName: &InformationSchemaTable{
-				TableName:   InnoDBFtConfigName,
-				TableSchema: innoDBFtConfigSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBFtDefaultStopwordName: &InformationSchemaTable{
-				TableName:   InnoDBFtDefaultStopwordName,
-				TableSchema: innoDBFtDefaultStopwordSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBFtDeletedName: &InformationSchemaTable{
-				TableName:   InnoDBFtDeletedName,
-				TableSchema: innoDBFtDeletedSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBFtIndexCacheName: &InformationSchemaTable{
-				TableName:   InnoDBFtIndexCacheName,
-				TableSchema: innoDBFtIndexCacheSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBFtIndexTableName: &InformationSchemaTable{
-				TableName:   InnoDBFtIndexTableName,
-				TableSchema: innoDBFtIndexTableSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBIndexesName: &InformationSchemaTable{
-				TableName:   InnoDBIndexesName,
-				TableSchema: innoDBIndexesSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBMetricsName: &InformationSchemaTable{
-				TableName:   InnoDBMetricsName,
-				TableSchema: innoDBMetricsSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBSessionTempTablespacesName: &InformationSchemaTable{
-				TableName:   InnoDBSessionTempTablespacesName,
-				TableSchema: innoDBSessionTempTablespacesSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBTablesName: &InformationSchemaTable{
-				TableName:   InnoDBTablesName,
-				TableSchema: innoDBTablesSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBTablespacesName: &InformationSchemaTable{
-				TableName:   InnoDBTablespacesName,
-				TableSchema: innoDBTablespacesSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBTablespacesBriefName: &InformationSchemaTable{
-				TableName:   InnoDBTablespacesBriefName,
-				TableSchema: innoDBTablespacesBriefSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBTablestatsName: &InformationSchemaTable{
-				TableName:   InnoDBTablestatsName,
-				TableSchema: innoDBTablestatsSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBTempTableInfoName: &InformationSchemaTable{
-				TableName:   InnoDBTempTableInfoName,
-				TableSchema: innoDBTempTableSchema,
-				Reader:      innoDBTempTableRowIter,
-			},
-			InnoDBTrxName: &InformationSchemaTable{
-				TableName:   InnoDBTrxName,
-				TableSchema: innoDBTrxSchema,
-				Reader:      emptyRowIter,
-			},
-			InnoDBVirtualName: &InformationSchemaTable{
-				TableName:   InnoDBVirtualName,
-				TableSchema: innoDBVirtualSchema,
-				Reader:      emptyRowIter,
-			},
-		},
+		name:   InformationSchemaDatabaseName,
+		tables: GetInformationSchemaTables(),
 	}
 
 	isDb.tables[StatisticsTableName] = NewDefaultStats()
+
+	// It's for Doltgres-only tables.
+	// It should be empty map for Dolt.
+	for tn, tbl := range NewInformationSchemaTablesToAdd {
+		isDb.tables[tn] = tbl
+	}
 
 	return isDb
 }
@@ -2832,12 +2574,12 @@ func (c *InformationSchemaTable) Database() string {
 }
 
 // Schema implements the sql.Table interface.
-func (t *InformationSchemaTable) Schema() Schema {
+func (t *InformationSchemaTable) Schema(ctx *Context) Schema {
 	return t.TableSchema
 }
 
-func (t *InformationSchemaTable) DataLength(_ *Context) (uint64, error) {
-	return uint64(len(t.Schema()) * int(types.Text.MaxByteLength()) * defaultInfoSchemaRowCount), nil
+func (t *InformationSchemaTable) DataLength(ctx *Context) (uint64, error) {
+	return uint64(len(t.Schema(ctx)) * int(types.Text.MaxByteLength()) * defaultInfoSchemaRowCount), nil
 }
 
 func (t *InformationSchemaTable) RowCount(ctx *Context) (uint64, bool, error) {
@@ -2875,7 +2617,10 @@ func (t *InformationSchemaTable) PartitionRows(ctx *Context, partition Partition
 
 // PartitionCount implements the sql.PartitionCounter interface.
 func (t *InformationSchemaTable) String() string {
-	return printTable(t.Name(), t.Schema())
+	// To maintain compatibility with fmt.Stringer we have to use an empty context, but this will fail in any case that
+	// requires a context to determine a string (such as an integrator using the context to contain type information).
+	ctx := NewEmptyContext()
+	return printTable(t.Name(), t.Schema(ctx))
 }
 
 // Key implements Partition  interface
@@ -2938,10 +2683,10 @@ func partitionKey(tableName string) []byte {
 	return []byte(InformationSchemaDatabaseName + "." + tableName)
 }
 
-func getColumnNamesFromIndex(idx Index, table Table) []string {
+func getColumnNamesFromIndex(ctx *Context, idx Index, table Table) []string {
 	var indexCols []string
 	for _, expr := range idx.Expressions() {
-		col := plan.GetColumnFromIndexExpr(expr, table)
+		col := plan.GetColumnFromIndexExpr(ctx, expr, table)
 		if col != nil {
 			indexCols = append(indexCols, col.Name)
 		}

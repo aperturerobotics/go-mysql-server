@@ -25,7 +25,6 @@ import (
 	"github.com/dolthub/vitess/go/mysql"
 	"github.com/sirupsen/logrus"
 
-	"github.com/dolthub/go-mysql-server/internal/similartext"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/fulltext"
 	"github.com/dolthub/go-mysql-server/sql/mysql_db"
@@ -63,7 +62,6 @@ func (b *BaseBuilder) buildDropTrigger(ctx *sql.Context, n *plan.DropTrigger, ro
 func (b *BaseBuilder) buildLoadData(ctx *sql.Context, n *plan.LoadData, row sql.Row) (sql.RowIter, error) {
 	var reader io.ReadCloser
 	var err error
-
 	if n.Local {
 		_, localInfile, ok := sql.SystemVariables.GetGlobal("local_infile")
 		if !ok {
@@ -95,41 +93,39 @@ func (b *BaseBuilder) buildLoadData(ctx *sql.Context, n *plan.LoadData, row sql.
 	}
 
 	scanner := bufio.NewScanner(reader)
-
-	// Set the split function for lines.
+	scanner.Buffer(nil, int(types.LongTextBlobMax))
 	scanner.Split(n.SplitLines)
 
-	// Skip through the lines that need to be ignored.
-	for n.IgnoreNum > 0 && scanner.Scan() {
-		scanner.Text()
-		n.IgnoreNum--
-	}
-
-	if scanner.Err() != nil {
-		reader.Close()
-		return nil, scanner.Err()
-	}
-
-	sch := n.Schema()
+	sch := n.Schema(ctx)
 	source := sch[0].Source // Schema will always have at least one column
-	columnNames := n.ColumnNames
-	if len(columnNames) == 0 {
-		columnNames = make([]string, len(sch))
+	colNames := n.ColNames
+	if len(colNames) == 0 {
+		colNames = make([]string, len(sch))
 		for i, col := range sch {
-			columnNames[i] = col.Name
+			colNames[i] = col.Name
 		}
 	}
-	fieldToColumnMap := make([]int, len(columnNames))
-	for fieldIndex, columnName := range columnNames {
-		fieldToColumnMap[fieldIndex] = sch.IndexOf(columnName, source)
+
+	fieldToColMap := make([]int, len(n.UserVars))
+	for fieldIdx, colIdx := 0, 0; fieldIdx < len(n.UserVars); fieldIdx++ {
+		if n.UserVars[fieldIdx] != nil || colIdx >= len(colNames) {
+			fieldToColMap[fieldIdx] = -1
+			continue
+		}
+		fieldToColMap[fieldIdx] = sch.IndexOf(colNames[colIdx], source)
+		colIdx++
 	}
 
 	return &loadDataIter{
-		destSch:          n.DestSch,
-		reader:           reader,
-		scanner:          scanner,
-		columnCount:      len(n.ColumnNames), // Needs to be the original column count
-		fieldToColumnMap: fieldToColumnMap,
+		destSch:       n.DestSch,
+		reader:        reader,
+		scanner:       scanner,
+		colCount:      len(n.ColNames), // Needs to be the original column count
+		fieldToColMap: fieldToColMap,
+		setExprs:      n.SetExprs,
+		userVars:      n.UserVars,
+
+		ignoreNum: n.IgnoreNum,
 
 		fieldsTerminatedBy:  n.FieldsTerminatedBy,
 		fieldsEnclosedBy:    n.FieldsEnclosedBy,
@@ -167,19 +163,32 @@ func (b *BaseBuilder) buildCreateView(ctx *sql.Context, n *plan.CreateView, row 
 		return nil, err
 	}
 	for _, name := range names {
-		if strings.ToLower(name) == strings.ToLower(n.Name) {
-			return nil, sql.ErrTableAlreadyExists.New(n)
+		if !strings.EqualFold(name, n.Name) {
+			continue
 		}
+		if n.IfNotExists {
+			return rowIterWithOkResultWithZeroRowsAffected(), nil
+		}
+		return nil, sql.ErrTableAlreadyExists.New(n.Name)
 	}
 
 	// TODO: isUpdatable should be defined at CREATE VIEW time
 	// isUpdatable := GetIsUpdatableFromCreateView(cv)
 	creator, ok := n.Database().(sql.ViewDatabase)
-	if ok {
-		return rowIterWithOkResultWithZeroRowsAffected(), creator.CreateView(ctx, n.Name, n.Definition.TextDefinition, n.CreateViewString)
-	} else {
-		return rowIterWithOkResultWithZeroRowsAffected(), registry.Register(n.Database().Name(), n.View())
+	if !ok {
+		err = registry.Register(n.Database().Name(), n.View())
+		if err != nil {
+			return nil, err
+		}
+		return rowIterWithOkResultWithZeroRowsAffected(), nil
 	}
+	err = creator.CreateView(ctx, n.Name, n.Definition.TextDefinition, n.CreateViewString)
+	if err != nil {
+		if !sql.ErrExistingView.Is(err) || !n.IfNotExists {
+			return nil, err
+		}
+	}
+	return rowIterWithOkResultWithZeroRowsAffected(), nil
 }
 
 func (b *BaseBuilder) buildCreateCheck(ctx *sql.Context, n *plan.CreateCheck, row sql.Row) (sql.RowIter, error) {
@@ -207,7 +216,7 @@ func (b *BaseBuilder) buildAlterDefaultSet(ctx *sql.Context, n *plan.AlterDefaul
 	}
 	loweredColName := strings.ToLower(n.ColumnName)
 	var col *sql.Column
-	for _, schCol := range alterable.Schema() {
+	for _, schCol := range alterable.Schema(ctx) {
 		if strings.ToLower(schCol.Name) == loweredColName {
 			col = schCol
 			break
@@ -230,10 +239,51 @@ func (b *BaseBuilder) buildDropCheck(ctx *sql.Context, n *plan.DropCheck, row sq
 }
 
 func (b *BaseBuilder) buildRenameTable(ctx *sql.Context, n *plan.RenameTable, row sql.Row) (sql.RowIter, error) {
-	return n.RowIter(ctx, row)
+	if b.EngineOverrides.Hooks.RenameTable.PreSQLExecution != nil {
+		nn, err := b.EngineOverrides.Hooks.RenameTable.PreSQLExecution(ctx, b.Runner, n)
+		if err != nil {
+			return nil, err
+		}
+		n = nn.(*plan.RenameTable)
+	}
+
+	renamer, _ := n.Db.(sql.TableRenamer)
+	viewDb, _ := n.Db.(sql.ViewDatabase)
+	viewRegistry := ctx.GetViewRegistry()
+
+	for i, oldName := range n.OldNames {
+		if tbl, exists := n.TableExists(ctx, oldName); exists {
+			err := n.RenameTable(ctx, renamer, tbl, oldName, n.NewNames[i])
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			success, err := n.RenameView(ctx, viewDb, viewRegistry, oldName, n.NewNames[i])
+			if err != nil {
+				return nil, err
+			} else if !success {
+				return nil, sql.ErrTableNotFound.New(oldName)
+			}
+		}
+	}
+	if b.EngineOverrides.Hooks.RenameTable.PostSQLExecution != nil {
+		if err := b.EngineOverrides.Hooks.RenameTable.PostSQLExecution(ctx, b.Runner, n); err != nil {
+			return nil, err
+		}
+	}
+
+	return sql.RowsToRowIter(sql.NewRow(types.NewOkResult(0))), nil
 }
 
 func (b *BaseBuilder) buildModifyColumn(ctx *sql.Context, n *plan.ModifyColumn, row sql.Row) (sql.RowIter, error) {
+	if b.EngineOverrides.Hooks.TableModifyColumn.PreSQLExecution != nil {
+		nn, err := b.EngineOverrides.Hooks.TableModifyColumn.PreSQLExecution(ctx, b.Runner, n)
+		if err != nil {
+			return nil, err
+		}
+		n = nn.(*plan.ModifyColumn)
+	}
+
 	tbl, err := getTableFromDatabase(ctx, n.Database(), n.Table)
 	if err != nil {
 		return nil, err
@@ -244,7 +294,7 @@ func (b *BaseBuilder) buildModifyColumn(ctx *sql.Context, n *plan.ModifyColumn, 
 		return nil, sql.ErrAlterTableNotSupported.New(tbl.Name())
 	}
 
-	if err := n.ValidateDefaultPosition(n.TargetSchema()); err != nil {
+	if err := n.ValidateDefaultPosition(ctx, n.TargetSchema()); err != nil {
 		return nil, err
 	}
 	// MySQL assigns the column's type (which contains the collation) at column creation/modification. If a column has
@@ -269,6 +319,8 @@ func (b *BaseBuilder) buildModifyColumn(ctx *sql.Context, n *plan.ModifyColumn, 
 	return &modifyColumnIter{
 		m:         n,
 		alterable: alterable,
+		overrides: b.EngineOverrides,
+		runner:    b.Runner,
 	}, nil
 }
 
@@ -298,14 +350,14 @@ func (b *BaseBuilder) buildCreateIndex(ctx *sql.Context, n *plan.CreateIndex, ro
 		return nil, plan.ErrInvalidIndexDriver.New(n.Driver)
 	}
 
-	columns, exprs, err := GetColumnsAndPrepareExpressions(n.Exprs)
+	columns, exprs, err := GetColumnsAndPrepareExpressions(ctx, n.Exprs)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, e := range exprs {
-		if types.IsBlobType(e.Type()) || types.IsJSON(e.Type()) {
-			return nil, plan.ErrExprTypeNotIndexable.New(e, e.Type())
+		if types.IsBlobType(e.Type(ctx)) || types.IsJSON(e.Type(ctx)) {
+			return nil, plan.ErrExprTypeNotIndexable.New(e, e.Type(ctx))
 		}
 	}
 
@@ -387,6 +439,18 @@ func (b *BaseBuilder) buildCreateDB(ctx *sql.Context, n *plan.CreateDB, row sql.
 	}
 	err := n.Catalog.CreateDatabase(ctx, n.DbName, collation)
 	if err != nil {
+		// Handle the race condition: another session may have created the database
+		// between our HasDatabase check and the CreateDatabase call.
+		if n.IfNotExists && sql.ErrDatabaseExists.Is(err) {
+			if ctx != nil && ctx.Session != nil {
+				ctx.Session.Warn(&sql.Warning{
+					Level:   "Note",
+					Code:    mysql.ERDbCreateExists,
+					Message: fmt.Sprintf("Can't create database %s; database exists ", n.DbName),
+				})
+			}
+			return sql.RowsToRowIter(rows...), nil
+		}
 		return nil, err
 	}
 
@@ -395,8 +459,18 @@ func (b *BaseBuilder) buildCreateDB(ctx *sql.Context, n *plan.CreateDB, row sql.
 
 func (b *BaseBuilder) buildCreateSchema(ctx *sql.Context, n *plan.CreateSchema, row sql.Row) (sql.RowIter, error) {
 	database := ctx.GetCurrentDatabase()
+
+	// If no database is selected, first try to fall back to CREATE DATABASE
+	// since CREATE SCHEMA is a synonym for CREATE DATABASE in MySQL
+	// https://dev.mysql.com/doc/refman/8.4/en/create-database.html
+	// TODO: For PostgreSQL, return an error if no database is selected (should be impossible)
 	if database == "" {
-		return nil, sql.ErrNoDatabaseSelected.New()
+		return b.buildCreateDB(ctx, &plan.CreateDB{
+			Catalog:     n.Catalog,
+			DbName:      n.DbName,
+			IfNotExists: n.IfNotExists,
+			Collation:   n.Collation,
+		}, row)
 	}
 
 	db, err := n.Catalog.Database(ctx, database)
@@ -404,8 +478,12 @@ func (b *BaseBuilder) buildCreateSchema(ctx *sql.Context, n *plan.CreateSchema, 
 		return nil, err
 	}
 
+	if pdb, ok := db.(mysql_db.PrivilegedDatabase); ok {
+		db = pdb.Unwrap()
+	}
+
 	sdb, ok := db.(sql.SchemaDatabase)
-	if !ok {
+	if !ok || !sdb.SupportsDatabaseSchemas() {
 		// If schemas aren't supported, treat CREATE SCHEMA as a synonym for CREATE DATABASE (as is the case in MySQL)
 		return b.buildCreateDB(ctx, &plan.CreateDB{
 			Catalog:     n.Catalog,
@@ -457,7 +535,7 @@ func (b *BaseBuilder) buildAlterDefaultDrop(ctx *sql.Context, n *plan.AlterDefau
 	alterable, ok := table.(sql.AlterableTable)
 	loweredColName := strings.ToLower(n.ColumnName)
 	var col *sql.Column
-	for _, schCol := range alterable.Schema() {
+	for _, schCol := range alterable.Schema(ctx) {
 		if strings.ToLower(schCol.Name) == loweredColName {
 			col = schCol
 			break
@@ -496,7 +574,7 @@ func (b *BaseBuilder) buildDropView(ctx *sql.Context, n *plan.DropView, row sql.
 		}
 	}
 
-	return sql.RowsToRowIter(), nil
+	return rowIterWithOkResultWithZeroRowsAffected(), nil
 }
 
 func (b *BaseBuilder) buildAlterUser(ctx *sql.Context, a *plan.AlterUser, _ sql.Row) (sql.RowIter, error) {
@@ -525,20 +603,27 @@ func (b *BaseBuilder) buildAlterUser(ctx *sql.Context, a *plan.AlterUser, _ sql.
 		return nil, sql.ErrUserAlterFailure.New(user.UserName.String("'"))
 	}
 
-	plugin := "mysql_native_password"
-	password := ""
+	// Default the auth plugin and authorization string to the currently configured values.
+	// We can only change the auth info if a new password was specified, otherwise, we don't
+	// have a plaintext password to process into an authorization string for the auth plugin.
+	plugin := previousUserEntry.Plugin
+	authString := previousUserEntry.AuthString
 	if user.Auth1 != nil {
 		plugin = user.Auth1.Plugin()
-		password = user.Auth1.Password()
+		var err error
+		authString, err = user.Auth1.AuthString()
+		if err != nil {
+			return nil, err
+		}
 	}
-	if plugin != "mysql_native_password" {
+	if plugin != string(mysql.MysqlNativePassword) && plugin != string(mysql.CachingSha2Password) {
 		if err := mysqlDb.VerifyPlugin(plugin); err != nil {
 			return nil, sql.ErrUserAlterFailure.New(err)
 		}
 	}
 
 	previousUserEntry.Plugin = plugin
-	previousUserEntry.Password = password
+	previousUserEntry.AuthString = authString
 	previousUserEntry.PasswordLastChanged = time.Now().UTC()
 	editor.PutUser(previousUserEntry)
 
@@ -584,13 +669,17 @@ func (b *BaseBuilder) buildCreateUser(ctx *sql.Context, n *plan.CreateUser, _ sq
 			return nil, sql.ErrUserHostTooLong.New(user.UserName.Host)
 		}
 
-		plugin := "mysql_native_password"
-		password := ""
+		plugin := string(mysql_db.DefaultAuthMethod)
+		authString := ""
 		if user.Auth1 != nil {
 			plugin = user.Auth1.Plugin()
-			password = user.Auth1.Password()
+			var err error
+			authString, err = user.Auth1.AuthString()
+			if err != nil {
+				return nil, err
+			}
 		}
-		if plugin != "mysql_native_password" {
+		if plugin != string(mysql.MysqlNativePassword) && plugin != string(mysql.CachingSha2Password) {
 			if err := mysqlDb.VerifyPlugin(plugin); err != nil {
 				return nil, sql.ErrUserCreationFailure.New(err)
 			}
@@ -598,23 +687,51 @@ func (b *BaseBuilder) buildCreateUser(ctx *sql.Context, n *plan.CreateUser, _ sq
 
 		// TODO: attributes should probably not be nil, but setting it to &n.Attribute causes unexpected behavior
 		// TODO: validate all of the data
+		sslType, sslCipher, x509Issuer, x509Subject := parseTlsOptions(n.TLSOptions)
 		editor.PutUser(&mysql_db.User{
 			User:                user.UserName.Name,
 			Host:                user.UserName.Host,
 			PrivilegeSet:        mysql_db.NewPrivilegeSet(),
 			Plugin:              plugin,
-			Password:            password,
+			AuthString:          authString,
 			PasswordLastChanged: time.Now().UTC(),
 			Locked:              false,
 			Attributes:          nil,
 			IsRole:              false,
 			Identity:            user.Identity,
+			SslType:             sslType,
+			X509Issuer:          x509Issuer,
+			X509Subject:         x509Subject,
+			SslCipher:           sslCipher,
 		})
 	}
 	if err := mysqlDb.Persist(ctx, editor); err != nil {
 		return nil, err
 	}
 	return rowIterWithOkResultWithZeroRowsAffected(), nil
+}
+
+// parseTlsOptions examples |tlsOptions| and returns the sslType, sslCipher, x509Issuer, and x509Subject values. If |tlsOptions| is nil,
+// then all returned values are empty strings. All returned values are the values MySQL shows in the mysql.user system table, for the
+// columns with the same names.
+func parseTlsOptions(tlsOptions *plan.TLSOptions) (sslType string, sslCipher string, x509Issuer string, x509Subject string) {
+	if tlsOptions == nil {
+		return
+	}
+
+	if tlsOptions.X509 {
+		sslType = "X509"
+	} else if tlsOptions.SSL {
+		sslType = "ANY"
+	}
+	if tlsOptions.Cipher != "" || tlsOptions.Subject != "" || tlsOptions.Issuer != "" {
+		sslType = "SPECIFIED"
+	}
+
+	x509Issuer = tlsOptions.Issuer
+	x509Subject = tlsOptions.Subject
+	sslCipher = tlsOptions.Cipher
+	return
 }
 
 func (b *BaseBuilder) buildAlterPK(ctx *sql.Context, n *plan.AlterPK, row sql.Row) (sql.RowIter, error) {
@@ -636,12 +753,12 @@ func (b *BaseBuilder) buildAlterPK(ctx *sql.Context, n *plan.AlterPK, row sql.Ro
 
 	switch n.Action {
 	case plan.PrimaryKeyAction_Create:
-		if plan.HasPrimaryKeys(pkAlterable) {
+		if plan.HasPrimaryKeys(ctx, pkAlterable) {
 			return sql.RowsToRowIter(), sql.ErrMultiplePrimaryKeysDefined.New()
 		}
 
 		for _, c := range n.Columns {
-			if !pkAlterable.Schema().Contains(c.Name, pkAlterable.Name()) {
+			if !pkAlterable.Schema(ctx).Contains(c.Name, pkAlterable.Name()) {
 				return sql.RowsToRowIter(), sql.ErrKeyColumnDoesNotExist.New(c.Name)
 			}
 		}
@@ -669,60 +786,17 @@ func (b *BaseBuilder) buildDropIndex(ctx *sql.Context, n *plan.DropIndex, row sq
 		return nil, err
 	}
 
-	nn, ok := n.Table.(sql.Nameable)
+	tableNode, ok := n.Table.(sql.TableNode)
 	if !ok {
-		return nil, plan.ErrTableNotNameable.New()
+		return nil, fmt.Errorf("expected sql.TableNode, but found: %T", n.Table)
 	}
 
-	table, ok, err := db.GetTableInsensitive(ctx, nn.Name())
-
+	err = b.executeAlterIndex(ctx, plan.NewAlterDropIndex(db, tableNode, false, n.Name))
 	if err != nil {
 		return nil, err
 	}
 
-	if !ok {
-		tableNames, err := db.GetTableNames(ctx)
-
-		if err != nil {
-			return nil, err
-		}
-
-		similar := similartext.Find(tableNames, nn.Name())
-		return nil, sql.ErrTableNotFound.New(nn.Name() + similar)
-	}
-
-	index := ctx.GetIndexRegistry().Index(db.Name(), n.Name)
-	if index == nil {
-		return nil, plan.ErrIndexNotFound.New(n.Name, nn.Name(), db.Name())
-	}
-	ctx.GetIndexRegistry().ReleaseIndex(index)
-
-	if !ctx.GetIndexRegistry().CanRemoveIndex(index) {
-		return nil, plan.ErrIndexNotAvailable.New(n.Name)
-	}
-
-	done, err := ctx.GetIndexRegistry().DeleteIndex(db.Name(), n.Name, true)
-	if err != nil {
-		return nil, err
-	}
-
-	driver := ctx.GetIndexRegistry().IndexDriver(index.Driver())
-	if driver == nil {
-		return nil, plan.ErrInvalidIndexDriver.New(index.Driver())
-	}
-
-	<-done
-
-	partitions, err := table.Partitions(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := driver.Delete(index, partitions); err != nil {
-		return nil, err
-	}
-
-	return sql.RowsToRowIter(), nil
+	return rowIterWithOkResultWithZeroRowsAffected(), nil
 }
 
 func (b *BaseBuilder) buildDropProcedure(ctx *sql.Context, n *plan.DropProcedure, row sql.Row) (sql.RowIter, error) {
@@ -762,12 +836,25 @@ func (b *BaseBuilder) buildDropDB(ctx *sql.Context, n *plan.DropDB, row sql.Row)
 	}
 
 	// make sure to notify the EventSchedulerStatus before dropping the database
-	if n.EventScheduler != nil {
-		n.EventScheduler.RemoveSchemaEvents(n.DbName)
+	if n.Scheduler != nil {
+		n.Scheduler.RemoveSchemaEvents(n.DbName)
 	}
 
 	err := n.Catalog.RemoveDatabase(ctx, n.DbName)
 	if err != nil {
+		// Handle the race condition: another session may have dropped the database
+		// between our HasDatabase check and the RemoveDatabase call.
+		if n.IfExists && sql.ErrDatabaseNotFound.Is(err) {
+			if ctx != nil && ctx.Session != nil {
+				ctx.Session.Warn(&sql.Warning{
+					Level:   "Note",
+					Code:    mysql.ERDbDropExists,
+					Message: fmt.Sprintf("Can't drop database %s; database doesn't exist ", n.DbName),
+				})
+			}
+			rows := []sql.Row{{types.OkResult{RowsAffected: 0}}}
+			return sql.RowsToRowIter(rows...), nil
+		}
 		return nil, err
 	}
 
@@ -777,11 +864,81 @@ func (b *BaseBuilder) buildDropDB(ctx *sql.Context, n *plan.DropDB, row sql.Row)
 	}
 
 	rows := []sql.Row{{types.OkResult{RowsAffected: 1}}}
+	return sql.RowsToRowIter(rows...), nil
+}
+
+func (b *BaseBuilder) buildDropSchema(ctx *sql.Context, n *plan.DropSchema, row sql.Row) (sql.RowIter, error) {
+	database := ctx.GetCurrentDatabase()
+
+	// If no database is selected, first try to fall back to CREATE DATABASE
+	// since CREATE SCHEMA is a synonym for CREATE DATABASE in MySQL
+	// https://dev.mysql.com/doc/refman/8.4/en/create-database.html
+	// TODO: For PostgreSQL, return an error if no database is selected (should be impossible)
+	if database == "" {
+		return b.buildDropDB(ctx, &plan.DropDB{
+			Catalog:  n.Catalog,
+			DbName:   n.DbName,
+			IfExists: n.IfExists,
+		}, row)
+	}
+
+	db, err := n.Catalog.Database(ctx, database)
+	if err != nil {
+		return nil, err
+	}
+
+	if pdb, ok := db.(mysql_db.PrivilegedDatabase); ok {
+		db = pdb.Unwrap()
+	}
+
+	sdb, ok := db.(sql.SchemaDatabase)
+	if !ok || !sdb.SupportsDatabaseSchemas() {
+		// If schemas aren't supported, treat DROP SCHEMA as a synonym for DROP DATABASE (as is the case in MySQL)
+		return b.buildDropDB(ctx, &plan.DropDB{
+			Catalog:  n.Catalog,
+			DbName:   n.DbName,
+			IfExists: n.IfExists,
+		}, row)
+	}
+
+	_, exists, err := sdb.GetSchema(ctx, n.DbName)
+	if err != nil {
+		return nil, err
+	}
+
+	rows := []sql.Row{{types.OkResult{RowsAffected: 1}}}
+
+	if !exists {
+		if n.IfExists && ctx != nil && ctx.Session != nil {
+			ctx.Session.Warn(&sql.Warning{
+				Level:   "Note",
+				Code:    mysql.ERDbCreateExists,
+				Message: fmt.Sprintf("Can't drop schema %s; schema does not exist", n.DbName),
+			})
+
+			return sql.RowsToRowIter(rows...), nil
+		} else {
+			return nil, sql.ErrDatabaseSchemaNotFound.New(n.DbName)
+		}
+	}
+
+	err = sdb.DropSchema(ctx, n.DbName)
+	if err != nil {
+		return nil, err
+	}
 
 	return sql.RowsToRowIter(rows...), nil
 }
 
 func (b *BaseBuilder) buildRenameColumn(ctx *sql.Context, n *plan.RenameColumn, row sql.Row) (sql.RowIter, error) {
+	if b.EngineOverrides.Hooks.TableRenameColumn.PreSQLExecution != nil {
+		nn, err := b.EngineOverrides.Hooks.TableRenameColumn.PreSQLExecution(ctx, b.Runner, n)
+		if err != nil {
+			return nil, err
+		}
+		n = nn.(*plan.RenameColumn)
+	}
+
 	tbl, err := getTableFromDatabase(ctx, n.Database(), n.Table)
 	if err != nil {
 		return nil, err
@@ -822,11 +979,26 @@ func (b *BaseBuilder) buildRenameColumn(ctx *sql.Context, n *plan.RenameColumn, 
 			}
 		}
 	}
+	if err = alterable.ModifyColumn(ctx, n.ColumnName, col, nil); err != nil {
+		return nil, err
+	}
+	if b.EngineOverrides.Hooks.TableRenameColumn.PostSQLExecution != nil {
+		if err = b.EngineOverrides.Hooks.TableRenameColumn.PostSQLExecution(ctx, b.Runner, n); err != nil {
+			return nil, err
+		}
+	}
 
-	return rowIterWithOkResultWithZeroRowsAffected(), alterable.ModifyColumn(ctx, n.ColumnName, col, nil)
+	return rowIterWithOkResultWithZeroRowsAffected(), nil
 }
 
 func (b *BaseBuilder) buildAddColumn(ctx *sql.Context, n *plan.AddColumn, row sql.Row) (sql.RowIter, error) {
+	if b.EngineOverrides.Hooks.TableAddColumn.PreSQLExecution != nil {
+		nn, err := b.EngineOverrides.Hooks.TableAddColumn.PreSQLExecution(ctx, b.Runner, n)
+		if err != nil {
+			return nil, err
+		}
+		n = nn.(*plan.AddColumn)
+	}
 	table, err := getTableFromDatabase(ctx, n.Database(), n.Table)
 	if err != nil {
 		return nil, err
@@ -839,14 +1011,14 @@ func (b *BaseBuilder) buildAddColumn(ctx *sql.Context, n *plan.AddColumn, row sq
 
 	tbl := alterable.(sql.Table)
 	tblSch := n.TargetSchema()
-	if n.Order() != nil && !n.Order().First {
-		idx := tblSch.IndexOf(n.Order().AfterColumn, tbl.Name())
+	if n.Order(ctx) != nil && !n.Order(ctx).First {
+		idx := tblSch.IndexOf(n.Order(ctx).AfterColumn, tbl.Name())
 		if idx < 0 {
-			return nil, sql.ErrTableColumnNotFound.New(tbl.Name(), n.Order().AfterColumn)
+			return nil, sql.ErrTableColumnNotFound.New(tbl.Name(), n.Order(ctx).AfterColumn)
 		}
 	}
 
-	if err := n.ValidateDefaultPosition(tblSch); err != nil {
+	if err := n.ValidateDefaultPosition(ctx, tblSch); err != nil {
 		return nil, err
 	}
 	// MySQL assigns the column's type (which contains the collation) at column creation/modification. If a column has
@@ -904,6 +1076,13 @@ func (b *BaseBuilder) buildAlterDB(ctx *sql.Context, n *plan.AlterDB, row sql.Ro
 
 func (b *BaseBuilder) buildCreateTable(ctx *sql.Context, n *plan.CreateTable, row sql.Row) (sql.RowIter, error) {
 	var err error
+	if b.EngineOverrides.Hooks.CreateTable.PreSQLExecution != nil {
+		nn, err := b.EngineOverrides.Hooks.CreateTable.PreSQLExecution(ctx, b.Runner, n)
+		if err != nil {
+			return sql.RowsToRowIter(), err
+		}
+		n = nn.(*plan.CreateTable)
+	}
 
 	// If it's set to Invalid, then no collation has been explicitly defined
 	if n.Collation == sql.Collation_Unspecified {
@@ -919,7 +1098,7 @@ func (b *BaseBuilder) buildCreateTable(ctx *sql.Context, n *plan.CreateTable, ro
 		}
 	}
 
-	err = n.ValidateDefaultPosition()
+	err = n.ValidateDefaultPosition(ctx)
 	if err != nil {
 		return sql.RowsToRowIter(), err
 	}
@@ -997,8 +1176,8 @@ func (b *BaseBuilder) buildCreateTable(ctx *sql.Context, n *plan.CreateTable, ro
 		}
 	}
 
-	//TODO: in the event that foreign keys or indexes aren't supported, you'll be left with a created table and no foreign keys/indexes
-	//this also means that if a foreign key or index fails, you'll only have what was declared up to the failure
+	// TODO: in the event that foreign keys or indexes aren't supported, you'll be left with a created table and no foreign keys/indexes
+	// this also means that if a foreign key or index fails, you'll only have what was declared up to the failure
 	tableNode, ok, err := n.Db.GetTableInsensitive(ctx, n.Name())
 	if err != nil {
 		return sql.RowsToRowIter(), err
@@ -1021,7 +1200,7 @@ func (b *BaseBuilder) buildCreateTable(ctx *sql.Context, n *plan.CreateTable, ro
 			}
 
 			// No-op if the table doesn't already have an auto increment column.
-			if autoTbl.Schema().HasAutoIncrement() {
+			if autoTbl.Schema(ctx).HasAutoIncrement() {
 				setter := autoTbl.AutoIncrementSetter(ctx)
 				err = setter.SetAutoIncrementValue(ctx, aiVal)
 				if err != nil {
@@ -1057,9 +1236,15 @@ func (b *BaseBuilder) buildCreateTable(ctx *sql.Context, n *plan.CreateTable, ro
 	}
 
 	if len(n.Checks()) > 0 {
-		err = n.CreateChecks(ctx, tableNode)
+		err = n.CreateChecks(ctx, tableNode, b.schemaFormatter)
 		if err != nil {
 			return sql.RowsToRowIter(), err
+		}
+	}
+
+	if b.EngineOverrides.Hooks.CreateTable.PostSQLExecution != nil {
+		if err = b.EngineOverrides.Hooks.CreateTable.PostSQLExecution(ctx, b.Runner, n); err != nil {
+			return nil, err
 		}
 	}
 
@@ -1120,16 +1305,9 @@ func createIndexesForCreateTable(ctx *sql.Context, db sql.Database, tableNode sq
 }
 
 func (b *BaseBuilder) buildCreateProcedure(ctx *sql.Context, n *plan.CreateProcedure, row sql.Row) (sql.RowIter, error) {
-	sqlMode := sql.LoadSqlMode(ctx)
 	return &createProcedureIter{
-		spd: sql.StoredProcedureDetails{
-			Name:            n.Name,
-			CreateStatement: n.CreateProcedureString,
-			CreatedAt:       n.CreatedAt,
-			ModifiedAt:      n.ModifiedAt,
-			SqlMode:         sqlMode.String(),
-		},
-		db: n.Database(),
+		spd: n.StoredProcDetails,
+		db:  n.Database(),
 	}, nil
 }
 
@@ -1147,6 +1325,13 @@ func (b *BaseBuilder) buildCreateTrigger(ctx *sql.Context, n *plan.CreateTrigger
 }
 
 func (b *BaseBuilder) buildDropColumn(ctx *sql.Context, n *plan.DropColumn, row sql.Row) (sql.RowIter, error) {
+	if b.EngineOverrides.Hooks.TableDropColumn.PreSQLExecution != nil {
+		nn, err := b.EngineOverrides.Hooks.TableDropColumn.PreSQLExecution(ctx, b.Runner, n)
+		if err != nil {
+			return nil, err
+		}
+		n = nn.(*plan.DropColumn)
+	}
 	tbl, err := getTableFromDatabase(ctx, n.Database(), n.Table)
 	if err != nil {
 		return nil, err
@@ -1165,6 +1350,8 @@ func (b *BaseBuilder) buildDropColumn(ctx *sql.Context, n *plan.DropColumn, row 
 	return &dropColumnIter{
 		d:         n,
 		alterable: alterable,
+		overrides: b.EngineOverrides,
+		runner:    b.Runner,
 	}, nil
 }
 
@@ -1182,14 +1369,39 @@ func (b *BaseBuilder) buildAlterTableCollation(ctx *sql.Context, n *plan.AlterTa
 	return rowIterWithOkResultWithZeroRowsAffected(), alterable.ModifyDefaultCollation(ctx, n.Collation)
 }
 
-func (b *BaseBuilder) buildCreateForeignKey(ctx *sql.Context, n *plan.CreateForeignKey, row sql.Row) (sql.RowIter, error) {
-	if n.FkDef.OnUpdate == sql.ForeignKeyReferentialAction_SetDefault || n.FkDef.OnDelete == sql.ForeignKeyReferentialAction_SetDefault {
-		return nil, sql.ErrForeignKeySetDefault.New()
+func (b *BaseBuilder) buildAlterTableComment(ctx *sql.Context, n *plan.AlterTableComment, row sql.Row) (sql.RowIter, error) {
+	tbl, err := getTableFromDatabase(ctx, n.Database(), n.Table)
+	if err != nil {
+		return nil, err
 	}
+	alterable, ok := tbl.(sql.CommentAlterableTable)
+	if !ok {
+		return nil, sql.ErrAlterTableCommentNotSupported.New(tbl.Name())
+	}
+	return rowIterWithOkResultWithZeroRowsAffected(), alterable.ModifyComment(ctx, n.Comment)
+}
+
+func (b *BaseBuilder) buildCreateForeignKey(ctx *sql.Context, n *plan.CreateForeignKey, row sql.Row) (sql.RowIter, error) {
 	db, err := n.DbProvider.Database(ctx, n.FkDef.Database)
 	if err != nil {
 		return nil, err
 	}
+
+	if n.FkDef.SchemaName != "" {
+		sdb, ok := db.(sql.SchemaDatabase)
+		if !ok {
+			return nil, sql.ErrDatabaseSchemasNotSupported.New(n.FkDef.Database)
+		}
+		sch, schemaExists, err := sdb.GetSchema(ctx, n.FkDef.SchemaName)
+		if err != nil {
+			return nil, err
+		}
+		if !schemaExists {
+			return nil, sql.ErrDatabaseSchemaNotFound.New(n.FkDef.SchemaName)
+		}
+		db = sch
+	}
+
 	tbl, ok, err := db.GetTableInsensitive(ctx, n.FkDef.Table)
 	if err != nil {
 		return nil, err
@@ -1202,12 +1414,36 @@ func (b *BaseBuilder) buildCreateForeignKey(ctx *sql.Context, n *plan.CreateFore
 	if err != nil {
 		return nil, err
 	}
+
+	if n.FkDef.ParentSchema != "" {
+		sdb, ok := refDb.(sql.SchemaDatabase)
+		if !ok {
+			return nil, sql.ErrDatabaseSchemasNotSupported.New(n.FkDef.ParentDatabase)
+		}
+		sch, schemaExists, err := sdb.GetSchema(ctx, n.FkDef.ParentSchema)
+		if err != nil {
+			return nil, err
+		}
+		if !schemaExists {
+			return nil, sql.ErrDatabaseSchemaNotFound.New(n.FkDef.ParentSchema)
+		}
+		refDb = sch
+	}
+
 	refTbl, ok, err := refDb.GetTableInsensitive(ctx, n.FkDef.ParentTable)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
 		return nil, sql.ErrTableNotFound.New(n.FkDef.ParentTable)
+	}
+
+	// If we didn't have an explicit schema, fill in the resolved schema for the fk table defn
+	if n.FkDef.ParentSchema == "" {
+		dst, ok := refTbl.(sql.DatabaseSchemaTable)
+		if ok {
+			n.FkDef.ParentSchema = dst.DatabaseSchema().SchemaName()
+		}
 	}
 
 	fkTbl, ok := tbl.(sql.ForeignKeyTable)

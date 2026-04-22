@@ -26,6 +26,9 @@ import (
 )
 
 func (b *Builder) buildUse(inScope *scope, n *ast.Use) (outScope *scope) {
+	if err := b.cat.AuthorizationHandler().HandleAuth(b.ctx, b.authQueryState, n.Auth); err != nil && b.authEnabled {
+		b.handleErr(err)
+	}
 	name := n.DBName.String()
 	ret := plan.NewUse(b.resolveDb(name))
 	ret.Catalog = b.cat
@@ -44,7 +47,7 @@ func (b *Builder) buildPrepare(inScope *scope, n *ast.Prepare) (outScope *scope)
 		if err != nil {
 			b.handleErr(err)
 		}
-		strVal, _, err := types.LongText.Convert(val)
+		strVal, _, err := types.LongText.Convert(b.ctx, val)
 		if err != nil {
 			b.handleErr(err)
 		}
@@ -67,7 +70,7 @@ func (b *Builder) buildPrepare(inScope *scope, n *ast.Prepare) (outScope *scope)
 	// test for query structure; bind variables will be discarded
 	b.bindCtx = &BindvarContext{resolveOnly: true}
 	childScope := b.build(inScope, childStmt, expr)
-	outScope.node = plan.NewPrepareQuery(n.Name, childScope.node)
+	outScope.node = plan.NewPrepareQuery(n.Name, childScope.node, n)
 	return outScope
 }
 

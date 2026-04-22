@@ -31,17 +31,18 @@ import (
 func resolveInsertRows(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
 	if _, ok := n.(*plan.TriggerExecutor); ok {
 		return n, transform.SameTree, nil
-	} else if _, ok := n.(*plan.CreateProcedure); ok {
+	}
+	if _, ok := n.(*plan.CreateProcedure); ok {
 		return n, transform.SameTree, nil
 	}
 	// We capture all INSERTs along the tree, such as those inside of block statements.
-	return transform.Node(n, func(n sql.Node) (sql.Node, transform.TreeIdentity, error) {
+	return transform.Node(ctx, n, func(ctx *sql.Context, n sql.Node) (sql.Node, transform.TreeIdentity, error) {
 		insert, ok := n.(*plan.InsertInto)
 		if !ok {
 			return n, transform.SameTree, nil
 		}
 
-		table := getResolvedTable(insert.Destination)
+		table := getResolvedTable(ctx, insert.Destination)
 
 		insertable, err := plan.GetInsertable(table)
 		if err != nil {
@@ -50,23 +51,22 @@ func resolveInsertRows(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Sc
 
 		source := insert.Source
 		// TriggerExecutor has already been analyzed
-		if _, ok := insert.Source.(*plan.TriggerExecutor); !ok && !insert.LiteralValueSource {
+		if _, isTrigExec := insert.Source.(*plan.TriggerExecutor); !isTrigExec && !insert.LiteralValueSource {
 			// Analyze the source of the insert independently
 			if _, ok := insert.Source.(*plan.Values); ok {
 				scope = scope.NewScope(plan.NewProject(
-					expression.SchemaToGetFields(insert.Source.Schema()[:len(insert.ColumnNames)], sql.ColSet{}),
+					expression.SchemaToGetFields(insert.Source.Schema(ctx)[:len(insert.ColumnNames)], sql.ColSet{}),
 					plan.NewSubqueryAlias("dummy", "", insert.Source),
 				))
 			}
-			source, _, err = a.analyzeWithSelector(ctx, insert.Source, scope, SelectAllBatches, newInsertSourceSelector(sel), qFlags)
+			scope.SetInInsertSource(true)
+			source, _, err = a.analyzeWithSelector(ctx, insert.Source, scope, SelectAllBatches, newInsertSourceSelector(sel, !scope.IsEmpty()), qFlags)
 			if err != nil {
 				return nil, transform.SameTree, err
 			}
-
-			source = StripPassthroughNodes(source)
 		}
 
-		dstSchema := insertable.Schema()
+		dstSchema := insertable.Schema(ctx)
 
 		// normalize the column name
 		columnNames := make([]string, len(insert.ColumnNames))
@@ -83,12 +83,23 @@ func resolveInsertRows(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Sc
 		}
 
 		// The schema of the destination node and the underlying table differ subtly in terms of defaults
-		project, firstGeneratedAutoIncRowIdx, err := wrapRowSource(ctx, source, insertable, insert.Destination.Schema(), columnNames)
+		var deferredDefaults sql.FastIntSet
+		project, firstGeneratedAutoIncRowIdx, deferredDefaults, err := wrapRowSource(
+			ctx,
+			source,
+			insertable,
+			insert.Destination.Schema(ctx),
+			columnNames,
+		)
 		if err != nil {
 			return nil, transform.SameTree, err
 		}
 
-		return insert.WithSource(project).WithAutoIncrementIdx(firstGeneratedAutoIncRowIdx), transform.NewTree, nil
+		return insert.WithSource(project).
+				WithAutoIncrementIdx(firstGeneratedAutoIncRowIdx).
+				WithDeferredDefaults(deferredDefaults),
+			transform.NewTree,
+			nil
 	})
 }
 
@@ -119,8 +130,9 @@ func findColIdx(colName string, colNames []string) int {
 // wrapRowSource returns a projection that wraps the original row source so that its schema matches the full schema of
 // the underlying table in the same order. Also, returns an integer value that indicates when this row source will
 // result in an automatically generated value for an auto_increment column.
-func wrapRowSource(ctx *sql.Context, insertSource sql.Node, destTbl sql.Table, schema sql.Schema, columnNames []string) (sql.Node, int, error) {
+func wrapRowSource(ctx *sql.Context, insertSource sql.Node, destTbl sql.Table, schema sql.Schema, columnNames []string) (sql.Node, int, sql.FastIntSet, error) {
 	projExprs := make([]sql.Expression, len(schema))
+	deferredDefaults := sql.NewFastIntSet()
 	firstGeneratedAutoIncRowIdx := -1
 
 	for i, col := range schema {
@@ -132,7 +144,7 @@ func wrapRowSource(ctx *sql.Context, insertSource sql.Node, destTbl sql.Table, s
 				defaultExpr = col.Generated
 			}
 			if !col.Nullable && defaultExpr == nil && !col.AutoIncrement {
-				return nil, -1, sql.ErrInsertIntoNonNullableDefaultNullColumn.New(col.Name)
+				deferredDefaults.Add(i)
 			}
 
 			var err error
@@ -140,7 +152,7 @@ func wrapRowSource(ctx *sql.Context, insertSource sql.Node, destTbl sql.Table, s
 			for i, c := range schema {
 				colNameToIdx[fmt.Sprintf("%s.%s", strings.ToLower(c.Source), strings.ToLower(c.Name))] = i
 			}
-			def, _, err := transform.Expr(defaultExpr, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+			def, _, err := transform.Expr(ctx, defaultExpr, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 				switch e := e.(type) {
 				case *expression.GetField:
 					idx, ok := colNameToIdx[strings.ToLower(e.WithTable(destTbl.Name()).String())]
@@ -153,7 +165,7 @@ func wrapRowSource(ctx *sql.Context, insertSource sql.Node, destTbl sql.Table, s
 				}
 			})
 			if err != nil {
-				return nil, -1, err
+				return nil, -1, sql.FastIntSet{}, err
 			}
 			projExprs[i] = def
 		} else {
@@ -165,7 +177,7 @@ func wrapRowSource(ctx *sql.Context, insertSource sql.Node, destTbl sql.Table, s
 			// wrap it in an AutoIncrement expression.
 			ai, err := expression.NewAutoIncrement(ctx, destTbl, projExprs[i])
 			if err != nil {
-				return nil, -1, err
+				return nil, -1, sql.FastIntSet{}, err
 			}
 			projExprs[i] = ai
 
@@ -186,7 +198,10 @@ func wrapRowSource(ctx *sql.Context, insertSource sql.Node, destTbl sql.Table, s
 							break
 						}
 						if lit, isLit := expr.(*expression.Literal); isLit {
-							if types.Null.Equals(lit.Type()) {
+							// If a literal NULL or if 0 is specified and the NO_AUTO_VALUE_ON_ZERO SQL mode is
+							// not active, then MySQL will fill in an auto_increment value.
+							if types.Null.Equals(lit.Type(ctx)) ||
+								(!sql.LoadSqlMode(ctx).ModeEnabled(sql.NoAutoValueOnZero) && isZero(ctx, lit)) {
 								firstGeneratedAutoIncRowIdx = ii
 								break
 							}
@@ -205,7 +220,7 @@ func wrapRowSource(ctx *sql.Context, insertSource sql.Node, destTbl sql.Table, s
 			// ColumnDefaultValue to create the UUID), then update the project to include the AutoUuid expression.
 			newExpr, identity, err := insertAutoUuidExpression(ctx, columnDefaultValue, autoUuidCol)
 			if err != nil {
-				return nil, -1, err
+				return nil, -1, sql.FastIntSet{}, err
 			}
 			if identity == transform.NewTree {
 				projExprs[autoUuidColIdx] = newExpr
@@ -216,19 +231,34 @@ func wrapRowSource(ctx *sql.Context, insertSource sql.Node, destTbl sql.Table, s
 			// the AutoUuid expression to it.
 			err := wrapAutoUuidInValuesTuples(ctx, autoUuidCol, insertSource, columnNames)
 			if err != nil {
-				return nil, -1, err
+				return nil, -1, sql.FastIntSet{}, err
 			}
 		}
 	}
 
-	return plan.NewProject(projExprs, insertSource), firstGeneratedAutoIncRowIdx, nil
+	return plan.NewProject(projExprs, insertSource), firstGeneratedAutoIncRowIdx, deferredDefaults, nil
+}
+
+// isZero returns true if the specified literal value |lit| has a value equal to 0.
+func isZero(ctx *sql.Context, lit *expression.Literal) bool {
+	if !types.IsNumber(lit.Type(ctx)) {
+		return false
+	}
+
+	convert, inRange, err := types.Int8.Convert(ctx, lit.Value())
+	if err != nil {
+		// Ignore any conversion errors, since that means the value isn't 0
+		// and the values are validated in other parts of the analyzer anyway.
+		return false
+	}
+	return inRange == sql.InRange && convert == int8(0)
 }
 
 // insertAutoUuidExpression transforms the specified |expr| for |autoUuidCol| and inserts an AutoUuid
 // expression above the UUID() function call, so that the auto generated UUID value can be captured and
 // saved to the session's query info.
 func insertAutoUuidExpression(ctx *sql.Context, expr sql.Expression, autoUuidCol *sql.Column) (sql.Expression, transform.TreeIdentity, error) {
-	return transform.Expr(expr, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+	return transform.Expr(ctx, expr, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 		switch e := e.(type) {
 		case *function.UUIDFunc:
 			return expression.NewAutoUuid(ctx, autoUuidCol, e), transform.NewTree, nil
@@ -241,9 +271,9 @@ func insertAutoUuidExpression(ctx *sql.Context, expr sql.Expression, autoUuidCol
 // findAutoUuidColumn searches the specified |schema| for a column that meets the requirements of an auto UUID
 // column, and if found, returns the column, as well as its index in the schema. See isAutoUuidColumn() for the
 // requirements on what is considered an auto UUID column.
-func findAutoUuidColumn(_ *sql.Context, schema sql.Schema) (autoUuidCol *sql.Column, autoUuidColIdx int) {
+func findAutoUuidColumn(ctx *sql.Context, schema sql.Schema) (autoUuidCol *sql.Column, autoUuidColIdx int) {
 	for i, col := range schema {
-		if isAutoUuidColumn(col) {
+		if isAutoUuidColumn(ctx, col) {
 			return col, i
 		}
 	}
@@ -303,7 +333,7 @@ func wrapAutoUuidInValuesTuples(ctx *sql.Context, autoUuidCol *sql.Column, inser
 // type must be either varchar(36), char(36), varbinary(16), or binary(16). It must have a default value set to
 // populate a UUID, either through the UUID() function (for char and varchar columns) or the UUID_TO_BIN(UUID())
 // function (for binary and varbinary columns).
-func isAutoUuidColumn(col *sql.Column) bool {
+func isAutoUuidColumn(ctx *sql.Context, col *sql.Column) bool {
 	if col.PrimaryKey == false {
 		return false
 	}
@@ -330,28 +360,4 @@ func isAutoUuidColumn(col *sql.Column) bool {
 	}
 
 	return false
-}
-
-// validGeneratedColumnValue returns true if the column is a generated column and the source node is not a values node.
-// Explicit default values (`DEFAULT`) are the only valid values to specify for a generated column
-func validGeneratedColumnValue(idx int, source sql.Node) bool {
-	switch source := source.(type) {
-	case *plan.Values:
-		for _, tuple := range source.ExpressionTuples {
-			switch val := tuple[idx].(type) {
-			case *sql.ColumnDefaultValue: // should be wrapped, but just in case
-				return true
-			case *expression.Wrapper:
-				if _, ok := val.Unwrap().(*sql.ColumnDefaultValue); ok {
-					return true
-				}
-				return false
-			default:
-				return false
-			}
-		}
-		return false
-	default:
-		return false
-	}
 }

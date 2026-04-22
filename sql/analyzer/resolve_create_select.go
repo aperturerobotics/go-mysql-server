@@ -24,25 +24,49 @@ func resolveCreateSelect(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.
 	// We don't want to carry any information about keys, constraints, defaults, etc. from a `create table as select`
 	// statement. When the underlying select node is a table, we must remove all such info from its schema. The only
 	// exception is NOT NULL constraints, which we leave alone.
-	selectSchema := stripSchema(analyzedSelect.Schema())
+	selectSchema := stripSchema(analyzedSelect.Schema(ctx))
 	mergedSchema := mergeSchemas(ct.PkSchema().Schema, selectSchema)
 	newSch := make(sql.Schema, len(mergedSchema))
 
 	for i, col := range mergedSchema {
 		tempCol := *col
 		tempCol.Source = ct.Name()
+		// replace system variable types with their underlying types
+		if sysType, isSysTyp := tempCol.Type.(sql.SystemVariableType); isSysTyp {
+			tempCol.Type = sysType.UnderlyingType()
+		}
 		newSch[i] = &tempCol
 	}
 
-	pkOrdinals := make([]int, 0)
+	colNameToIdx := make(map[string]int, len(newSch))
 	for i, col := range newSch {
-		if col.PrimaryKey {
-			pkOrdinals = append(pkOrdinals, i)
+		colNameToIdx[col.Name] = i
+	}
+
+	// Apply primary key constraints from index definitions to the merged schema
+	var nonPkIndexes sql.IndexDefs
+	pkOrdinals := make([]int, 0)
+	for _, idx := range ct.Indexes() {
+		if idx.IsPrimary() {
+			for _, idxCol := range idx.Columns {
+				if i, ok := colNameToIdx[idxCol.Name]; ok {
+					// https://dev.mysql.com/doc/refman/8.0/en/create-table.html
+					newSch[i].PrimaryKey = true
+					newSch[i].Nullable = false
+					pkOrdinals = append(pkOrdinals, i)
+				}
+			}
+		} else {
+			nonPkIndexes = append(nonPkIndexes, idx)
 		}
 	}
 
 	newSpec := &plan.TableSpec{
-		Schema: sql.NewPrimaryKeySchema(newSch, pkOrdinals...),
+		Schema:    sql.NewPrimaryKeySchema(newSch, pkOrdinals...),
+		IdxDefs:   nonPkIndexes, // Only pass non-PK indexes since PK is in schema
+		FkDefs:    ct.ForeignKeys(),
+		ChDefs:    ct.Checks(),
+		Collation: ct.Collation,
 	}
 
 	newCreateTable := plan.NewCreateTable(ct.Database(), ct.Name(), ct.IfNotExists(), ct.Temporary(), newSpec)
@@ -51,7 +75,7 @@ func resolveCreateSelect(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.
 		return nil, transform.SameTree, err
 	}
 
-	return plan.NewTableCopier(ct.Database(), StripPassthroughNodes(analyzedCreate), StripPassthroughNodes(analyzedSelect), plan.CopierProps{}), transform.NewTree, nil
+	return plan.NewTableCopier(ct.Database(), analyzedCreate, analyzedSelect, plan.CopierProps{}), transform.NewTree, nil
 }
 
 // stripSchema removes all non-type information from a schema, such as the key info, default value, etc.

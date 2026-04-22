@@ -44,7 +44,7 @@ var _ sql.CollationCoercible = (*JsonValue)(nil)
 var jsonValueDefaultType = types.MustCreateString(sqltypes.VarChar, 512, sql.Collation_Default)
 
 // NewJsonValue creates a new JsonValue UDF.
-func NewJsonValue(args ...sql.Expression) (sql.Expression, error) {
+func NewJsonValue(ctx *sql.Context, args ...sql.Expression) (sql.Expression, error) {
 	if len(args) < 1 || len(args) > 3 {
 		return nil, sql.ErrInvalidArgumentNumber.New("JSON_VALUE", 2, len(args))
 	} else if len(args) == 1 {
@@ -53,7 +53,7 @@ func NewJsonValue(args ...sql.Expression) (sql.Expression, error) {
 		return &JsonValue{JSON: args[0], Path: args[1], Typ: jsonValueDefaultType}, nil
 	} else {
 		// third argument is literal zero of the coercion type
-		return &JsonValue{JSON: args[0], Path: args[1], Typ: args[2].Type()}, nil
+		return &JsonValue{JSON: args[0], Path: args[1], Typ: args[2].Type(ctx)}, nil
 	}
 }
 
@@ -73,7 +73,7 @@ func (j *JsonValue) Resolved() bool {
 }
 
 // Type implements the sql.Expression interface.
-func (j *JsonValue) Type() sql.Type { return j.Typ }
+func (j *JsonValue) Type(ctx *sql.Context) sql.Type { return j.Typ }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (*JsonValue) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
@@ -95,7 +95,7 @@ func (j *JsonValue) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	// json NULLs also result in sql NULLs.
-	cmp, err := types.CompareJSON(js, types.JSONDocument{Val: nil})
+	cmp, err := types.CompareJSON(ctx, js, types.JSONDocument{Val: nil})
 	if cmp == 0 {
 		return nil, nil
 	}
@@ -111,7 +111,7 @@ func (j *JsonValue) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	var res interface{}
-	res, err = types.LookupJSONValue(searchable, path.(string))
+	res, err = types.LookupJSONValue(ctx, searchable, path.(string))
 	if err != nil || res == nil {
 		return nil, err
 	}
@@ -120,7 +120,7 @@ func (j *JsonValue) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	// bad lookups on arrays, instead of an error. Note that this will cause lookups that expect [] to return incorrect
 	// results.
 	// See https://github.com/dolthub/dolt/issues/7905 for more information.
-	cmp, err = types.CompareJSON(res, types.JSONDocument{Val: []interface{}{}})
+	cmp, err = types.CompareJSON(ctx, res, types.JSONDocument{Val: []interface{}{}})
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +129,7 @@ func (j *JsonValue) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	if j.Typ != nil {
-		res, _, err = j.Typ.Convert(res)
+		res, _, err = j.Typ.Convert(ctx, res)
 		if err != nil {
 			return nil, err
 		}
@@ -139,8 +139,8 @@ func (j *JsonValue) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 }
 
 // IsNullable implements the sql.Expression interface.
-func (j *JsonValue) IsNullable() bool {
-	return j.JSON.IsNullable() || j.Path.IsNullable()
+func (j *JsonValue) IsNullable(ctx *sql.Context) bool {
+	return j.JSON.IsNullable(ctx) || j.Path.IsNullable(ctx)
 }
 
 // Children implements the sql.Expression interface.
@@ -149,7 +149,7 @@ func (j *JsonValue) Children() []sql.Expression {
 }
 
 // WithChildren implements the Expression interface.
-func (j *JsonValue) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (j *JsonValue) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(j, len(children), 2)
 	}
@@ -172,11 +172,11 @@ func (j *JsonValue) String() string {
 // and unwraps the JSON, or coerces the string into JSON. The return value can return any type that can be stored in
 // a JSON column, not just maps. For a complete list, see
 // https://dev.mysql.com/doc/refman/8.3/en/json-attribute-functions.html#function_json-type
-func GetJSONFromWrapperOrCoercibleString(js interface{}, functionName string, argumentPosition int) (jsonData interface{}, err error) {
+func GetJSONFromWrapperOrCoercibleString(ctx *sql.Context, js interface{}, functionName string, argumentPosition int) (jsonData interface{}, err error) {
 	// The first parameter can be either JSON or a string.
 	switch jsType := js.(type) {
 	case string:
-		strData, _, err := types.LongBlob.Convert(js)
+		strData, _, err := types.LongBlob.Convert(ctx, js)
 		if err != nil {
 			return nil, err
 		}
@@ -185,7 +185,7 @@ func GetJSONFromWrapperOrCoercibleString(js interface{}, functionName string, ar
 		}
 		return jsonData, nil
 	case sql.JSONWrapper:
-		return jsType.ToInterface()
+		return jsType.ToInterface(ctx)
 	default:
 		return nil, sql.ErrInvalidJSONArgument.New(argumentPosition, functionName)
 	}

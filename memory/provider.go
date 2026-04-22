@@ -17,12 +17,11 @@ var _ sql.ExternalStoredProcedureProvider = (*DbProvider)(nil)
 // DbProvider is a provider for in-memory databases
 type DbProvider struct {
 	dbs                       map[string]sql.Database
-	history                   bool
-	readOnly                  bool
-	nativeIndexes             bool
-	mu                        *sync.RWMutex
 	tableFunctions            map[string]sql.TableFunction
 	externalProcedureRegistry sql.ExternalStoredProcedureRegistry
+	mu                        *sync.RWMutex
+	history                   bool
+	readOnly                  bool
 }
 
 type ProviderOption func(*DbProvider)
@@ -76,12 +75,6 @@ func (pro *DbProvider) WithOption(opt ProviderOption) {
 func ReadOnlyProvider(enableReadOnly bool) ProviderOption {
 	return func(pro *DbProvider) {
 		pro.readOnly = enableReadOnly
-	}
-}
-
-func NativeIndexProvider(useNativeIndexes bool) ProviderOption {
-	return func(pro *DbProvider) {
-		pro.nativeIndexes = useNativeIndexes
 	}
 }
 
@@ -155,19 +148,10 @@ func (pro *DbProvider) CreateDatabase(_ *sql.Context, name string) (err error) {
 	var db sql.Database
 	if pro.readOnly {
 		db = NewReadOnlyDatabase(name)
-		if pro.nativeIndexes {
-			db.(ReadOnlyDatabase).EnablePrimaryKeyIndexes()
-		}
 	} else if pro.history {
 		db = NewHistoryDatabase(name)
-		if pro.nativeIndexes {
-			db.(*HistoryDatabase).EnablePrimaryKeyIndexes()
-		}
 	} else {
 		db = NewDatabase(name)
-		if pro.nativeIndexes {
-			db.(*Database).EnablePrimaryKeyIndexes()
-		}
 	}
 
 	pro.dbs[strings.ToLower(db.Name())] = db
@@ -194,10 +178,10 @@ func (pro *DbProvider) ExternalStoredProcedures(_ *sql.Context, name string) ([]
 }
 
 // TableFunction implements sql.TableFunctionProvider
-func (pro *DbProvider) TableFunction(_ *sql.Context, name string) (sql.TableFunction, error) {
+func (pro *DbProvider) TableFunction(_ *sql.Context, name string) (sql.TableFunction, bool) {
 	if tableFunction, ok := pro.tableFunctions[name]; ok {
-		return tableFunction, nil
+		return tableFunction, true
 	}
 
-	return nil, sql.ErrTableFunctionNotFound.New(name)
+	return nil, false
 }

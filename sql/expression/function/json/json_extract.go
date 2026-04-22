@@ -35,7 +35,7 @@ var _ sql.FunctionExpression = (*JSONExtract)(nil)
 var _ sql.CollationCoercible = (*JSONExtract)(nil)
 
 // NewJSONExtract creates a new JSONExtract UDF.
-func NewJSONExtract(args ...sql.Expression) (sql.Expression, error) {
+func NewJSONExtract(ctx *sql.Context, args ...sql.Expression) (sql.Expression, error) {
 	if len(args) < 2 {
 		return nil, sql.ErrInvalidArgumentNumber.New("JSON_EXTRACT", 2, len(args))
 	}
@@ -64,7 +64,7 @@ func (j *JSONExtract) Resolved() bool {
 }
 
 // Type implements the sql.Expression interface.
-func (j *JSONExtract) Type() sql.Type { return types.JSON }
+func (j *JSONExtract) Type(ctx *sql.Context) sql.Type { return types.JSON }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (*JSONExtract) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
@@ -97,12 +97,16 @@ func (j *JSONExtract) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 			return nil, err
 		}
 
-		path, _, err = types.LongText.Convert(path)
+		path, _, err = types.LongText.Convert(ctx, path)
 		if err != nil {
 			return nil, err
 		}
 
-		results[i], err = types.LookupJSONValue(searchable, path.(string))
+		if path == nil {
+			return nil, nil
+		}
+
+		results[i], err = types.LookupJSONValue(ctx, searchable, path.(string))
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract from expression '%s'; %s", j.JSON.String(), err.Error())
 		}
@@ -116,13 +120,13 @@ func (j *JSONExtract) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 }
 
 // IsNullable implements the sql.Expression interface.
-func (j *JSONExtract) IsNullable() bool {
+func (j *JSONExtract) IsNullable(ctx *sql.Context) bool {
 	for _, p := range j.Paths {
-		if p.IsNullable() {
+		if p.IsNullable(ctx) {
 			return true
 		}
 	}
-	return j.JSON.IsNullable()
+	return j.JSON.IsNullable(ctx)
 }
 
 // Children implements the sql.Expression interface.
@@ -131,8 +135,8 @@ func (j *JSONExtract) Children() []sql.Expression {
 }
 
 // WithChildren implements the Expression interface.
-func (j *JSONExtract) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return NewJSONExtract(children...)
+func (j *JSONExtract) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return NewJSONExtract(ctx, children...)
 }
 
 func (j *JSONExtract) String() string {

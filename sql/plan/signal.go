@@ -19,8 +19,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dolthub/vitess/go/mysql"
-
 	"github.com/dolthub/go-mysql-server/sql"
 )
 
@@ -60,16 +58,16 @@ var SignalItems = []SignalConditionItemName{
 
 // SignalInfo represents a piece of information for a SIGNAL statement.
 type SignalInfo struct {
-	ConditionItemName SignalConditionItemName
-	IntValue          int64
-	StrValue          string
 	ExprVal           sql.Expression
+	ConditionItemName SignalConditionItemName
+	StrValue          string
+	IntValue          int64
 }
 
 // Signal represents the SIGNAL statement with a set SQLSTATE.
 type Signal struct {
-	SqlStateValue string // Will always be a string with length 5
 	Info          map[SignalConditionItemName]SignalInfo
+	SqlStateValue string // Will always be a string with length 5
 }
 
 // SignalName represents the SIGNAL statement with a condition name.
@@ -168,7 +166,7 @@ func (s *Signal) IsReadOnly() bool {
 }
 
 // DebugString implements the sql.DebugStringer interface.
-func (s *Signal) DebugString() string {
+func (s *Signal) DebugString(ctx *sql.Context) string {
 	infoStr := ""
 	if len(s.Info) > 0 {
 		infoStr = " SET"
@@ -179,7 +177,7 @@ func (s *Signal) DebugString() string {
 				if i > 0 {
 					infoStr += ","
 				}
-				infoStr += " " + info.DebugString()
+				infoStr += " " + info.DebugString(ctx)
 				i++
 			}
 		}
@@ -188,7 +186,7 @@ func (s *Signal) DebugString() string {
 }
 
 // Schema implements the sql.Node interface.
-func (s *Signal) Schema() sql.Schema {
+func (s *Signal) Schema(ctx *sql.Context) sql.Schema {
 	return nil
 }
 
@@ -198,7 +196,7 @@ func (s *Signal) Children() []sql.Node {
 }
 
 // WithChildren implements the sql.Node interface.
-func (s *Signal) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (s *Signal) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(s, children...)
 }
 
@@ -232,7 +230,7 @@ func (s *Signal) signalItemsWithExpressions() []SignalInfo {
 	return items
 }
 
-func (s Signal) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (s Signal) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	itemsWithExprs := s.signalItemsWithExpressions()
 	if len(itemsWithExprs) != len(exprs) {
 		return nil, sql.ErrInvalidChildrenNumber.New(s, len(exprs), len(itemsWithExprs))
@@ -254,53 +252,9 @@ func (s Signal) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
 	return &s, nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (s *Signal) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
-}
-
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (*Signal) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.Collation_binary, 7
-}
-
-// RowIter implements the sql.Node interface.
-func (s *Signal) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
-	//TODO: implement CLASS_ORIGIN
-	//TODO: implement SUBCLASS_ORIGIN
-	//TODO: implement CONSTRAINT_CATALOG
-	//TODO: implement CONSTRAINT_SCHEMA
-	//TODO: implement CONSTRAINT_NAME
-	//TODO: implement CATALOG_NAME
-	//TODO: implement SCHEMA_NAME
-	//TODO: implement TABLE_NAME
-	//TODO: implement COLUMN_NAME
-	//TODO: implement CURSOR_NAME
-	if s.SqlStateValue[0:2] == "01" {
-		//TODO: implement warnings
-		return nil, fmt.Errorf("warnings not yet implemented")
-	} else {
-
-		messageItem := s.Info[SignalConditionItemName_MessageText]
-		strValue := messageItem.StrValue
-		if messageItem.ExprVal != nil {
-			exprResult, err := messageItem.ExprVal.Eval(ctx, nil)
-			if err != nil {
-				return nil, err
-			}
-			s, ok := exprResult.(string)
-			if !ok {
-				return nil, fmt.Errorf("message text expression did not evaluate to a string")
-			}
-			strValue = s
-		}
-
-		return nil, mysql.NewSQLError(
-			int(s.Info[SignalConditionItemName_MysqlErrno].IntValue),
-			s.SqlStateValue,
-			strValue,
-		)
-	}
 }
 
 // Resolved implements the sql.Node interface.
@@ -326,7 +280,7 @@ func (s *SignalName) String() string {
 }
 
 // Schema implements the sql.Node interface.
-func (s *SignalName) Schema() sql.Schema {
+func (s *SignalName) Schema(ctx *sql.Context) sql.Schema {
 	return nil
 }
 
@@ -340,23 +294,13 @@ func (s *SignalName) Children() []sql.Node {
 }
 
 // WithChildren implements the sql.Node interface.
-func (s *SignalName) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (s *SignalName) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(s, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (s *SignalName) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (*SignalName) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.Collation_binary, 7
-}
-
-// RowIter implements the sql.Node interface.
-func (s *SignalName) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
-	return nil, fmt.Errorf("may not iterate over unresolved node *SignalName")
 }
 
 func (s SignalInfo) IsReadOnly() bool {
@@ -373,10 +317,10 @@ func (s SignalInfo) String() string {
 	return fmt.Sprintf("%s = %s", itemName, s.StrValue)
 }
 
-func (s SignalInfo) DebugString() string {
+func (s SignalInfo) DebugString(ctx *sql.Context) string {
 	itemName := strings.ToUpper(string(s.ConditionItemName))
 	if s.ExprVal != nil {
-		return fmt.Sprintf("%s = %s", itemName, sql.DebugString(s.ExprVal))
+		return fmt.Sprintf("%s = %s", itemName, sql.DebugString(ctx, s.ExprVal))
 	} else if s.ConditionItemName == SignalConditionItemName_MysqlErrno {
 		return fmt.Sprintf("%s = %d", itemName, s.IntValue)
 	}

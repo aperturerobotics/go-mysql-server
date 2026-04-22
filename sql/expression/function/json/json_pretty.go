@@ -41,14 +41,14 @@ import (
 //
 // https://dev.mysql.com/doc/refman/8.0/en/json-utility-functions.html#function_json-pretty
 type JSONPretty struct {
-	expression.UnaryExpression
+	expression.UnaryExpressionStub
 }
 
 var _ sql.FunctionExpression = &JSONPretty{}
 
 // NewJSONPretty creates a new JSONPretty function.
-func NewJSONPretty(arg sql.Expression) sql.Expression {
-	return &JSONPretty{expression.UnaryExpression{Child: arg}}
+func NewJSONPretty(ctx *sql.Context, arg sql.Expression) sql.Expression {
+	return &JSONPretty{expression.UnaryExpressionStub{Child: arg}}
 }
 
 // FunctionName implements sql.FunctionExpression
@@ -67,7 +67,7 @@ func (j *JSONPretty) String() string {
 }
 
 // Type implements sql.Expression
-func (j *JSONPretty) Type() sql.Type {
+func (j *JSONPretty) Type(ctx *sql.Context) sql.Type {
 	return types.LongText
 }
 
@@ -83,7 +83,7 @@ func (j *JSONPretty) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	if doc == nil {
 		return nil, nil
 	}
-	val, err := doc.ToInterface()
+	val, err := doc.ToInterface(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -96,9 +96,9 @@ func (j *JSONPretty) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 }
 
 // WithChildren implements sql.Expression
-func (j *JSONPretty) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (j *JSONPretty) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(j, len(children), 1)
 	}
-	return NewJSONPretty(children[0]), nil
+	return NewJSONPretty(ctx, children[0]), nil
 }

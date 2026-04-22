@@ -16,66 +16,23 @@ package driver
 
 import (
 	"database/sql/driver"
-	"errors"
-	"fmt"
 	"strconv"
 	"time"
 
 	"github.com/dolthub/vitess/go/sqltypes"
-	querypb "github.com/dolthub/vitess/go/vt/proto/query"
-
-	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/go-mysql-server/sql/expression"
-	"github.com/dolthub/go-mysql-server/sql/types"
+	"github.com/dolthub/vitess/go/vt/sqlparser"
 )
 
-// ErrUnsupportedType is returned when a query argument of an unsupported type is passed to a statement
-var ErrUnsupportedType = errors.New("unsupported type")
-
-func valueToExpr(v driver.Value) (sql.Expression, error) {
-	if v == nil {
-		return expression.NewLiteral(nil, types.Null), nil
-	}
-
-	var typ sql.Type
-	var err error
-	switch v := v.(type) {
-	case int64:
-		typ = types.Int64
-	case float64:
-		typ = types.Float64
-	case bool:
-		typ = types.Boolean
-	case []byte:
-		typ, err = types.CreateBinary(sqltypes.Blob, int64(len(v)))
-	case string:
-		typ, err = types.CreateStringWithDefaults(sqltypes.Text, int64(len(v)))
-	case time.Time:
-		typ = types.Datetime
-	default:
-		return nil, fmt.Errorf("%w: %T", ErrUnsupportedType, v)
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	c, _, err := typ.Convert(v)
-	if err != nil {
-		return nil, err
-	}
-	return expression.NewLiteral(c, typ), nil
-}
-
-func valuesToBindings(v []driver.Value) (map[string]*querypb.BindVariable, error) {
-	if len(v) == 0 {
+func valuesToBindings(vals []driver.Value) (map[string]sqlparser.Expr, error) {
+	if len(vals) == 0 {
 		return nil, nil
 	}
 
-	b := map[string]*querypb.BindVariable{}
+	b := map[string]sqlparser.Expr{}
 
 	var err error
-	for i, v := range v {
-		b[strconv.FormatInt(int64(i), 10)], err = sqltypes.BuildBindVariable(v)
+	for i, val := range vals {
+		b[strconv.FormatInt(int64(i), 10)], err = valToBinding(val)
 		if err != nil {
 			return nil, err
 		}
@@ -84,29 +41,39 @@ func valuesToBindings(v []driver.Value) (map[string]*querypb.BindVariable, error
 	return b, nil
 }
 
-func namedValuesToBindings(v []driver.NamedValue) (map[string]*querypb.BindVariable, error) {
-	if len(v) == 0 {
+func namedValuesToBindings(namedVals []driver.NamedValue) (map[string]sqlparser.Expr, error) {
+	if len(namedVals) == 0 {
 		return nil, nil
 	}
 
-	b := map[string]*querypb.BindVariable{}
-
+	b := map[string]sqlparser.Expr{}
 	var err error
-	for _, v := range v {
-		name := v.Name
+	for _, namedVal := range namedVals {
+		name := namedVal.Name
 		if name == "" {
-			name = "v" + strconv.FormatInt(int64(v.Ordinal), 10)
+			name = "v" + strconv.FormatInt(int64(namedVal.Ordinal), 10)
 		}
 
-		val := v.Value
-		if t, ok := val.(time.Time); ok {
-			val = t.Format(time.RFC3339Nano)
-		}
-		b[name], err = sqltypes.BuildBindVariable(val)
+		b[name], err = valToBinding(namedVal.Value)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	return b, nil
+}
+
+func valToBinding(val driver.Value) (sqlparser.Expr, error) {
+	if t, ok := val.(time.Time); ok {
+		val = t.Format(time.RFC3339Nano)
+	}
+	bv, err := sqltypes.BuildBindVariable(val)
+	if err != nil {
+		return nil, err
+	}
+	v, err := sqltypes.BindVariableToValue(bv)
+	if err != nil {
+		return nil, err
+	}
+	return sqlparser.ExprFromValue(v)
 }

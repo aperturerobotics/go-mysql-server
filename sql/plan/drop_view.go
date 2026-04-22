@@ -17,9 +17,9 @@ package plan
 import (
 	errors "gopkg.in/src-d/go-errors.v1"
 
-	"github.com/dolthub/go-mysql-server/sql/mysql_db"
-
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/mysql_db"
+	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
 var ErrDropViewChild = errors.NewKind("any child of DropView must be of type SingleDropView")
@@ -56,13 +56,8 @@ func (dv *SingleDropView) IsReadOnly() bool {
 	return false
 }
 
-// RowIter implements the Node interface. It always returns an empty iterator.
-func (dv *SingleDropView) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
-	return sql.RowsToRowIter(), nil
-}
-
-// Schema implements the Node interface. It always returns nil.
-func (dv *SingleDropView) Schema() sql.Schema { return nil }
+// Schema implements the Node interface. It always returns Query OK result.
+func (dv *SingleDropView) Schema(ctx *sql.Context) sql.Schema { return types.OkResultSchema }
 
 // String implements the fmt.Stringer interface, using sql.TreePrinter to
 // generate the string.
@@ -75,21 +70,12 @@ func (dv *SingleDropView) String() string {
 
 // WithChildren implements the Node interface. It only succeeds if the length
 // of the specified children equals 0.
-func (dv *SingleDropView) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (dv *SingleDropView) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(dv, len(children), 0)
 	}
 
 	return dv, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (dv *SingleDropView) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: dv.database.Name(),
-	}
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Drop))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -147,8 +133,8 @@ func (dvs *DropView) Resolved() bool {
 	return true
 }
 
-// Schema implements the Node interface. It always returns nil.
-func (dvs *DropView) Schema() sql.Schema { return nil }
+// Schema implements the Node interface. It always returns Query OK result.
+func (dvs *DropView) Schema(ctx *sql.Context) sql.Schema { return types.OkResultSchema }
 
 // String implements the fmt.Stringer interface, using sql.TreePrinter to
 // generate the string.
@@ -167,20 +153,10 @@ func (dvs *DropView) String() string {
 
 // WithChildren implements the Node interface. It always suceeds, returning a
 // copy of this node with the new array of nodes as children.
-func (dvs *DropView) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (dvs *DropView) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	newDrop := dvs
 	newDrop.children = children
 	return newDrop, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (dvs *DropView) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	for _, child := range dvs.children {
-		if !child.CheckPrivileges(ctx, opChecker) {
-			return false
-		}
-	}
-	return true
 }
 
 func (dvs *DropView) IsReadOnly() bool {

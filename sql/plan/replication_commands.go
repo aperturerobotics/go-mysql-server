@@ -32,6 +32,19 @@ var ErrNoReplicationController = errors.NewKind("no replication controller avail
 // https://dev.mysql.com/doc/refman/8.0/en/privileges-provided.html#priv_replication-slave-admin
 const DynamicPrivilege_ReplicationSlaveAdmin = "replication_slave_admin"
 
+// DynamicPrivilege_ReplicationApplier is a dynamic privilege that permits executing BINLOG statements.
+// See https://dev.mysql.com/doc/refman/8.0/en/privileges-provided.html#priv_replication-applier
+const DynamicPrivilege_ReplicationApplier = "replication_applier"
+
+// BinlogConsumerCommand represents a SQL statement that requires a BinlogConsumer
+// (e.g. BINLOG statement).
+type BinlogConsumerCommand interface {
+	sql.Node
+
+	// WithBinlogConsumer returns a new instance of this command, with the binlog consumer configured.
+	WithBinlogConsumer(consumer binlogreplication.BinlogConsumer) sql.Node
+}
+
 // BinlogReplicaControllerCommand represents a SQL statement that requires a BinlogReplicaController
 // (e.g. Start Replica, Show Replica Status).
 type BinlogReplicaControllerCommand interface {
@@ -54,6 +67,11 @@ type BinlogPrimaryControllerCommand interface {
 
 // ChangeReplicationSource is the plan node for the "CHANGE REPLICATION SOURCE TO" statement.
 // https://dev.mysql.com/doc/refman/8.0/en/change-replication-source-to.html
+//
+// TODO: When PRIVILEGE_CHECKS_USER option is specified, validate that the assigned user account has the
+// REPLICATION_APPLIER privilege. This validation should happen before the option is passed to the integrator's
+// BinlogReplicaController.SetReplicationSourceOptions().
+// See https://github.com/mysql/mysql-server/blob/8.0/sql/rpl_replica.cc change_master_cmd
 type ChangeReplicationSource struct {
 	ReplicaController binlogreplication.BinlogReplicaController
 	Options           []binlogreplication.ReplicationOption
@@ -96,7 +114,7 @@ func (c *ChangeReplicationSource) String() string {
 	return sb.String()
 }
 
-func (c *ChangeReplicationSource) Schema() sql.Schema {
+func (c *ChangeReplicationSource) Schema(ctx *sql.Context) sql.Schema {
 	return nil
 }
 
@@ -104,18 +122,13 @@ func (c *ChangeReplicationSource) Children() []sql.Node {
 	return nil
 }
 
-func (c *ChangeReplicationSource) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (c *ChangeReplicationSource) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(c, len(children), 0)
 	}
 
 	newNode := *c
 	return &newNode, nil
-}
-
-func (c *ChangeReplicationSource) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewDynamicPrivilegedOperation(DynamicPrivilege_ReplicationSlaveAdmin))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -170,7 +183,7 @@ func (c *ChangeReplicationFilter) String() string {
 	return sb.String()
 }
 
-func (c *ChangeReplicationFilter) Schema() sql.Schema {
+func (c *ChangeReplicationFilter) Schema(ctx *sql.Context) sql.Schema {
 	return nil
 }
 
@@ -178,18 +191,13 @@ func (c *ChangeReplicationFilter) Children() []sql.Node {
 	return nil
 }
 
-func (c *ChangeReplicationFilter) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (c *ChangeReplicationFilter) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(c, len(children), 0)
 	}
 
 	newNode := *c
 	return &newNode, nil
-}
-
-func (c *ChangeReplicationFilter) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewDynamicPrivilegedOperation(DynamicPrivilege_ReplicationSlaveAdmin))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -230,7 +238,7 @@ func (s *StartReplica) String() string {
 	return "START REPLICA"
 }
 
-func (s *StartReplica) Schema() sql.Schema {
+func (s *StartReplica) Schema(ctx *sql.Context) sql.Schema {
 	return nil
 }
 
@@ -238,18 +246,13 @@ func (s *StartReplica) Children() []sql.Node {
 	return nil
 }
 
-func (s *StartReplica) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (s *StartReplica) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(s, len(children), 0)
 	}
 
 	newNode := *s
 	return &newNode, nil
-}
-
-func (s *StartReplica) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewDynamicPrivilegedOperation(DynamicPrivilege_ReplicationSlaveAdmin))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -290,7 +293,7 @@ func (s *StopReplica) String() string {
 	return "STOP REPLICA"
 }
 
-func (s *StopReplica) Schema() sql.Schema {
+func (s *StopReplica) Schema(ctx *sql.Context) sql.Schema {
 	return nil
 }
 
@@ -298,18 +301,13 @@ func (s *StopReplica) Children() []sql.Node {
 	return nil
 }
 
-func (s *StopReplica) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (s *StopReplica) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(s, len(children), 0)
 	}
 
 	newNode := *s
 	return &newNode, nil
-}
-
-func (s *StopReplica) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewDynamicPrivilegedOperation(DynamicPrivilege_ReplicationSlaveAdmin))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -358,7 +356,7 @@ func (r *ResetReplica) String() string {
 	return sb.String()
 }
 
-func (r *ResetReplica) Schema() sql.Schema {
+func (r *ResetReplica) Schema(ctx *sql.Context) sql.Schema {
 	return nil
 }
 
@@ -366,17 +364,13 @@ func (r *ResetReplica) Children() []sql.Node {
 	return nil
 }
 
-func (r *ResetReplica) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (r *ResetReplica) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(r, len(children), 0)
 	}
 
 	newNode := *r
 	return &newNode, nil
-}
-
-func (r *ResetReplica) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(sql.PrivilegeCheckSubject{}, sql.PrivilegeType_Reload))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

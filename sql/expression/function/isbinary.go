@@ -25,15 +25,15 @@ import (
 
 // IsBinary is a function that returns whether a blob is binary or not.
 type IsBinary struct {
-	expression.UnaryExpression
+	expression.UnaryExpressionStub
 }
 
 var _ sql.FunctionExpression = (*IsBinary)(nil)
 var _ sql.CollationCoercible = (*IsBinary)(nil)
 
 // NewIsBinary creates a new IsBinary expression.
-func NewIsBinary(e sql.Expression) sql.Expression {
-	return &IsBinary{expression.UnaryExpression{Child: e}}
+func NewIsBinary(ctx *sql.Context, e sql.Expression) sql.Expression {
+	return &IsBinary{expression.UnaryExpressionStub{Child: e}}
 }
 
 // FunctionName implements sql.FunctionExpression
@@ -60,7 +60,7 @@ func (ib *IsBinary) Eval(
 		return false, nil
 	}
 
-	blob, _, err := types.LongBlob.Convert(v)
+	blob, _, err := types.LongBlob.Convert(ctx, v)
 	if err != nil {
 		return nil, err
 	}
@@ -68,20 +68,25 @@ func (ib *IsBinary) Eval(
 	return isBinary(blob.([]byte)), nil
 }
 
+// IsNullable implements sql.Expression
+func (ib *IsBinary) IsNullable(ctx *sql.Context) bool {
+	return false
+}
+
 func (ib *IsBinary) String() string {
 	return fmt.Sprintf("%s(%s)", ib.FunctionName(), ib.Child)
 }
 
 // WithChildren implements the Expression interface.
-func (ib *IsBinary) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (ib *IsBinary) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(ib, len(children), 1)
 	}
-	return NewIsBinary(children[0]), nil
+	return NewIsBinary(ctx, children[0]), nil
 }
 
 // Type implements the Expression interface.
-func (ib *IsBinary) Type() sql.Type {
+func (ib *IsBinary) Type(ctx *sql.Context) sql.Type {
 	return types.Boolean
 }
 

@@ -28,7 +28,8 @@ import (
 )
 
 func TestArrayAppend(t *testing.T) {
-	_, err := json.NewJSONArrayInsert()
+	ctx := sql.NewEmptyContext()
+	_, err := json.NewJSONArrayInsert(ctx)
 	require.True(t, errors.Is(err, sql.ErrInvalidArgumentNumber))
 
 	f1 := buildGetFieldExpressions(t, json.NewJSONArrayAppend, 3)
@@ -96,7 +97,7 @@ func TestArrayAppend(t *testing.T) {
 
 				var expect interface{}
 				if tstC.expected != nil {
-					expect, _, err = types.JSON.Convert(tstC.expected)
+					expect, _, err = types.JSON.Convert(sqlCtx, tstC.expected)
 					if err != nil {
 						panic("Bad test string. Can't convert string to JSONDocument: " + tstC.expected.(string))
 					}

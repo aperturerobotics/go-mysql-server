@@ -215,18 +215,19 @@ func init() {
 	}
 }
 
-func addSuperUser(ed *Editor, username string, host string, password string) {
+func addSuperUser(ed *Editor, username string, host string, authString string, ephemeral bool) {
 	ed.PutUser(&User{
 		User:                username,
 		Host:                host,
 		PrivilegeSet:        NewPrivilegeSetWithAllPrivileges(),
 		Plugin:              "mysql_native_password",
-		Password:            password,
+		AuthString:          authString,
 		PasswordLastChanged: time.Unix(1, 0).UTC(),
 		Locked:              false,
 		Attributes:          nil,
 		IsRole:              false,
 		IsSuperUser:         true,
+		IsEphemeral:         ephemeral,
 	})
 }
 

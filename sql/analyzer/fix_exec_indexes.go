@@ -18,11 +18,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dolthub/go-mysql-server/sql/planbuilder"
-
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/plan"
+	"github.com/dolthub/go-mysql-server/sql/planbuilder"
 	"github.com/dolthub/go-mysql-server/sql/transform"
 )
 
@@ -33,33 +32,34 @@ func assignExecIndexes(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Sc
 	if !scope.IsEmpty() {
 		// triggers
 		s.triggerScope = true
-		s.addSchema(scope.Schema())
+		s.insertSourceScope = scope.InInsertSource()
+		s.addSchema(scope.Schema(ctx))
 		s = s.push()
 	}
 	switch n := n.(type) {
 	case *plan.InsertInto:
-		if n.LiteralValueSource && len(n.Checks()) == 0 && len(n.OnDupExprs) == 0 {
+		if n.LiteralValueSource && len(n.Checks()) == 0 && !n.OnDupExprs.HasUpdates() && len(n.Returning) == 0 {
 			return n, transform.SameTree, nil
 		}
 	case *plan.Update:
 		if n.HasSingleRel && !n.IsJoin && scope.IsEmpty() && !n.IsProcNested {
 			// joins, subqueries, triggers, and procedures preclude fast indexing
-			if cols, ok := relIsProjected(n.Child); !ok {
+			if cols, ok := relIsProjected(ctx, n.Child); !ok {
 				// simplest case, no projection
-				return offsetAssignIndexes(n), transform.NewTree, nil
+				return offsetAssignIndexes(ctx, n), transform.NewTree, nil
 			} else if cols.Len() > 0 {
 				// if projection column set is valid, use that to assign
-				return projAssignIndexes(n, cols), transform.NewTree, nil
+				return projAssignIndexes(ctx, n, cols), transform.NewTree, nil
 			}
 		}
 	case *plan.DeleteFrom:
-		if n.RefsSingleRel && !n.HasExplicitTargets() && scope.IsEmpty() && !n.IsProcNested {
+		if n.RefsSingleRel && !n.HasExplicitTargets() && scope.IsEmpty() && !n.IsProcNested && !n.Child.Schema(ctx).HasVirtualColumns() {
 			// joins, subqueries, triggers, and procedures preclude fast indexing
-			return offsetAssignIndexes(n), transform.NewTree, nil
+			return offsetAssignIndexes(ctx, n), transform.NewTree, nil
 		}
 	default:
 	}
-	ret, _, err := assignIndexesHelper(n, s)
+	ret, _, err := assignIndexesHelper(ctx, n, s)
 	if err != nil {
 		return n, transform.SameTree, err
 	}
@@ -68,10 +68,10 @@ func assignExecIndexes(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Sc
 
 // relIsProjected returns a relation's column set and whether
 // the set is projected from the underlying table source.
-func relIsProjected(n sql.Node) (sql.ColSet, bool) {
+func relIsProjected(ctx *sql.Context, n sql.Node) (sql.ColSet, bool) {
 	proj := true
 	var cols sql.ColSet
-	transform.Inspect(n, func(n sql.Node) bool {
+	transform.InspectWithOpaque(ctx, n, func(ctx *sql.Context, n sql.Node) bool {
 		var table sql.Table
 		switch n := n.(type) {
 		case *plan.IndexedTableAccess:
@@ -99,8 +99,8 @@ func relIsProjected(n sql.Node) (sql.ColSet, bool) {
 
 // offsetAssignIndexes assumes all expressions are from one table source
 // and execution indices will be offset-1 from the expression ids.
-func offsetAssignIndexes(n sql.Node) sql.Node {
-	ret, _, _ := transform.NodeExprs(n, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+func offsetAssignIndexes(ctx *sql.Context, n sql.Node) sql.Node {
+	ret, _, _ := transform.NodeExprs(ctx, n, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 		switch e := e.(type) {
 		case *expression.GetField:
 			return e.WithIndex(int(e.Id()) - 1), transform.NewTree, nil
@@ -114,8 +114,8 @@ func offsetAssignIndexes(n sql.Node) sql.Node {
 // projAssignIndexes performs a quick execution index assignment
 // for a projected update/delete expression. We assume projected
 // expressions have few columns.
-func projAssignIndexes(n sql.Node, cols sql.ColSet) sql.Node {
-	ret, _, _ := transform.NodeExprs(n, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+func projAssignIndexes(ctx *sql.Context, n sql.Node, cols sql.ColSet) sql.Node {
+	ret, _, _ := transform.NodeExprs(ctx, n, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 		switch e := e.(type) {
 		case *expression.GetField:
 			idx := 0
@@ -133,18 +133,18 @@ func projAssignIndexes(n sql.Node, cols sql.ColSet) sql.Node {
 	return ret
 }
 
-func assignIndexesHelper(n sql.Node, inScope *idxScope) (sql.Node, *idxScope, error) {
+func assignIndexesHelper(ctx *sql.Context, n sql.Node, inScope *idxScope) (sql.Node, *idxScope, error) {
 	// copy scope, otherwise parent/lateral edits have non-local effects
 	outScope := inScope.copy()
-	err := outScope.visitChildren(n)
+	err := outScope.visitChildren(ctx, n)
 	if err != nil {
 		return nil, nil, err
 	}
-	err = outScope.visitSelf(n)
+	err = outScope.visitSelf(ctx, n)
 	if err != nil {
 		return nil, nil, err
 	}
-	ret, err := outScope.finalizeSelf(n)
+	ret, err := outScope.finalizeSelf(ctx, n)
 	return ret, outScope, err
 }
 
@@ -159,10 +159,40 @@ type idxScope struct {
 	childScopes   []*idxScope
 	ids           []sql.ColumnId
 	columns       []string
-	children      []sql.Node
-	expressions   []sql.Expression
-	checks        sql.CheckConstraints
-	triggerScope  bool
+	// Columns added from AddColumn are not included in the ResolvedTable yet. For columns that are added with a
+	// constraint, we need to add the new columns to the scope so CreateCheck gets the right exec index
+	addedColumns sql.Schema
+	children     []sql.Node
+	expressions  []sql.Expression
+	checks       sql.CheckConstraints
+
+	triggerScope      bool
+	insertSourceScope bool
+	subqueryScope     bool
+}
+
+func (s *idxScope) inTrigger() bool {
+	if s == nil {
+		return false
+	}
+	for _, ps := range s.parentScopes {
+		if ps.inTrigger() {
+			return true
+		}
+	}
+	return s.triggerScope
+}
+
+func (s *idxScope) inInsertSource() bool {
+	if s == nil {
+		return false
+	}
+	for _, ps := range s.parentScopes {
+		if ps.inInsertSource() {
+			return true
+		}
+	}
+	return s.insertSourceScope
 }
 
 func (s *idxScope) addSchema(sch sql.Schema) {
@@ -170,7 +200,7 @@ func (s *idxScope) addSchema(sch sql.Schema) {
 		if c.Source == "" {
 			s.columns = append(s.columns, c.Name)
 		} else {
-			s.columns = append(s.columns, fmt.Sprintf("%s.%s", c.Source, c.Name))
+			s.columns = append(s.columns, c.Source+"."+c.Name)
 		}
 	}
 }
@@ -270,10 +300,14 @@ func (s *idxScope) copy() *idxScope {
 		copy(idsCopy, s.ids)
 	}
 	return &idxScope{
-		lateralScopes: lateralCopy,
-		parentScopes:  parentCopy,
-		columns:       varsCopy,
-		ids:           idsCopy,
+		lateralScopes:     lateralCopy,
+		parentScopes:      parentCopy,
+		columns:           varsCopy,
+		ids:               idsCopy,
+		addedColumns:      s.addedColumns,
+		subqueryScope:     s.subqueryScope,
+		triggerScope:      s.triggerScope,
+		insertSourceScope: s.insertSourceScope,
 	}
 }
 
@@ -284,12 +318,12 @@ func (s *idxScope) push() *idxScope {
 }
 
 // visitChildren walks children and gathers schema info for this node
-func (s *idxScope) visitChildren(n sql.Node) error {
+func (s *idxScope) visitChildren(ctx *sql.Context, n sql.Node) error {
 	switch n := n.(type) {
 	case *plan.JoinNode:
 		lateralScope := s.copy()
 		for _, c := range n.Children() {
-			newC, cScope, err := assignIndexesHelper(c, lateralScope)
+			newC, cScope, err := assignIndexesHelper(ctx, c, lateralScope)
 			if err != nil {
 				return err
 			}
@@ -307,6 +341,12 @@ func (s *idxScope) visitChildren(n sql.Node) error {
 		}
 	case *plan.SubqueryAlias:
 		sqScope := s.copy()
+		if s.inTrigger() {
+			// TODO: this might not necessarily be true. But we do need the trigger scope(s) to be passed to the child
+			// nodes during rowexec, where there's currently no easy way to separate out the trigger scopes from the
+			// other scopes because it's all one parent row
+			n.OuterScopeVisibility = true
+		}
 		if !n.OuterScopeVisibility && !n.IsLateral {
 			// TODO: this should not apply to subqueries inside of lateral joins
 			// Subqueries with no visibility have no parent scopes. Lateral
@@ -314,7 +354,7 @@ func (s *idxScope) visitChildren(n sql.Node) error {
 			sqScope.parentScopes = sqScope.parentScopes[:0]
 			sqScope.lateralScopes = sqScope.lateralScopes[:0]
 		}
-		newC, cScope, err := assignIndexesHelper(n.Child, sqScope)
+		newC, cScope, err := assignIndexesHelper(ctx, n.Child, sqScope)
 		if err != nil {
 			return err
 		}
@@ -323,7 +363,7 @@ func (s *idxScope) visitChildren(n sql.Node) error {
 	case *plan.SetOp:
 		var keepScope *idxScope
 		for i, c := range n.Children() {
-			newC, cScope, err := assignIndexesHelper(c, s)
+			newC, cScope, err := assignIndexesHelper(ctx, c, s)
 			if err != nil {
 				return err
 			}
@@ -335,11 +375,11 @@ func (s *idxScope) visitChildren(n sql.Node) error {
 		// keep only the first union scope to avoid double counting
 		s.childScopes = append(s.childScopes, keepScope)
 	case *plan.InsertInto:
-		newSrc, _, err := assignIndexesHelper(n.Source, s)
+		newSrc, _, err := assignIndexesHelper(ctx, n.Source, s)
 		if err != nil {
 			return err
 		}
-		newDst, dScope, err := assignIndexesHelper(n.Destination, s)
+		newDst, dScope, err := assignIndexesHelper(ctx, n.Destination, s)
 		if err != nil {
 			return err
 		}
@@ -352,7 +392,7 @@ func (s *idxScope) visitChildren(n sql.Node) error {
 	case *plan.IfConditional:
 		for _, c := range n.Children() {
 			// Don't append the child scope because it's not visible from the conditional expression.
-			newC, _, err := assignIndexesHelper(c, s)
+			newC, _, err := assignIndexesHelper(ctx, c, s)
 			if err != nil {
 				return err
 			}
@@ -360,9 +400,12 @@ func (s *idxScope) visitChildren(n sql.Node) error {
 		}
 	default:
 		for _, c := range n.Children() {
-			newC, cScope, err := assignIndexesHelper(c, s)
+			newC, cScope, err := assignIndexesHelper(ctx, c, s)
 			if err != nil {
 				return err
+			}
+			if ac, ok := c.(*plan.AddColumn); ok {
+				s.addedColumns = append(s.addedColumns, ac.Column())
 			}
 			s.childScopes = append(s.childScopes, cScope)
 			s.children = append(s.children, newC)
@@ -374,20 +417,20 @@ func (s *idxScope) visitChildren(n sql.Node) error {
 // visitSelf fixes expression indexes for this node. Assumes |s.childScopes|
 // is set, any partial |s.lateralScopes| are filled, and the self scope is
 // unset.
-func (s *idxScope) visitSelf(n sql.Node) error {
+func (s *idxScope) visitSelf(ctx *sql.Context, n sql.Node) error {
 	switch n := n.(type) {
 	case *plan.JoinNode:
 		// join on expressions see everything
 		scopes := append(append(s.parentScopes, s.lateralScopes...), s.childScopes...)
 		for _, e := range n.Expressions() {
-			s.expressions = append(s.expressions, fixExprToScope(e, scopes...))
+			s.expressions = append(s.expressions, fixExprToScope(ctx, e, scopes...))
 		}
 	case *plan.RangeHeap:
 		// value indexes other side of join
-		newValue := fixExprToScope(n.ValueColumnGf, s.lateralScopes...)
+		newValue := fixExprToScope(ctx, n.ValueColumnGf, s.lateralScopes...)
 		// min/are this child
-		newMin := fixExprToScope(n.MinColumnGf, s.childScopes...)
-		newMax := fixExprToScope(n.MaxColumnGf, s.childScopes...)
+		newMin := fixExprToScope(ctx, n.MinColumnGf, s.childScopes...)
+		newMax := fixExprToScope(ctx, n.MaxColumnGf, s.childScopes...)
 		n.MaxColumnGf = newMax
 		n.MinColumnGf = newMin
 		n.ValueColumnGf = newValue
@@ -397,10 +440,10 @@ func (s *idxScope) visitSelf(n sql.Node) error {
 	case *plan.HashLookup:
 		// right entry has parent and self visibility, no lateral join scope
 		rightScopes := append(s.parentScopes, s.childScopes...)
-		s.expressions = append(s.expressions, fixExprToScope(n.RightEntryKey, rightScopes...))
+		s.expressions = append(s.expressions, fixExprToScope(ctx, n.RightEntryKey, rightScopes...))
 		// left probe is the join context accumulation
 		leftScopes := append(s.parentScopes, s.lateralScopes...)
-		s.expressions = append(s.expressions, fixExprToScope(n.LeftProbeKey, leftScopes...))
+		s.expressions = append(s.expressions, fixExprToScope(ctx, n.LeftProbeKey, leftScopes...))
 	case *plan.IndexedTableAccess:
 		var scope []*idxScope
 		switch n.Typ {
@@ -412,79 +455,92 @@ func (s *idxScope) visitSelf(n sql.Node) error {
 			scope = append(s.parentScopes, s.lateralScopes...)
 		}
 		for _, e := range n.Expressions() {
-			s.expressions = append(s.expressions, fixExprToScope(e, scope...))
+			s.expressions = append(s.expressions, fixExprToScope(ctx, e, scope...))
 		}
 	case *plan.ShowVariables:
 		if n.Filter != nil {
 			selfScope := s.copy()
-			selfScope.addSchema(n.Schema())
+			selfScope.addSchema(n.Schema(ctx))
 			scope := append(s.parentScopes, selfScope)
 			for _, e := range n.Expressions() {
-				s.expressions = append(s.expressions, fixExprToScope(e, scope...))
+				s.expressions = append(s.expressions, fixExprToScope(ctx, e, scope...))
 			}
 		}
 	case *plan.JSONTable:
 		scopes := append(s.parentScopes, s.lateralScopes...)
 		for _, e := range n.Expressions() {
-			s.expressions = append(s.expressions, fixExprToScope(e, scopes...))
+			s.expressions = append(s.expressions, fixExprToScope(ctx, e, scopes...))
 		}
 	case *plan.InsertInto:
-		rightSchema := make(sql.Schema, len(n.Destination.Schema())*2)
 		// schema = [oldrow][newrow]
-		for oldRowIdx, c := range n.Destination.Schema() {
-			rightSchema[oldRowIdx] = c
-			newRowIdx := len(n.Destination.Schema()) + oldRowIdx
-			if values, ok := n.Source.(*plan.Values); ok {
-				// The source table is either named via VALUES(...) AS ... or has
-				// the default value planbuilder.OnDupValuesPrefix
+		destSch := n.Destination.Schema(ctx)
+		srcSch := n.Source.Schema(ctx)
+		rightSchema := make(sql.Schema, len(destSch)*2)
+		if values, isValues := n.Source.(*plan.Values); isValues {
+			for oldRowIdx, c := range destSch {
 				newC := c.Copy()
 				newC.Source = values.AliasName
 				if values.ColumnNames != nil {
 					newC.Name = values.ColumnNames[newC.Name]
 				}
+
+				newRowIdx := len(destSch) + oldRowIdx
+				rightSchema[oldRowIdx] = c
 				rightSchema[newRowIdx] = newC
-			} else if len(n.Destination.Schema()) != len(n.Source.Schema()) {
-				newC := c.Copy()
-				newC.Source = planbuilder.OnDupValuesPrefix
-				rightSchema[newRowIdx] = newC
-			} else {
+			}
+		} else {
+			for oldRowIdx, c := range destSch {
 				// find source index that aligns with dest column
-				var matched bool
+				var newC *sql.Column
 				for j, sourceCol := range n.ColumnNames {
 					if strings.EqualFold(c.Name, sourceCol) {
-						rightSchema[newRowIdx] = n.Source.Schema()[j]
-						matched = true
+						newC = srcSch[j]
 						break
 					}
 				}
-				if !matched {
-					// todo: this is only used for load data. load data errors
-					//  without a fallback, and fails to resolve defaults if I
-					//  define the columns upfront.
-					rightSchema[newRowIdx] = n.Source.Schema()[oldRowIdx]
+				// unable to find column, use copy with OnDupValuesPrefix or fallback
+				if newC == nil {
+					if len(destSch) != len(srcSch) {
+						newC = c.Copy()
+						newC.Source = planbuilder.OnDupValuesPrefix
+					} else {
+						// todo: this is only used for load data. load data errors
+						//  without a fallback, and fails to resolve defaults if I
+						//  define the columns upfront.
+						newC = srcSch[oldRowIdx]
+					}
 				}
+				newRowIdx := len(destSch) + oldRowIdx
+
+				rightSchema[oldRowIdx] = c
+				rightSchema[newRowIdx] = newC
 			}
 		}
+
 		rightScope := &idxScope{}
 		rightScope.addSchema(rightSchema)
 		dstScope := s.childScopes[0]
 
-		for _, e := range n.OnDupExprs {
+		for _, e := range n.OnDupExprs.AllExpressions() {
 			set, ok := e.(*expression.SetField)
 			if !ok {
 				return fmt.Errorf("on duplicate update expressions should be *expression.SetField; found %T", e)
 			}
 			// left uses destination schema
 			// right uses |rightSchema|
-			newLeft := fixExprToScope(set.LeftChild, dstScope)
-			newRight := fixExprToScope(set.RightChild, rightScope)
+			newLeft := fixExprToScope(ctx, set.LeftChild, dstScope)
+			newRight := fixExprToScope(ctx, set.RightChild, rightScope)
 			s.expressions = append(s.expressions, expression.NewSetField(newLeft, newRight))
 		}
 		for _, c := range n.Checks() {
-			newE := fixExprToScope(c.Expr, dstScope)
+			newE := fixExprToScope(ctx, c.Expr, dstScope)
 			newCheck := *c
 			newCheck.Expr = newE
 			s.checks = append(s.checks, &newCheck)
+		}
+		for _, r := range n.Returning {
+			newE := fixExprToScope(ctx, r, dstScope)
+			s.expressions = append(s.expressions, newE)
 		}
 	case *plan.Update:
 		newScope := s.copy()
@@ -492,18 +548,68 @@ func (s *idxScope) visitSelf(n sql.Node) error {
 		// schema is |old_row|-|new_row|; checks only receive half
 		newScope.columns = append(newScope.columns, srcScope.columns[:len(srcScope.columns)/2]...)
 		for _, c := range n.Checks() {
-			newE := fixExprToScope(c.Expr, newScope)
+			newE := fixExprToScope(ctx, c.Expr, newScope)
 			newCheck := *c
 			newCheck.Expr = newE
 			s.checks = append(s.checks, &newCheck)
 		}
+		for _, r := range n.Returning {
+			newE := fixExprToScope(ctx, r, srcScope)
+			s.expressions = append(s.expressions, newE)
+		}
+	case *plan.LoadData:
+		scope := &idxScope{}
+		scope.addSchema(n.DestSch)
+		for i, e := range n.SetExprs {
+			if e == nil {
+				continue
+			}
+			n.SetExprs[i] = fixExprToScope(ctx, e, scope)
+		}
+		for colIdx, col := range n.DestSch {
+			if col.Default == nil {
+				continue
+			}
+			newDef := fixExprToScope(ctx, sql.Expression(col.Default), scope)
+			n.DestSch[colIdx].Default = newDef.(*sql.ColumnDefaultValue)
+		}
+	case *plan.CreateCheck:
+		addedScope := &idxScope{}
+		addedScope.addSchema(s.addedColumns)
+		scope := append(append(s.parentScopes, s.childScopes...), addedScope)
+		s.expressions = append(s.expressions, fixExprToScope(ctx, n.Check.Expr, scope...))
 	default:
+		// Group By and Window functions already account for the new/old columns present from triggers
+		// This means that when indexing the Projections, we should not include the trigger scope(s), which are
+		// within s.parentScopes.
+		if proj, isProj := n.(*plan.Project); isProj {
+			switch proj.Child.(type) {
+			case *plan.GroupBy, *plan.Window:
+				if s.inTrigger() && !s.subqueryScope {
+					for _, e := range proj.Expressions() {
+						s.expressions = append(s.expressions, fixExprToScope(ctx, e, s.childScopes...))
+					}
+					return nil
+				}
+			}
+		}
 		if ne, ok := n.(sql.Expressioner); ok {
 			scope := append(s.parentScopes, s.childScopes...)
+			// default nodes can't see lateral join nodes, unless we're in lateral
+			// join and lateral scopes are promoted to parent status
 			for _, e := range ne.Expressions() {
-				// default nodes can't see lateral join nodes, unless we're in lateral
-				// join and lateral scopes are promoted to parent status
-				s.expressions = append(s.expressions, fixExprToScope(e, scope...))
+				// OrderedAggregations are special as they append a new field to the outer scope row
+				// We need to account for this extra column in the rows when assigning indexes
+				// Example: gms/expression/function/aggregation/group_concat.go:groupConcatBuffer.Update()
+				if _, isOrdAgg := e.(sql.OrderedAggregation); isOrdAgg {
+					selScope := &idxScope{}
+					if idExpr, isIdExpr := e.(sql.IdExpression); isIdExpr {
+						selScope.ids = append(selScope.ids, idExpr.Id())
+					}
+					selScope.columns = append(selScope.columns, e.String())
+					scope = append(scope, selScope)
+				}
+				s.expressions = append(s.expressions, fixExprToScope(ctx, e, scope...))
 			}
 		}
 	}
@@ -511,29 +617,43 @@ func (s *idxScope) visitSelf(n sql.Node) error {
 }
 
 // finalizeSelf builds the output node and fixes the return scope
-func (s *idxScope) finalizeSelf(n sql.Node) (sql.Node, error) {
+func (s *idxScope) finalizeSelf(ctx *sql.Context, n sql.Node) (sql.Node, error) {
+	var err error
 	// assumes children scopes have been set
 	switch n := n.(type) {
 	case *plan.InsertInto:
-		s.addSchema(n.Destination.Schema())
+		s.addSchema(n.Destination.Schema(ctx))
 		nn := *n
 		nn.Source = s.children[0]
 		nn.Destination = s.children[1]
-		nn.OnDupExprs = s.expressions
+		// TODO: We could just return nn.WithExpressions if we rearranged how expressions are added to s.expressions to
+		//  match InsertInto.WithExpressions
+		onDupExprsLen := n.OnDupExprs.Length()
+		nn.OnDupExprs, err = n.OnDupExprs.WithExpressions(s.expressions[:onDupExprsLen])
+		nn.Returning = s.expressions[onDupExprsLen:]
 		return nn.WithChecks(s.checks), nil
 	default:
-		s.ids = columnIdsForNode(n)
+		if nn, ok := n.(*plan.Update); ok {
+			nn.Returning = s.expressions
+		}
 
-		s.addSchema(n.Schema())
-		var err error
+		s.ids = columnIdsForNode(ctx, n)
+		s.addSchema(n.Schema(ctx))
 		if s.children != nil {
-			n, err = n.WithChildren(s.children...)
+			n, err = n.WithChildren(ctx, s.children...)
 			if err != nil {
 				return nil, err
 			}
 		}
 		if ne, ok := n.(sql.Expressioner); ok && s.expressions != nil {
-			n, err = ne.WithExpressions(s.expressions...)
+			exprs := make([]sql.Expression, len(s.checks)+len(s.expressions))
+			for i, check := range s.checks {
+				exprs[i] = check.Expr
+			}
+			for i, expr := range s.expressions {
+				exprs[i+len(s.checks)] = expr
+			}
+			n, err = ne.WithExpressions(ctx, exprs...)
 			if err != nil {
 				return nil, err
 			}
@@ -545,19 +665,14 @@ func (s *idxScope) finalizeSelf(n sql.Node) (sql.Node, error) {
 			if len(s.parentScopes) == 0 {
 				return n, nil
 			}
-			// TODO: combine scopes?
-			scopeLen := len(s.parentScopes[0].columns)
+			scopeLen := 0
+			for _, parentScope := range s.parentScopes {
+				scopeLen += len(parentScope.columns)
+			}
 			if scopeLen == 0 {
 				return n, nil
 			}
 			n = jn.WithScopeLen(scopeLen)
-			n, err = n.WithChildren(
-				plan.NewStripRowNode(jn.Left(), scopeLen),
-				plan.NewStripRowNode(jn.Right(), scopeLen),
-			)
-			if err != nil {
-				return nil, err
-			}
 		}
 		return n, nil
 	}
@@ -567,7 +682,7 @@ func (s *idxScope) finalizeSelf(n sql.Node) (sql.Node, error) {
 // Projector nodes can return a subset of the full sql.PrimaryTableSchema.
 // todo: pruning projections should update plan.TableIdNode .Columns()
 // to avoid schema/column discontinuities.
-func columnIdsForNode(n sql.Node) []sql.ColumnId {
+func columnIdsForNode(ctx *sql.Context, n sql.Node) []sql.ColumnId {
 	var ret []sql.ColumnId
 	switch n := n.(type) {
 	case sql.Projector:
@@ -593,8 +708,14 @@ func columnIdsForNode(n sql.Node) []sql.ColumnId {
 				ret = append(ret, col)
 			})
 		default:
-			ret = append(ret, columnIdsForNode(n.Child)...)
+			ret = append(ret, columnIdsForNode(ctx, n.Child)...)
 		}
+	case *plan.SetOp:
+		ret = append(ret, columnIdsForNode(ctx, n.Left())...)
+	case *plan.EmptyTable:
+		// ColumnIds are all zero here. The index will be determined based on the column name or by the Projector that
+		// wraps the EmptyTable.
+		return make([]sql.ColumnId, len(n.Schema(ctx)))
 	case plan.TableIdNode:
 		if rt, ok := n.(*plan.ResolvedTable); ok && plan.IsDualTable(rt.Table) {
 			ret = append(ret, 0)
@@ -603,47 +724,49 @@ func columnIdsForNode(n sql.Node) []sql.ColumnId {
 
 		cols := n.(plan.TableIdNode).Columns()
 		if tn, ok := n.(sql.TableNode); ok {
-			if pkt, ok := tn.UnderlyingTable().(sql.PrimaryKeyTable); ok && len(pkt.PrimaryKeySchema().Schema) != len(n.Schema()) {
+			if pkt, ok := tn.UnderlyingTable().(sql.PrimaryKeyTable); ok && len(pkt.PrimaryKeySchema(ctx).Schema) != len(n.Schema(ctx)) {
 				firstcol, _ := cols.Next(1)
-				for _, c := range n.Schema() {
-					ord := pkt.PrimaryKeySchema().IndexOfColName(c.Name)
+				for _, c := range n.Schema(ctx) {
+					ord := pkt.PrimaryKeySchema(ctx).IndexOfColName(c.Name)
 					colId := firstcol + sql.ColumnId(ord)
 					ret = append(ret, colId)
 				}
 				break
 			}
 		}
+		// TODO: columns are appended in increasing order by ColumnId instead of how they are actually ordered. likely
+		// needs to be fixed
 		cols.ForEach(func(col sql.ColumnId) {
 			ret = append(ret, col)
 		})
 	case *plan.JoinNode:
 		if n.Op.IsPartial() {
-			ret = append(ret, columnIdsForNode(n.Left())...)
+			ret = append(ret, columnIdsForNode(ctx, n.Left())...)
 		} else {
-			ret = append(ret, columnIdsForNode(n.Left())...)
-			ret = append(ret, columnIdsForNode(n.Right())...)
+			ret = append(ret, columnIdsForNode(ctx, n.Left())...)
+			ret = append(ret, columnIdsForNode(ctx, n.Right())...)
 		}
 	case *plan.ShowStatus:
-		for i := range n.Schema() {
+		for i := range n.Schema(ctx) {
 			ret = append(ret, sql.ColumnId(i+1))
 		}
 	case *plan.Concat:
-		ret = append(ret, columnIdsForNode(n.Left())...)
+		ret = append(ret, columnIdsForNode(ctx, n.Left())...)
 	default:
 		for _, c := range n.Children() {
-			ret = append(ret, columnIdsForNode(c)...)
+			ret = append(ret, columnIdsForNode(ctx, c)...)
 		}
 	}
 	return ret
 }
 
-func fixExprToScope(e sql.Expression, scopes ...*idxScope) sql.Expression {
+func fixExprToScope(ctx *sql.Context, e sql.Expression, scopes ...*idxScope) sql.Expression {
 	newScope := &idxScope{}
 	for _, s := range scopes {
 		newScope.triggerScope = newScope.triggerScope || s.triggerScope
 		newScope.addScope(s)
 	}
-	ret, _, _ := transform.Expr(e, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+	ret, _, _ := transform.Expr(ctx, e, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 		switch e := e.(type) {
 		case *expression.GetField:
 			// TODO: this is a swallowed error in some cases. It triggers falsely in queries involving the dual table, or
@@ -651,6 +774,7 @@ func fixExprToScope(e sql.Expression, scopes ...*idxScope) sql.Expression {
 			//  this error for the case of DEFAULT in a `plan.Values`, since we analyze the insert source in isolation (we
 			//  don't have the destination schema, and column references in default values are determined in the build phase)
 
+			// TODO: If we don't find a valid index for a field, we should report an error
 			idx, _ := newScope.getIdxId(e.Id(), e.String())
 			if idx >= 0 {
 				return e.WithIndex(idx), transform.NewTree, nil
@@ -658,7 +782,9 @@ func fixExprToScope(e sql.Expression, scopes ...*idxScope) sql.Expression {
 			return e, transform.SameTree, nil
 		case *plan.Subquery:
 			// this |outScope| prepends the subquery scope
-			newQ, _, err := assignIndexesHelper(e.Query, newScope.push())
+			subqueryScope := newScope.push()
+			subqueryScope.subqueryScope = true
+			newQ, _, err := assignIndexesHelper(ctx, e.Query, subqueryScope)
 			if err != nil {
 				return nil, transform.SameTree, err
 			}

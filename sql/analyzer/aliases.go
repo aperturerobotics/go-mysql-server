@@ -160,16 +160,16 @@ func (ta TableAliases) findConflicts(other TableAliases) (conflicts []string, no
 
 // getTableAliases returns a map of all aliases of resolved tables / subqueries in the node, keyed by their alias name.
 // Unaliased tables are returned keyed by their original lower-cased name.
-func getTableAliases(n sql.Node, scope *plan.Scope) (TableAliases, error) {
+func getTableAliases(ctx *sql.Context, n sql.Node, scope *plan.Scope) (TableAliases, error) {
 	var passAliases TableAliases
-	var aliasFn func(node sql.Node) bool
+	var aliasFn func(ctx *sql.Context, node sql.Node) bool
 	var analysisErr error
 	var recScope *plan.Scope
 	if !scope.IsEmpty() {
 		recScope = recScope.WithMemos(scope.Memos)
 	}
 
-	aliasFn = func(node sql.Node) bool {
+	aliasFn = func(ctx *sql.Context, node sql.Node) bool {
 		if node == nil {
 			return false
 		}
@@ -190,7 +190,7 @@ func getTableAliases(n sql.Node, scope *plan.Scope) (TableAliases, error) {
 		switch node := node.(type) {
 		case *plan.CreateTrigger:
 			// trigger bodies are evaluated separately
-			rt := getResolvedTable(node.Table)
+			rt := getResolvedTable(ctx, node.Table)
 			analysisErr = passAliases.addQualified(rt.Database().Name(), rt.Name(), rt)
 			return false
 		case *plan.Procedure:
@@ -198,7 +198,7 @@ func getTableAliases(n sql.Node, scope *plan.Scope) (TableAliases, error) {
 		case *plan.TriggerBeginEndBlock:
 			// blocks should not be parsed as a whole, just their statements individually
 			for _, child := range node.Children() {
-				_, analysisErr = getTableAliases(child, recScope)
+				_, analysisErr = getTableAliases(ctx, child, recScope)
 				if analysisErr != nil {
 					break
 				}
@@ -207,7 +207,7 @@ func getTableAliases(n sql.Node, scope *plan.Scope) (TableAliases, error) {
 		case *plan.BeginEndBlock:
 			// blocks should not be parsed as a whole, just their statements individually
 			for _, child := range node.Children() {
-				_, analysisErr = getTableAliases(child, recScope)
+				_, analysisErr = getTableAliases(ctx, child, recScope)
 				if analysisErr != nil {
 					break
 				}
@@ -216,19 +216,19 @@ func getTableAliases(n sql.Node, scope *plan.Scope) (TableAliases, error) {
 		case *plan.Block:
 			// blocks should not be parsed as a whole, just their statements individually
 			for _, child := range node.Children() {
-				_, analysisErr = getTableAliases(child, recScope)
+				_, analysisErr = getTableAliases(ctx, child, recScope)
 				if analysisErr != nil {
 					break
 				}
 			}
 			return false
 		case *plan.InsertInto:
-			if rt := getResolvedTable(node.Destination); rt != nil {
+			if rt := getResolvedTable(ctx, node.Destination); rt != nil {
 				analysisErr = passAliases.addQualified(rt.Database().Name(), rt.Name(), rt)
 			}
 			return false
 		case *plan.IndexedTableAccess:
-			rt := getResolvedTable(node.TableNode)
+			rt := getResolvedTable(ctx, node.TableNode)
 			analysisErr = passAliases.addQualified(rt.Database().Name(), rt.Name(), node)
 			return false
 		case *plan.ResolvedTable:
@@ -252,12 +252,12 @@ func getTableAliases(n sql.Node, scope *plan.Scope) (TableAliases, error) {
 		return TableAliases{}, analysisErr
 	}
 
-	// Inspect all of the scopes, outer to inner. Within a single scope, a name conflict is an error. But an inner scope
+	// InspectWithOpaque all of the scopes, outer to inner. Within a single scope, a name conflict is an error. But an inner scope
 	// can overwrite a name in an outer scope, and it's not an error.
 	aliases := TableAliases{}
 	for _, scopeNode := range scope.OuterToInner() {
 		passAliases = TableAliases{}
-		transform.Inspect(scopeNode, aliasFn)
+		transform.InspectWithOpaque(ctx, scopeNode, aliasFn)
 		if analysisErr != nil {
 			return TableAliases{}, analysisErr
 		}
@@ -266,7 +266,7 @@ func getTableAliases(n sql.Node, scope *plan.Scope) (TableAliases, error) {
 	}
 
 	passAliases = TableAliases{}
-	transform.Inspect(n, aliasFn)
+	transform.InspectWithOpaque(ctx, n, aliasFn)
 	if analysisErr != nil {
 		return TableAliases{}, analysisErr
 	}
@@ -294,46 +294,50 @@ func aliasedExpressionsInNode(n sql.Node) map[string]string {
 	return aliasesFromExpressionToName
 }
 
-// aliasesDefinedInNode returns the expression aliases that are defined in the first Projector node found, starting
-// the search from the specified node. All returned alias names are normalized to lower case.
-func aliasesDefinedInNode(n sql.Node) []string {
-	projector := findFirstProjectorNode(n)
-	if projector == nil {
-		return nil
-	}
-
-	var aliases []string
-	for _, e := range projector.ProjectedExprs() {
-		alias, ok := e.(*expression.Alias)
-		if ok {
-			aliases = append(aliases, strings.ToLower(alias.Name()))
+// getProjectionExpressions walks a tree to identify all projections and returns a map from the column ids of those
+// projections to the underlying expression.
+func getProjectionExpressions(n sql.Node) map[sql.ColumnId]sql.Expression {
+	projectionExpressions := make(map[sql.ColumnId]sql.Expression)
+	transform.Inspect(n, func(n sql.Node) bool {
+		switch node := n.(type) {
+		case *plan.Project:
+			for _, projExpr := range node.Projections {
+				if alias, isAlias := projExpr.(*expression.Alias); isAlias {
+					projectionExpressions[alias.Id()] = alias.Child
+				}
+			}
 		}
-	}
-
-	return aliases
+		return true
+	})
+	return projectionExpressions
 }
 
 // normalizeExpressions returns the expressions given after normalizing them to replace table and expression aliases
 // with their underlying names. This is necessary to match such expressions against those declared by implementors of
 // various interfaces that declare expressions to handle, such as Index.Expressions(), FilteredTable, etc.
-func normalizeExpressions(tableAliases TableAliases, expr ...sql.Expression) []sql.Expression {
+func normalizeExpressions(ctx *sql.Context, tableAliases TableAliases, projectionExpressions map[sql.ColumnId]sql.Expression, expr ...sql.Expression) []sql.Expression {
 	expressions := make([]sql.Expression, len(expr))
 
 	for i, e := range expr {
-		expressions[i] = normalizeExpression(tableAliases, e)
+		expressions[i] = normalizeExpression(ctx, tableAliases, projectionExpressions, e)
 	}
 
 	return expressions
 }
 
 // normalizeExpression returns the expression given after normalizing it to replace table aliases with their underlying
-// names. This is necessary to match such expressions against those declared by implementors of various interfaces that
-// declare expressions to handle, such as Index.Expressions(), FilteredTable, etc.
-func normalizeExpression(tableAliases TableAliases, e sql.Expression) sql.Expression {
+// names and projection aliases with their underlying expressions. This is necessary to match such expressions
+// against those declared by implementors of various interfaces that declare expressions to handle,
+// such as Index.Expressions(), FilteredTable, etc.
+func normalizeExpression(ctx *sql.Context, tableAliases TableAliases, projectionExpressions map[sql.ColumnId]sql.Expression, e sql.Expression) sql.Expression {
 	// If the query has table aliases, use them to replace any table aliases in column expressions
-	normalized, _, _ := transform.Expr(e, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+	var tf transform.ExprFunc
+	tf = func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 		if field, ok := e.(*expression.GetField); ok {
 			table := strings.ToLower(field.Table())
+			if aliasedExpr, ok := projectionExpressions[field.Id()]; ok {
+				return transform.Expr(ctx, aliasedExpr, tf)
+			}
 			if rt, ok, _ := tableAliases.resolveName(table); ok {
 				return field.WithTable(strings.ToLower(rt.Name())).WithName(strings.ToLower(field.Name())), transform.NewTree, nil
 			} else {
@@ -342,15 +346,16 @@ func normalizeExpression(tableAliases TableAliases, e sql.Expression) sql.Expres
 		}
 
 		return e, transform.SameTree, nil
-	})
+	}
+	normalized, _, _ := transform.Expr(ctx, e, tf)
 
 	return normalized
 }
 
 // renameAliasesInExpressions returns expressions where any table references are renamed to the new table name.
-func renameAliasesInExpressions(expressions []sql.Expression, oldNameLower string, newName string) ([]sql.Expression, error) {
+func renameAliasesInExpressions(ctx *sql.Context, expressions []sql.Expression, oldNameLower string, newName string) ([]sql.Expression, error) {
 	for i, e := range expressions {
-		newExpression, same, err := renameAliasesInExp(e, oldNameLower, newName)
+		newExpression, same, err := renameAliasesInExp(ctx, e, oldNameLower, newName)
 		if err != nil {
 			return nil, err
 		}
@@ -362,8 +367,8 @@ func renameAliasesInExpressions(expressions []sql.Expression, oldNameLower strin
 }
 
 // renameAliasesInExp returns an expression where any table references are renamed to the new table name.
-func renameAliasesInExp(exp sql.Expression, oldNameLower string, newName string) (sql.Expression, transform.TreeIdentity, error) {
-	return transform.Expr(exp, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+func renameAliasesInExp(ctx *sql.Context, exp sql.Expression, oldNameLower string, newName string) (sql.Expression, transform.TreeIdentity, error) {
+	return transform.Expr(ctx, exp, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 		switch e := e.(type) {
 		case *expression.GetField:
 			if strings.EqualFold(e.Table(), oldNameLower) {
@@ -375,7 +380,7 @@ func renameAliasesInExp(exp sql.Expression, oldNameLower string, newName string)
 				return expression.NewUnresolvedQualifiedColumn(newName, e.Name()), transform.NewTree, nil
 			}
 		case *plan.Subquery:
-			newSubquery, tree, err := renameAliases(e.Query, oldNameLower, newName)
+			newSubquery, tree, err := renameAliases(ctx, e.Query, oldNameLower, newName)
 			if err != nil {
 				return nil, tree, err
 			}
@@ -389,8 +394,8 @@ func renameAliasesInExp(exp sql.Expression, oldNameLower string, newName string)
 }
 
 // renameAliasesInExp returns a node where any table references are renamed to the new table name.
-func renameAliases(node sql.Node, oldNameLower string, newName string) (sql.Node, transform.TreeIdentity, error) {
-	return transform.Node(node, func(node sql.Node) (sql.Node, transform.TreeIdentity, error) {
+func renameAliases(ctx *sql.Context, node sql.Node, oldNameLower string, newName string) (sql.Node, transform.TreeIdentity, error) {
+	return transform.Node(ctx, node, func(ctx *sql.Context, node sql.Node) (sql.Node, transform.TreeIdentity, error) {
 		newNode := node
 		allSame := transform.SameTree
 
@@ -405,8 +410,8 @@ func renameAliases(node sql.Node, oldNameLower string, newName string) (sql.Node
 		}
 
 		// update expressions
-		newNode, same, err := transform.NodeExprs(newNode, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
-			return renameAliasesInExp(e, oldNameLower, newName)
+		newNode, same, err := transform.NodeExprs(ctx, newNode, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+			return renameAliasesInExp(ctx, e, oldNameLower, newName)
 		})
 		if err != nil {
 			return nil, transform.SameTree, err

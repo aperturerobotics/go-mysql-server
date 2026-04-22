@@ -26,15 +26,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var sqlCtx = sql.NewEmptyContext()
+
 func ConvertToJson(t *testing.T, val interface{}) types.MutableJSON {
 	if val == nil {
 		return nil
 	}
-	val, inRange, err := types.JSON.Convert(val)
+	val, inRange, err := types.JSON.Convert(sqlCtx, val)
 	require.NoError(t, err)
-	require.True(t, bool(inRange))
+	require.True(t, inRange == sql.InRange)
 	require.Implements(t, (*sql.JSONWrapper)(nil), val)
-	val, err = val.(sql.JSONWrapper).ToInterface()
+	val, err = val.(sql.JSONWrapper).ToInterface(t.Context())
 	require.NoError(t, err)
 	return types.JSONDocument{Val: val}
 }
@@ -117,9 +119,7 @@ func RunJsonCompareTests(t *testing.T, tests []JsonCompareTest, prepare prepareJ
 		}
 		t.Run(name, func(t *testing.T) {
 			left, right := prepare(t, test.Left, test.Right)
-			cmp, err := types.JSON.Compare(
-				left, right,
-			)
+			cmp, err := types.JSON.Compare(context.Background(), left, right)
 			require.NoError(t, err)
 			assert.Equal(t, test.Cmp, cmp)
 		})
@@ -994,17 +994,17 @@ func RunJsonMutationTests(ctx context.Context, t *testing.T, tests []JsonMutatio
 				case "replace":
 					return doc.Replace(ctx, test.path, val)
 				case "arrayappend":
-					return doc.ArrayAppend(test.path, val)
+					return doc.ArrayAppend(ctx, test.path, val)
 				case "arrayinsert":
-					return doc.ArrayInsert(test.path, val)
+					return doc.ArrayInsert(ctx, test.path, val)
 				default:
 					panic("unexpected operation for test")
 				}
 			}()
 			require.NoError(t, err)
-			expected, err := result.ToInterface()
+			expected, err := result.ToInterface(ctx)
 			require.NoError(t, err)
-			actual, err := res.ToInterface()
+			actual, err := res.ToInterface(ctx)
 			require.NoError(t, err)
 			assert.Equal(t, expected, actual)
 			assert.Equal(t, test.changed, changed)

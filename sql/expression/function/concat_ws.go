@@ -34,7 +34,7 @@ var _ sql.FunctionExpression = (*ConcatWithSeparator)(nil)
 var _ sql.CollationCoercible = (*ConcatWithSeparator)(nil)
 
 // NewConcatWithSeparator creates a new NewConcatWithSeparator UDF.
-func NewConcatWithSeparator(args ...sql.Expression) (sql.Expression, error) {
+func NewConcatWithSeparator(ctx *sql.Context, args ...sql.Expression) (sql.Expression, error) {
 	if len(args) == 0 {
 		return nil, sql.ErrInvalidArgumentNumber.New("CONCAT_WS", "1 or more", 0)
 	}
@@ -53,7 +53,7 @@ func (f *ConcatWithSeparator) Description() string {
 }
 
 // Type implements the Expression interface.
-func (f *ConcatWithSeparator) Type() sql.Type { return types.LongText }
+func (f *ConcatWithSeparator) Type(ctx *sql.Context) sql.Type { return types.LongText }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (c *ConcatWithSeparator) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
@@ -69,13 +69,8 @@ func (c *ConcatWithSeparator) CollationCoercibility(ctx *sql.Context) (collation
 }
 
 // IsNullable implements the Expression interface.
-func (f *ConcatWithSeparator) IsNullable() bool {
-	for _, arg := range f.args {
-		if arg.IsNullable() {
-			return true
-		}
-	}
-	return false
+func (f *ConcatWithSeparator) IsNullable(ctx *sql.Context) bool {
+	return f.args[0].IsNullable(ctx)
 }
 
 func (f *ConcatWithSeparator) String() string {
@@ -87,8 +82,8 @@ func (f *ConcatWithSeparator) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (*ConcatWithSeparator) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return NewConcatWithSeparator(children...)
+func (*ConcatWithSeparator) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return NewConcatWithSeparator(ctx, children...)
 }
 
 // Resolved implements the Expression interface.
@@ -122,7 +117,13 @@ func (f *ConcatWithSeparator) Eval(ctx *sql.Context, row sql.Row) (interface{}, 
 			continue
 		}
 
-		val, _, err = types.LongText.Convert(val)
+		val, _, err = types.LongText.Convert(ctx, val)
+		if err != nil {
+			return nil, err
+		}
+
+		// Handle Dolt's TextStorage wrapper that doesn't convert to plain string
+		val, err = sql.UnwrapAny(ctx, val)
 		if err != nil {
 			return nil, err
 		}

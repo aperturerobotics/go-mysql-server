@@ -27,11 +27,6 @@ func (transactionNode) Children() []sql.Node {
 	return nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (transactionNode) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
-}
-
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (*transactionNode) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.Collation_binary, 7
@@ -47,7 +42,7 @@ func (transactionNode) IsReadOnly() bool {
 }
 
 // Schema implements the sql.Node interface.
-func (transactionNode) Schema() sql.Schema {
+func (transactionNode) Schema(ctx *sql.Context) sql.Schema {
 	return nil
 }
 
@@ -68,42 +63,12 @@ func NewStartTransaction(transactionChar sql.TransactionCharacteristic) *StartTr
 	}
 }
 
-// RowIter implements the sql.Node interface.
-func (s *StartTransaction) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
-	ts, ok := ctx.Session.(sql.TransactionSession)
-	if !ok {
-		return sql.RowsToRowIter(), nil
-	}
-
-	currentTx := ctx.GetTransaction()
-	// A START TRANSACTION statement commits any pending work before beginning a new tx
-	// TODO: this work is wasted in the case that START TRANSACTION is the first statement after COMMIT
-	//  an isDirty method on the transaction would allow us to avoid this
-	if currentTx != nil {
-		err := ts.CommitTransaction(ctx, currentTx)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	transaction, err := ts.StartTransaction(ctx, s.TransChar)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx.SetTransaction(transaction)
-	// until this transaction is committed or rolled back, don't begin or commit any transactions automatically
-	ctx.SetIgnoreAutoCommit(true)
-
-	return sql.RowsToRowIter(), nil
-}
-
 func (s *StartTransaction) String() string {
 	return "Start Transaction"
 }
 
 // WithChildren implements the Node interface.
-func (s *StartTransaction) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (s *StartTransaction) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(s, len(children), 0)
 	}
@@ -125,34 +90,10 @@ func NewCommit() *Commit {
 	return &Commit{}
 }
 
-// RowIter implements the sql.Node interface.
-func (c *Commit) RowIter(ctx *sql.Context, _ sql.Row) (sql.RowIter, error) {
-	ts, ok := ctx.Session.(sql.TransactionSession)
-	if !ok {
-		return sql.RowsToRowIter(), nil
-	}
-
-	transaction := ctx.GetTransaction()
-
-	if transaction == nil {
-		return sql.RowsToRowIter(), nil
-	}
-
-	err := ts.CommitTransaction(ctx, transaction)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx.SetIgnoreAutoCommit(false)
-	ctx.SetTransaction(nil)
-
-	return sql.RowsToRowIter(), nil
-}
-
 func (*Commit) String() string { return "COMMIT" }
 
 // WithChildren implements the Node interface.
-func (c *Commit) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (c *Commit) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(c, len(children), 0)
 	}
@@ -174,35 +115,10 @@ func NewRollback() *Rollback {
 	return &Rollback{}
 }
 
-// RowIter implements the sql.Node interface.
-func (r *Rollback) RowIter(ctx *sql.Context, _ sql.Row) (sql.RowIter, error) {
-	ts, ok := ctx.Session.(sql.TransactionSession)
-	if !ok {
-		return sql.RowsToRowIter(), nil
-	}
-
-	transaction := ctx.GetTransaction()
-
-	if transaction == nil {
-		return sql.RowsToRowIter(), nil
-	}
-
-	err := ts.Rollback(ctx, transaction)
-	if err != nil {
-		return nil, err
-	}
-
-	// Like Commit, Rollback ends the current transaction and a new one begins with the next statement
-	ctx.SetIgnoreAutoCommit(false)
-	ctx.SetTransaction(nil)
-
-	return sql.RowsToRowIter(), nil
-}
-
 func (*Rollback) String() string { return "ROLLBACK" }
 
 // WithChildren implements the Node interface.
-func (r *Rollback) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (r *Rollback) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(r, len(children), 0)
 	}
@@ -225,31 +141,10 @@ func NewCreateSavepoint(name string) *CreateSavepoint {
 	return &CreateSavepoint{Name: name}
 }
 
-// RowIter implements the sql.Node interface.
-func (c *CreateSavepoint) RowIter(ctx *sql.Context, _ sql.Row) (sql.RowIter, error) {
-	ts, ok := ctx.Session.(sql.TransactionSession)
-	if !ok {
-		return sql.RowsToRowIter(), nil
-	}
-
-	transaction := ctx.GetTransaction()
-
-	if transaction == nil {
-		return sql.RowsToRowIter(), nil
-	}
-
-	err := ts.CreateSavepoint(ctx, transaction, c.Name)
-	if err != nil {
-		return nil, err
-	}
-
-	return sql.RowsToRowIter(), nil
-}
-
 func (c *CreateSavepoint) String() string { return fmt.Sprintf("SAVEPOINT %s", c.Name) }
 
 // WithChildren implements the Node interface.
-func (c *CreateSavepoint) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (c *CreateSavepoint) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(c, len(children), 0)
 	}
@@ -274,31 +169,10 @@ func NewRollbackSavepoint(name string) *RollbackSavepoint {
 	}
 }
 
-// RowIter implements the sql.Node interface.
-func (r *RollbackSavepoint) RowIter(ctx *sql.Context, _ sql.Row) (sql.RowIter, error) {
-	ts, ok := ctx.Session.(sql.TransactionSession)
-	if !ok {
-		return sql.RowsToRowIter(), nil
-	}
-
-	transaction := ctx.GetTransaction()
-
-	if transaction == nil {
-		return sql.RowsToRowIter(), nil
-	}
-
-	err := ts.RollbackToSavepoint(ctx, transaction, r.Name)
-	if err != nil {
-		return nil, err
-	}
-
-	return sql.RowsToRowIter(), nil
-}
-
 func (r *RollbackSavepoint) String() string { return fmt.Sprintf("ROLLBACK TO SAVEPOINT %s", r.Name) }
 
 // WithChildren implements the Node interface.
-func (r *RollbackSavepoint) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (r *RollbackSavepoint) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(r, len(children), 0)
 	}
@@ -323,31 +197,10 @@ func NewReleaseSavepoint(name string) *ReleaseSavepoint {
 	}
 }
 
-// RowIter implements the sql.Node interface.
-func (r *ReleaseSavepoint) RowIter(ctx *sql.Context, _ sql.Row) (sql.RowIter, error) {
-	ts, ok := ctx.Session.(sql.TransactionSession)
-	if !ok {
-		return sql.RowsToRowIter(), nil
-	}
-
-	transaction := ctx.GetTransaction()
-
-	if transaction == nil {
-		return sql.RowsToRowIter(), nil
-	}
-
-	err := ts.ReleaseSavepoint(ctx, transaction, r.Name)
-	if err != nil {
-		return nil, err
-	}
-
-	return sql.RowsToRowIter(), nil
-}
-
 func (r *ReleaseSavepoint) String() string { return fmt.Sprintf("RELEASE SAVEPOINT %s", r.Name) }
 
 // WithChildren implements the Node interface.
-func (r *ReleaseSavepoint) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (r *ReleaseSavepoint) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(r, len(children), 0)
 	}

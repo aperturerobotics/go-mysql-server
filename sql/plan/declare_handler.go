@@ -23,10 +23,10 @@ import (
 
 // DeclareHandler represents the DECLARE ... HANDLER statement.
 type DeclareHandler struct {
-	Action    expression.DeclareHandlerAction
 	Statement sql.Node
 	Pref      *expression.ProcedureReference
 	Condition expression.HandlerCondition
+	Action    expression.DeclareHandlerAction
 }
 
 var _ sql.Node = (*DeclareHandler)(nil)
@@ -70,7 +70,7 @@ func (d *DeclareHandler) String() string {
 }
 
 // DebugString implements the interface sql.DebugStringer.
-func (d *DeclareHandler) DebugString() string {
+func (d *DeclareHandler) DebugString(ctx *sql.Context) string {
 	var action string
 	switch d.Action {
 	case expression.DeclareHandlerAction_Continue:
@@ -80,11 +80,11 @@ func (d *DeclareHandler) DebugString() string {
 	case expression.DeclareHandlerAction_Undo:
 		action = "UNDO"
 	}
-	return fmt.Sprintf("DECLARE %s HANDLER FOR NOT FOUND %s", action, sql.DebugString(d.Statement))
+	return fmt.Sprintf("DECLARE %s HANDLER FOR NOT FOUND %s", action, sql.DebugString(ctx, d.Statement))
 }
 
 // Schema implements the interface sql.Node.
-func (d *DeclareHandler) Schema() sql.Schema {
+func (d *DeclareHandler) Schema(ctx *sql.Context) sql.Schema {
 	return nil
 }
 
@@ -94,7 +94,7 @@ func (d *DeclareHandler) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (d *DeclareHandler) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (d *DeclareHandler) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(d, len(children), 1)
 	}
@@ -102,11 +102,6 @@ func (d *DeclareHandler) WithChildren(children ...sql.Node) (sql.Node, error) {
 	nd := *d
 	nd.Statement = children[0]
 	return &nd, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (d *DeclareHandler) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

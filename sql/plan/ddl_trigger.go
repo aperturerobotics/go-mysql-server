@@ -92,7 +92,7 @@ func (c *CreateTrigger) IsReadOnly() bool {
 	return false
 }
 
-func (c *CreateTrigger) Schema() sql.Schema {
+func (c *CreateTrigger) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -100,7 +100,7 @@ func (c *CreateTrigger) Children() []sql.Node {
 	return []sql.Node{c.Table}
 }
 
-func (c *CreateTrigger) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (c *CreateTrigger) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(c, len(children), 1)
 	}
@@ -108,17 +108,6 @@ func (c *CreateTrigger) WithChildren(children ...sql.Node) (sql.Node, error) {
 	nc := *c
 	nc.Table = children[0]
 	return &nc, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (c *CreateTrigger) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: GetDatabaseName(c.Table),
-		Table:    getTableName(c.Table),
-	}
-
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Trigger))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -134,12 +123,12 @@ func (c *CreateTrigger) String() string {
 	return fmt.Sprintf("CREATE TRIGGER %s %s %s ON %s FOR EACH ROW %s%s", c.TriggerName, c.TriggerTime, c.TriggerEvent, c.Table, order, c.Body)
 }
 
-func (c *CreateTrigger) DebugString() string {
+func (c *CreateTrigger) DebugString(ctx *sql.Context) string {
 	order := ""
 	if c.TriggerOrder != nil {
 		order = fmt.Sprintf("%s %s ", c.TriggerOrder.PrecedesOrFollows, c.TriggerOrder.OtherTriggerName)
 	}
-	return fmt.Sprintf("CREATE TRIGGER %s %s %s ON %s FOR EACH ROW %s%s", c.TriggerName, c.TriggerTime, c.TriggerEvent, sql.DebugString(c.Table), order, sql.DebugString(c.Body))
+	return fmt.Sprintf("CREATE TRIGGER %s %s %s ON %s FOR EACH ROW %s%s", c.TriggerName, c.TriggerTime, c.TriggerEvent, sql.DebugString(ctx, c.Table), order, sql.DebugString(ctx, c.Body))
 }
 
 // OrderTriggers is a utility method that first sorts triggers into their precedence. It then splits the triggers into

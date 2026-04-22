@@ -30,8 +30,8 @@ import (
 // ifElseIter is the row iterator for *IfElseBlock.
 type ifElseIter struct {
 	branchIter sql.RowIter
-	sch        sql.Schema
 	branchNode sql.Node
+	sch        sql.Schema
 }
 
 var _ plan.BlockRowIter = (*ifElseIter)(nil)
@@ -56,7 +56,7 @@ func (i *ifElseIter) RepresentingNode() sql.Node {
 }
 
 // Schema implements the sql.BlockRowIter interface.
-func (i *ifElseIter) Schema() sql.Schema {
+func (i *ifElseIter) Schema(ctx *sql.Context) sql.Schema {
 	return i.sch
 }
 
@@ -66,7 +66,7 @@ type beginEndIter struct {
 	rowIter sql.RowIter
 }
 
-var _ sql.RowIter = (*beginEndIter)(nil)
+var _ sql.MutableRowIter = (*beginEndIter)(nil)
 
 // Next implements the interface sql.RowIter.
 func (b *beginEndIter) Next(ctx *sql.Context) (sql.Row, error) {
@@ -99,40 +99,62 @@ func (b *beginEndIter) Close(ctx *sql.Context) error {
 	return b.rowIter.Close(ctx)
 }
 
+// GetChildIter implements the sql.MutableRowIter interface.
+func (b *beginEndIter) GetChildIter() sql.RowIter {
+	return b.rowIter
+}
+
+// WithChildIter implements the sql.MutableRowIter interface.
+func (b *beginEndIter) WithChildIter(child sql.RowIter) sql.RowIter {
+	nb := *b
+	nb.rowIter = child
+	return &nb
+}
+
 // callIter is the row iterator for *Call.
 type callIter struct {
 	call      *plan.Call
 	innerIter sql.RowIter
 }
 
+var _ sql.MutableRowIter = (*callIter)(nil)
+
 // Next implements the sql.RowIter interface.
-func (iter *callIter) Next(ctx *sql.Context) (sql.Row, error) {
-	return iter.innerIter.Next(ctx)
+func (ci *callIter) Next(ctx *sql.Context) (sql.Row, error) {
+	if ci.innerIter == nil {
+		return nil, io.EOF
+	}
+	return ci.innerIter.Next(ctx)
 }
 
 // Close implements the sql.RowIter interface.
-func (iter *callIter) Close(ctx *sql.Context) error {
-	err := iter.innerIter.Close(ctx)
+func (ci *callIter) Close(ctx *sql.Context) error {
+	var err error
+	if ci.innerIter != nil {
+		err = ci.innerIter.Close(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	err = ci.call.Pref.CloseAllCursors(ctx)
 	if err != nil {
 		return err
 	}
-	err = iter.call.Pref.CloseAllCursors(ctx)
-	if err != nil {
-		return err
+	if ci.call.Procedure.ExternalProc == nil {
+		return nil
 	}
-
 	// Set all user and system variables from INOUT and OUT params
-	for i, param := range iter.call.Procedure.Params {
+	for i, param := range ci.call.Procedure.Params {
 		if param.Direction == plan.ProcedureParamDirection_Inout ||
-			(param.Direction == plan.ProcedureParamDirection_Out && iter.call.Pref.VariableHasBeenSet(param.Name)) {
-			val, err := iter.call.Pref.GetVariableValue(param.Name)
+			(param.Direction == plan.ProcedureParamDirection_Out && ci.call.Pref.VariableHasBeenSet(param.Name)) {
+			val, err := ci.call.Pref.GetVariableValue(param.Name)
 			if err != nil {
 				return err
 			}
 
-			typ := iter.call.Pref.GetVariableType(param.Name)
+			typ := ci.call.Pref.GetVariableType(param.Name)
 
-			switch callParam := iter.call.Params[i].(type) {
+			switch callParam := ci.call.Params[i].(type) {
 			case *expression.UserVar:
 				err = ctx.SetUserVariable(ctx, callParam.Name, val, typ)
 				if err != nil {
@@ -142,7 +164,7 @@ func (iter *callIter) Close(ctx *sql.Context) error {
 				// This should have been caught by the analyzer, so a major bug exists somewhere
 				return fmt.Errorf("unable to set `%s` as it is a system variable", callParam.Name)
 			case *expression.ProcedureParam:
-				err = callParam.Set(val, param.Type)
+				err = callParam.Set(ctx, val, param.Type)
 				if err != nil {
 					return err
 				}
@@ -150,9 +172,9 @@ func (iter *callIter) Close(ctx *sql.Context) error {
 		} else if param.Direction == plan.ProcedureParamDirection_Out { // VariableHasBeenSet was false
 			// For OUT only, if a var was not set within the procedure body, then we set the vars to nil.
 			// If the var had a value before the call then it is basically removed.
-			switch callParam := iter.call.Params[i].(type) {
+			switch callParam := ci.call.Params[i].(type) {
 			case *expression.UserVar:
-				err = ctx.SetUserVariable(ctx, callParam.Name, nil, iter.call.Pref.GetVariableType(param.Name))
+				err = ctx.SetUserVariable(ctx, callParam.Name, nil, ci.call.Pref.GetVariableType(param.Name))
 				if err != nil {
 					return err
 				}
@@ -160,7 +182,7 @@ func (iter *callIter) Close(ctx *sql.Context) error {
 				// This should have been caught by the analyzer, so a major bug exists somewhere
 				return fmt.Errorf("unable to set `%s` as it is a system variable", callParam.Name)
 			case *expression.ProcedureParam:
-				err := callParam.Set(nil, param.Type)
+				err := callParam.Set(ctx, nil, param.Type)
 				if err != nil {
 					return err
 				}
@@ -168,6 +190,18 @@ func (iter *callIter) Close(ctx *sql.Context) error {
 		}
 	}
 	return nil
+}
+
+// GetChildIter implements the sql.MutableRowIter interface.
+func (ci *callIter) GetChildIter() sql.RowIter {
+	return ci.innerIter
+}
+
+// WithChildIter implements the sql.MutableRowIter interface.
+func (ci *callIter) WithChildIter(child sql.RowIter) sql.RowIter {
+	nci := *ci
+	nci.innerIter = child
+	return &nci
 }
 
 type elseCaseErrorIter struct{}
@@ -186,10 +220,10 @@ func (e elseCaseErrorIter) Close(context *sql.Context) error {
 
 // openIter is the sql.RowIter of *Open.
 type openIter struct {
+	b    *BaseBuilder
 	pRef *expression.ProcedureReference
 	name string
 	row  sql.Row
-	b    *BaseBuilder
 }
 
 var _ sql.RowIter = (*openIter)(nil)

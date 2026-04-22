@@ -85,17 +85,16 @@ func (w *WindowPartition) AddAggregation(agg *Aggregation) {
 // Next currently materializes [i.input] and [i.output] before
 // returning the first result, regardless of Limit or other expressions.
 type WindowPartitionIter struct {
-	w             *WindowPartition
-	child         sql.RowIter
-	input, output sql.WindowBuffer
-
+	child             sql.RowIter
+	w                 *WindowPartition
+	input             sql.WindowBuffer
+	output            sql.WindowBuffer
+	outputOrdering    []int
+	partitions        []sql.WindowInterval
+	currentPartition  sql.WindowInterval
 	pos               int
 	outputOrderingPos int
-	outputOrdering    []int
-
-	partitions       []sql.WindowInterval
-	currentPartition sql.WindowInterval
-	partitionIdx     int
+	partitionIdx      int
 }
 
 var _ sql.RowIter = (*WindowPartitionIter)(nil)
@@ -113,14 +112,14 @@ func (i *WindowPartitionIter) WindowBlock() *WindowPartition {
 }
 
 func (i *WindowPartitionIter) Close(ctx *sql.Context) error {
-	i.Dispose()
+	i.Dispose(ctx)
 	i.input = nil
 	return nil
 }
 
-func (i *WindowPartitionIter) Dispose() {
+func (i *WindowPartitionIter) Dispose(ctx *sql.Context) {
 	for _, a := range i.w.Aggs {
-		a.fn.Dispose()
+		a.fn.Dispose(ctx)
 	}
 }
 
@@ -233,9 +232,7 @@ func (i *WindowPartitionIter) initializePartitions(ctx *sql.Context) ([]sql.Wind
 // At this stage, result rows are appended with the original row index for resorting. The size of
 // [i.output] will be smaller than [i.input] if the outer sql.Node is a plan.GroupBy with fewer partitions than rows.
 func (i *WindowPartitionIter) materializeOutput(ctx *sql.Context) (sql.WindowBuffer, error) {
-	// handle nil input specially if no partition clause
-	// ex: COUNT(*) on nil rows returns 0, not nil
-	if len(i.input) == 0 && len(i.w.PartitionBy) > 0 {
+	if len(i.input) == 0 {
 		return nil, io.EOF
 	}
 
@@ -275,7 +272,11 @@ func (i *WindowPartitionIter) compute(ctx *sql.Context) (sql.Row, error) {
 				return nil, err
 			}
 		}
-		row[j] = agg.fn.Compute(ctx, interval, i.input)
+		v, err := agg.fn.Compute(ctx, interval, i.input)
+		if err != nil {
+			return nil, err
+		}
+		row[j] = v
 	}
 
 	// TODO: move sort by above aggregation
@@ -369,7 +370,7 @@ func isNewPartition(ctx *sql.Context, partitionBy []sql.Expression, last sql.Row
 	}
 
 	for i, expr := range partitionBy {
-		cmp, err := expr.Type().Compare(lastExp[i], thisExp[i])
+		cmp, err := expr.Type(ctx).Compare(ctx, lastExp[i], thisExp[i])
 		if err != nil {
 			return false, err
 		}

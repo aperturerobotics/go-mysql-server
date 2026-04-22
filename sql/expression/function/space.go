@@ -15,6 +15,8 @@
 package function
 
 import (
+	"github.com/dolthub/vitess/go/mysql"
+
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
@@ -27,7 +29,7 @@ type Space struct {
 var _ sql.FunctionExpression = (*Space)(nil)
 var _ sql.CollationCoercible = (*Space)(nil)
 
-func NewSpace(arg sql.Expression) sql.Expression {
+func NewSpace(ctx *sql.Context, arg sql.Expression) sql.Expression {
 	return &Space{NewUnaryFunc(arg, "SPACE", types.LongText)}
 }
 
@@ -53,10 +55,12 @@ func (s *Space) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	// TODO: better truncate integer handling
-	v, _, err := types.Int64.Convert(val)
+	v, _, err := types.Int64.Convert(ctx, val)
 	if err != nil {
-		ctx.Warn(1292, "Truncated incorrect INTEGER value: '%v'", val)
-		v = int64(0)
+		if !sql.ErrTruncatedIncorrect.Is(err) {
+			return nil, err
+		}
+		ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 	}
 
 	num := int(v.(int64))
@@ -72,9 +76,9 @@ func (s *Space) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 }
 
 // WithChildren implements the sql.Expression interface
-func (s *Space) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (s *Space) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(s, len(children), 1)
 	}
-	return NewSpace(children[0]), nil
+	return NewSpace(ctx, children[0]), nil
 }

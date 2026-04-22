@@ -15,29 +15,26 @@
 package plan
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
 // Into is a node to wrap the top-level node in a query plan so that any result will set user-defined or others
 // variables given
 type Into struct {
 	UnaryNode
-	IntoVars []sql.Expression
-	Dumpfile string
-	Outfile  string
-
-	Charset string
-
+	Dumpfile            string
+	Outfile             string
+	Charset             string
 	FieldsTerminatedBy  string
 	FieldsEnclosedBy    string
-	FieldsEnclosedByOpt bool
 	FieldsEscapedBy     string
-
-	LinesStartingBy   string
-	LinesTerminatedBy string
+	LinesStartingBy     string
+	LinesTerminatedBy   string
+	IntoVars            []sql.Expression
+	FieldsEnclosedByOpt bool
 }
 
 var _ sql.Node = (*Into)(nil)
@@ -76,10 +73,10 @@ func NewInto(
 var emptySch = make(sql.Schema, 0)
 
 // Schema implements the Node interface.
-func (i *Into) Schema() sql.Schema {
+func (i *Into) Schema(ctx *sql.Context) sql.Schema {
 	// SELECT INTO does not return results directly (only through SQL vars or files),
 	// so it's result schema is always empty.
-	return emptySch
+	return types.OkResultSchema
 }
 
 func (i *Into) IsReadOnly() bool {
@@ -90,25 +87,25 @@ func (i *Into) String() string {
 	p := sql.NewTreePrinter()
 	var vars = make([]string, len(i.IntoVars))
 	for j, v := range i.IntoVars {
-		vars[j] = fmt.Sprintf(v.String())
+		vars[j] = v.String()
 	}
 	_ = p.WriteNode("Into(%s, Outfile %s, Dumpfile %s)", strings.Join(vars, ", "), i.Outfile, i.Dumpfile)
 	_ = p.WriteChildren(i.Child.String())
 	return p.String()
 }
 
-func (i *Into) DebugString() string {
+func (i *Into) DebugString(ctx *sql.Context) string {
 	p := sql.NewTreePrinter()
 	var vars = make([]string, len(i.IntoVars))
 	for j, v := range i.IntoVars {
-		vars[j] = sql.DebugString(v)
+		vars[j] = sql.DebugString(ctx, v)
 	}
 	_ = p.WriteNode("Into(%s, Outfile %s, Dumpfile %s)", strings.Join(vars, ", "), i.Outfile, i.Dumpfile)
-	_ = p.WriteChildren(sql.DebugString(i.Child))
+	_ = p.WriteChildren(sql.DebugString(ctx, i.Child))
 	return p.String()
 }
 
-func (i *Into) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (i *Into) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(i, len(children), 1)
 	}
@@ -117,18 +114,13 @@ func (i *Into) WithChildren(children ...sql.Node) (sql.Node, error) {
 	return &ni, nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (i *Into) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return i.Child.CheckPrivileges(ctx, opChecker)
-}
-
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (i *Into) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.GetCoercibility(ctx, i.Child)
 }
 
 // WithExpressions implements the sql.Expressioner interface.
-func (i *Into) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (i *Into) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != len(i.IntoVars) {
 		return nil, sql.ErrInvalidChildrenNumber.New(i, len(exprs), len(i.IntoVars))
 	}

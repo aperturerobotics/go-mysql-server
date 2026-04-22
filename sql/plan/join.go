@@ -33,6 +33,7 @@ const (
 	JoinTypeInner                                     // InnerJoin
 	JoinTypeSemi                                      // SemiJoin
 	JoinTypeAnti                                      // AntiJoin
+	JoinTypeAntiIncludeNulls                          // AntiJoinIncludingNulls
 	JoinTypeLeftOuter                                 // LeftOuterJoin
 	JoinTypeLeftOuterExcludeNulls                     // LeftOuterJoinExcludingNulls
 	JoinTypeFullOuter                                 // FullOuterJoin
@@ -42,17 +43,20 @@ const (
 	JoinTypeLeftOuterLookup                           // LeftOuterLookupJoin
 	JoinTypeHash                                      // HashJoin
 	JoinTypeLeftOuterHash                             // LeftOuterHashJoin
-	JoinTypeLeftOuterHashExcludeNulls                 // LeftOuterHashJoinExcludeNulls
+	JoinTypeLeftOuterHashExcludeNulls                 // LeftOuterHashJoinExcludingNulls
 	JoinTypeMerge                                     // MergeJoin
 	JoinTypeLeftOuterMerge                            // LeftOuterMergeJoin
 	JoinTypeRangeHeap                                 // RangeHeapJoin
 	JoinTypeLeftOuterRangeHeap                        // LeftOuterRangeHeapJoin
 	JoinTypeSemiHash                                  // SemiHashJoin
 	JoinTypeAntiHash                                  // AntiHashJoin
+	JoinTypeAntiHashIncludeNulls                      // AntiHashJoinIncludingNulls
 	JoinTypeSemiLookup                                // SemiLookupJoin
 	JoinTypeAntiLookup                                // AntiLookupJoin
+	JoinTypeAntiLookupIncludeNulls                    // AntiLookupIncludingNulls
 	JoinTypeSemiMerge                                 // SemiMergeJoin
 	JoinTypeAntiMerge                                 // AntiMergeJoin
+	JoinTypeAntiMergeIncludeNulls                     // AntiMergeIncludingNulls
 	JoinTypeUsing                                     // NaturalJoin
 	JoinTypeUsingLeft                                 // NaturalLeftJoin
 	JoinTypeUsingRight                                // NaturalRightJoin
@@ -63,6 +67,10 @@ const (
 	JoinTypeLateralLeft  // LateralLeftJoin
 	JoinTypeLateralRight // LateralLeftJoin
 )
+
+func (i JoinType) IsOuter() bool {
+	return i.IsLeftOuter() || i.IsRightOuter() || i.IsFullOuter()
+}
 
 func (i JoinType) IsLeftOuter() bool {
 	switch i {
@@ -98,7 +106,10 @@ func (i JoinType) IsPhysical() bool {
 		JoinTypeSemiLookup, JoinTypeSemiMerge, JoinTypeSemiHash,
 		JoinTypeHash, JoinTypeLeftOuterHash, JoinTypeLeftOuterHashExcludeNulls,
 		JoinTypeMerge, JoinTypeLeftOuterMerge,
-		JoinTypeAntiLookup, JoinTypeAntiMerge, JoinTypeAntiHash, JoinTypeRangeHeap, JoinTypeLeftOuterRangeHeap:
+		JoinTypeAntiLookup, JoinTypeAntiLookupIncludeNulls,
+		JoinTypeAntiMerge, JoinTypeAntiMergeIncludeNulls,
+		JoinTypeAntiHash, JoinTypeAntiHashIncludeNulls,
+		JoinTypeRangeHeap, JoinTypeLeftOuterRangeHeap:
 		return true
 	default:
 		return false
@@ -129,7 +140,7 @@ func (i JoinType) IsDegenerate() bool {
 
 func (i JoinType) IsMerge() bool {
 	switch i {
-	case JoinTypeMerge, JoinTypeSemiMerge, JoinTypeAntiMerge, JoinTypeLeftOuterMerge:
+	case JoinTypeMerge, JoinTypeSemiMerge, JoinTypeAntiMerge, JoinTypeAntiMergeIncludeNulls, JoinTypeLeftOuterMerge:
 		return true
 	default:
 		return false
@@ -138,7 +149,8 @@ func (i JoinType) IsMerge() bool {
 
 func (i JoinType) IsHash() bool {
 	switch i {
-	case JoinTypeHash, JoinTypeSemiHash, JoinTypeAntiHash, JoinTypeLeftOuterHash, JoinTypeLeftOuterHashExcludeNulls, JoinTypeCrossHash:
+	case JoinTypeHash, JoinTypeSemiHash, JoinTypeAntiHash, JoinTypeAntiHashIncludeNulls,
+		JoinTypeLeftOuterHash, JoinTypeLeftOuterHashExcludeNulls, JoinTypeCrossHash:
 		return true
 	default:
 		return false
@@ -157,7 +169,8 @@ func (i JoinType) IsSemi() bool {
 
 func (i JoinType) IsAnti() bool {
 	switch i {
-	case JoinTypeAnti, JoinTypeAntiLookup, JoinTypeAntiMerge, JoinTypeAntiHash:
+	case JoinTypeAnti, JoinTypeAntiIncludeNulls, JoinTypeAntiLookup, JoinTypeAntiLookupIncludeNulls,
+		JoinTypeAntiMerge, JoinTypeAntiMergeIncludeNulls, JoinTypeAntiHash, JoinTypeAntiHashIncludeNulls:
 		return true
 	default:
 		return false
@@ -165,12 +178,14 @@ func (i JoinType) IsAnti() bool {
 }
 
 func (i JoinType) IsPartial() bool {
-	return i == JoinTypeSemi ||
-		i == JoinTypeAnti ||
-		i == JoinTypeSemiHash ||
-		i == JoinTypeAntiHash ||
-		i == JoinTypeAntiLookup ||
-		i == JoinTypeSemiLookup
+	switch i {
+	case JoinTypeSemi, JoinTypeAnti, JoinTypeAntiIncludeNulls, JoinTypeSemiHash,
+		JoinTypeAntiHash, JoinTypeAntiHashIncludeNulls, JoinTypeAntiLookup, JoinTypeAntiLookupIncludeNulls,
+		JoinTypeSemiLookup:
+		return true
+	default:
+		return false
+	}
 }
 
 func (i JoinType) IsPlaceholder() bool {
@@ -180,7 +195,8 @@ func (i JoinType) IsPlaceholder() bool {
 
 func (i JoinType) IsLookup() bool {
 	switch i {
-	case JoinTypeLookup, JoinTypeLeftOuterLookup, JoinTypeAntiLookup, JoinTypeSemiLookup:
+	case JoinTypeLookup, JoinTypeLeftOuterLookup,
+		JoinTypeAntiLookup, JoinTypeAntiLookupIncludeNulls, JoinTypeSemiLookup:
 		return true
 	default:
 		return false
@@ -221,6 +237,8 @@ func (i JoinType) AsHash() JoinType {
 		return JoinTypeSemiHash
 	case JoinTypeAnti:
 		return JoinTypeAntiHash
+	case JoinTypeAntiIncludeNulls:
+		return JoinTypeAntiHashIncludeNulls
 	case JoinTypeCross:
 		return JoinTypeCrossHash
 	default:
@@ -249,6 +267,8 @@ func (i JoinType) AsMerge() JoinType {
 		return JoinTypeSemiMerge
 	case JoinTypeAnti:
 		return JoinTypeAntiMerge
+	case JoinTypeAntiIncludeNulls:
+		return JoinTypeAntiMergeIncludeNulls
 	default:
 		return i
 	}
@@ -264,6 +284,8 @@ func (i JoinType) AsLookup() JoinType {
 		return JoinTypeSemiLookup
 	case JoinTypeAnti:
 		return JoinTypeAntiLookup
+	case JoinTypeAntiIncludeNulls:
+		return JoinTypeAntiLookupIncludeNulls
 	default:
 		return i
 	}
@@ -285,12 +307,13 @@ func (i JoinType) AsLateral() JoinType {
 // JoinNode contains all the common data fields and implements the common sql.Node getters for all join types.
 type JoinNode struct {
 	BinaryNode
-	sql.DescribeStats
 	Filter     sql.Expression
-	Op         JoinType
 	CommentStr string
-	ScopeLen   int
 	UsingCols  []string
+	sql.DescribeStats
+	ScopeLen   int
+	Op         JoinType
+	IsReversed bool
 }
 
 var _ sql.Node = (*JoinNode)(nil)
@@ -301,16 +324,6 @@ func NewJoin(left, right sql.Node, op JoinType, cond sql.Expression) *JoinNode {
 		Op:         op,
 		BinaryNode: BinaryNode{left: left, right: right},
 		Filter:     cond,
-	}
-}
-
-// NewUsingJoin creates a UsingJoin that joins on the specified columns with the same name.
-// This is a placeholder node, and should be transformed into the appropriate join during analysis.
-func NewUsingJoin(left, right sql.Node, op JoinType, cols []string) *JoinNode {
-	return &JoinNode{
-		Op:         op,
-		BinaryNode: BinaryNode{left: left, right: right},
-		UsingCols:  cols,
 	}
 }
 
@@ -347,7 +360,7 @@ func (j *JoinNode) Resolved() bool {
 	}
 }
 
-func (j *JoinNode) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (j *JoinNode) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	ret := *j
 	switch {
 	case j.Op.IsDegenerate() || j.Filter == nil:
@@ -363,10 +376,6 @@ func (j *JoinNode) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
 	return &ret, nil
 }
 
-func (j *JoinNode) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return j.left.CheckPrivileges(ctx, opChecker) && j.right.CheckPrivileges(ctx, opChecker)
-}
-
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (*JoinNode) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	// Joins make use of coercibility, but they don't return anything themselves
@@ -378,20 +387,20 @@ func (j *JoinNode) JoinType() JoinType {
 }
 
 // Schema implements the Node interface.
-func (j *JoinNode) Schema() sql.Schema {
+func (j *JoinNode) Schema(ctx *sql.Context) sql.Schema {
 	switch {
 	case j.Op.IsLeftOuter():
-		return append(j.left.Schema(), makeNullable(j.right.Schema())...)
+		return append(j.left.Schema(ctx), makeNullable(j.right.Schema(ctx))...)
 	case j.Op.IsRightOuter():
-		return append(makeNullable(j.left.Schema()), j.right.Schema()...)
+		return append(makeNullable(j.left.Schema(ctx)), j.right.Schema(ctx)...)
 	case j.Op.IsFullOuter():
-		return append(makeNullable(j.left.Schema()), makeNullable(j.right.Schema())...)
+		return append(makeNullable(j.left.Schema(ctx)), makeNullable(j.right.Schema(ctx))...)
 	case j.Op.IsPartial():
-		return j.Left().Schema()
+		return j.Left().Schema(ctx)
 	case j.Op.IsUsing():
 		panic("NaturalJoin is a placeholder, Schema called")
 	default:
-		return append(j.left.Schema(), j.right.Schema()...)
+		return append(j.left.Schema(ctx), j.right.Schema(ctx)...)
 	}
 }
 
@@ -413,7 +422,7 @@ func (j *JoinNode) WithScopeLen(i int) *JoinNode {
 	return &ret
 }
 
-func (j *JoinNode) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (j *JoinNode) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(j, len(children), 2)
 	}
@@ -430,10 +439,16 @@ func (j *JoinNode) WithComment(comment string) sql.Node {
 	return &ret
 }
 
+func (j *JoinNode) WithFilter(filter sql.Expression) *JoinNode {
+	ret := *j
+	ret.Filter = filter
+	return &ret
+}
+
 var _ sql.Describable = (*JoinNode)(nil)
 
 // Describe implements sql.Describable
-func (j *JoinNode) Describe(options sql.DescribeOptions) string {
+func (j *JoinNode) Describe(ctx *sql.Context, options sql.DescribeOptions) string {
 	pr := sql.NewTreePrinter()
 	var children []string
 	if j.Filter != nil {
@@ -441,21 +456,23 @@ func (j *JoinNode) Describe(options sql.DescribeOptions) string {
 		literal, isLiteral := j.Filter.(*expression.Literal)
 		if !isLiteral || literal.Value() != true {
 			if j.Op.IsMerge() {
-				filters := expression.SplitConjunction(j.Filter)
-				children = append(children, fmt.Sprintf("cmp: %s", sql.Describe(filters[0], options)))
+				filters := expression.SplitConjunction(ctx, j.Filter)
+				children = append(children, fmt.Sprintf("cmp: %s", sql.Describe(ctx, filters[0], options)))
 				if len(filters) > 1 {
-					children = append(children, fmt.Sprintf("sel: %s", sql.Describe(expression.JoinAnd(filters[1:]...), options)))
+					children = append(children, fmt.Sprintf("sel: %s", sql.Describe(ctx, expression.JoinAnd(filters[1:]...), options)))
 				}
 			} else {
-				children = append(children, sql.Describe(j.Filter, options))
+				children = append(children, sql.Describe(ctx, j.Filter, options))
 			}
 		}
 	}
-	children = append(children, sql.Describe(j.left, options), sql.Describe(j.right, options))
+	children = append(children, sql.Describe(ctx, j.left, options), sql.Describe(ctx, j.right, options))
+	comment := j.Comment()
+
 	if options.Estimates {
-		pr.WriteNode("%s %s", j.Op, j.GetDescribeStatsString(options))
+		pr.WriteNode("%s %s%s", j.Op, j.GetDescribeStatsString(options), comment)
 	} else {
-		pr.WriteNode("%s", j.Op)
+		pr.WriteNode("%s%s", j.Op, comment)
 	}
 	pr.WriteChildren(children...)
 	return pr.String()
@@ -463,7 +480,10 @@ func (j *JoinNode) Describe(options sql.DescribeOptions) string {
 
 // String implements fmt.Stringer
 func (j *JoinNode) String() string {
-	return j.Describe(sql.DescribeOptions{
+	// To maintain compatibility with fmt.Stringer we have to use an empty context, but this will fail in any case that
+	// requires a context to determine a string (such as an integrator using the context to contain type information).
+	ctx := sql.NewEmptyContext()
+	return j.Describe(ctx, sql.DescribeOptions{
 		Analyze:   false,
 		Estimates: false,
 		Debug:     false,
@@ -471,8 +491,8 @@ func (j *JoinNode) String() string {
 }
 
 // DebugString implements sql.DebugStringer
-func (j *JoinNode) DebugString() string {
-	return j.Describe(sql.DescribeOptions{
+func (j *JoinNode) DebugString(ctx *sql.Context) string {
+	return j.Describe(ctx, sql.DescribeOptions{
 		Analyze:   false,
 		Estimates: false,
 		Debug:     true,
@@ -483,20 +503,8 @@ func NewInnerJoin(left, right sql.Node, cond sql.Expression) *JoinNode {
 	return NewJoin(left, right, JoinTypeInner, cond)
 }
 
-func NewHashJoin(left, right sql.Node, cond sql.Expression) *JoinNode {
-	return NewJoin(left, right, JoinTypeHash, cond)
-}
-
 func NewLeftOuterJoin(left, right sql.Node, cond sql.Expression) *JoinNode {
 	return NewJoin(left, right, JoinTypeLeftOuter, cond)
-}
-
-func NewLeftOuterHashJoin(left, right sql.Node, cond sql.Expression) *JoinNode {
-	return NewJoin(left, right, JoinTypeLeftOuterHash, cond)
-}
-
-func NewLeftOuterLookupJoin(left, right sql.Node, cond sql.Expression) *JoinNode {
-	return NewJoin(left, right, JoinTypeLeftOuterLookup, cond)
 }
 
 func NewRightOuterJoin(left, right sql.Node, cond sql.Expression) *JoinNode {
@@ -511,6 +519,10 @@ func NewCrossJoin(left, right sql.Node) *JoinNode {
 	return NewJoin(left, right, JoinTypeCross, nil)
 }
 
+func NewLateralCrossJoin(left, right sql.Node) *JoinNode {
+	return NewJoin(left, right, JoinTypeLateralCross, nil)
+}
+
 // NaturalJoin is a join that automatically joins by all the columns with the
 // same name.
 // NaturalJoin is a placeholder node, it should be transformed into an INNER
@@ -519,13 +531,10 @@ func NewNaturalJoin(left, right sql.Node) *JoinNode {
 	return NewJoin(left, right, JoinTypeUsing, nil)
 }
 
-// An LookupJoin is a join that uses index lookups for the secondary table.
-func NewLookupJoin(left, right sql.Node, cond sql.Expression) *JoinNode {
-	return NewJoin(left, right, JoinTypeLookup, cond)
-}
-
-func NewAntiJoin(left, right sql.Node, cond sql.Expression) *JoinNode {
-	return NewJoin(left, right, JoinTypeAnti, cond)
+// NewAntiJoinIncludingNulls creates a new antijoin that includes nulls, which is created from a NOT EXISTS query. This
+// is different from an antijoin excluding nulls (default antijoin) created from a NOT IN query.
+func NewAntiJoinIncludingNulls(left, right sql.Node, cond sql.Expression) *JoinNode {
+	return NewJoin(left, right, JoinTypeAntiIncludeNulls, cond)
 }
 
 func NewSemiJoin(left, right sql.Node, cond sql.Expression) *JoinNode {
@@ -534,10 +543,13 @@ func NewSemiJoin(left, right sql.Node, cond sql.Expression) *JoinNode {
 
 // IsNullRejecting returns whether the expression always returns false for
 // nil inputs.
-func IsNullRejecting(e sql.Expression) bool {
-	return !transform.InspectExpr(e, func(e sql.Expression) bool {
+func IsNullRejecting(ctx *sql.Context, e sql.Expression) bool {
+	// Note that InspectExpr will stop inspecting expressions in the
+	// expression tree when true is returned, so we invert that return
+	// value from InspectExpr to return the correct null rejecting value.
+	return !transform.InspectExpr(ctx, e, func(ctx *sql.Context, e sql.Expression) bool {
 		switch e.(type) {
-		case *expression.NullSafeEquals, *expression.IsNull:
+		case sql.IsNullExpression, sql.IsNotNullExpression, *expression.NullSafeEquals:
 			return true
 		default:
 			return false

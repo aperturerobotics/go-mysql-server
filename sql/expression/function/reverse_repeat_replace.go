@@ -27,15 +27,15 @@ import (
 
 // Reverse is a function that returns the reverse of the text provided.
 type Reverse struct {
-	expression.UnaryExpression
+	expression.UnaryExpressionStub
 }
 
 var _ sql.FunctionExpression = (*Reverse)(nil)
 var _ sql.CollationCoercible = (*Reverse)(nil)
 
 // NewReverse creates a new Reverse expression.
-func NewReverse(e sql.Expression) sql.Expression {
-	return &Reverse{expression.UnaryExpression{Child: e}}
+func NewReverse(ctx *sql.Context, e sql.Expression) sql.Expression {
+	return &Reverse{expression.UnaryExpressionStub{Child: e}}
 }
 
 // FunctionName implements sql.FunctionExpression
@@ -59,7 +59,13 @@ func (r *Reverse) Eval(
 		return nil, err
 	}
 
-	v, _, err = types.LongText.Convert(v)
+	v, _, err = types.LongText.Convert(ctx, v)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle Dolt's TextStorage wrapper that doesn't convert to plain string
+	v, err = sql.UnwrapAny(ctx, v)
 	if err != nil {
 		return nil, err
 	}
@@ -80,16 +86,16 @@ func (r *Reverse) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (r *Reverse) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (r *Reverse) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(r, len(children), 1)
 	}
-	return NewReverse(children[0]), nil
+	return NewReverse(ctx, children[0]), nil
 }
 
 // Type implements the Expression interface.
-func (r *Reverse) Type() sql.Type {
-	return r.Child.Type()
+func (r *Reverse) Type(ctx *sql.Context) sql.Type {
+	return r.Child.Type(ctx)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -108,7 +114,7 @@ var _ sql.FunctionExpression = (*Repeat)(nil)
 var _ sql.CollationCoercible = (*Repeat)(nil)
 
 // NewRepeat creates a new Repeat expression.
-func NewRepeat(str sql.Expression, count sql.Expression) sql.Expression {
+func NewRepeat(ctx *sql.Context, str sql.Expression, count sql.Expression) sql.Expression {
 	return &Repeat{expression.BinaryExpressionStub{LeftChild: str, RightChild: count}}
 }
 
@@ -127,7 +133,7 @@ func (r *Repeat) String() string {
 }
 
 // Type implements the Expression interface.
-func (r *Repeat) Type() sql.Type {
+func (r *Repeat) Type(ctx *sql.Context) sql.Type {
 	return types.LongText
 }
 
@@ -139,11 +145,11 @@ func (r *Repeat) CollationCoercibility(ctx *sql.Context) (collation sql.Collatio
 }
 
 // WithChildren implements the Expression interface.
-func (r *Repeat) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (r *Repeat) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(r, len(children), 2)
 	}
-	return NewRepeat(children[0], children[1]), nil
+	return NewRepeat(ctx, children[0], children[1]), nil
 }
 
 // Eval implements the Expression interface.
@@ -157,7 +163,13 @@ func (r *Repeat) Eval(
 		return nil, err
 	}
 
-	str, _, err = types.LongText.Convert(str)
+	str, _, err = types.LongText.Convert(ctx, str)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle Dolt's TextStorage wrapper that doesn't convert to plain string
+	str, err = sql.UnwrapAny(ctx, str)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +179,7 @@ func (r *Repeat) Eval(
 		return nil, err
 	}
 
-	count, _, err = types.Int32.Convert(count)
+	count, _, err = types.Int32.Convert(ctx, count)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +201,7 @@ var _ sql.FunctionExpression = (*Replace)(nil)
 var _ sql.CollationCoercible = (*Replace)(nil)
 
 // NewReplace creates a new Replace expression.
-func NewReplace(str sql.Expression, fromStr sql.Expression, toStr sql.Expression) sql.Expression {
+func NewReplace(ctx *sql.Context, str sql.Expression, fromStr sql.Expression, toStr sql.Expression) sql.Expression {
 	return &Replace{str, fromStr, toStr}
 }
 
@@ -214,8 +226,8 @@ func (r *Replace) Resolved() bool {
 }
 
 // IsNullable implements the Expression interface.
-func (r *Replace) IsNullable() bool {
-	return r.str.IsNullable() || r.fromStr.IsNullable() || r.toStr.IsNullable()
+func (r *Replace) IsNullable(ctx *sql.Context) bool {
+	return r.str.IsNullable(ctx) || r.fromStr.IsNullable(ctx) || r.toStr.IsNullable(ctx)
 }
 
 func (r *Replace) String() string {
@@ -223,7 +235,7 @@ func (r *Replace) String() string {
 }
 
 // Type implements the Expression interface.
-func (r *Replace) Type() sql.Type {
+func (r *Replace) Type(ctx *sql.Context) sql.Type {
 	return types.LongText
 }
 
@@ -237,11 +249,11 @@ func (r *Replace) CollationCoercibility(ctx *sql.Context) (collation sql.Collati
 }
 
 // WithChildren implements the Expression interface.
-func (r *Replace) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (r *Replace) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 3 {
 		return nil, sql.ErrInvalidChildrenNumber.New(r, len(children), 3)
 	}
-	return NewReplace(children[0], children[1], children[2]), nil
+	return NewReplace(ctx, children[0], children[1], children[2]), nil
 }
 
 // Eval implements the Expression interface.
@@ -255,7 +267,7 @@ func (r *Replace) Eval(
 		return nil, err
 	}
 
-	str, _, err = types.LongText.Convert(str)
+	str, _, err = types.LongText.Convert(ctx, str)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +277,7 @@ func (r *Replace) Eval(
 		return nil, err
 	}
 
-	fromStr, _, err = types.LongText.Convert(fromStr)
+	fromStr, _, err = types.LongText.Convert(ctx, fromStr)
 	if err != nil {
 		return nil, err
 	}
@@ -275,14 +287,31 @@ func (r *Replace) Eval(
 		return nil, err
 	}
 
-	toStr, _, err = types.LongText.Convert(toStr)
+	toStr, _, err = types.LongText.Convert(ctx, toStr)
 	if err != nil {
 		return nil, err
 	}
 
-	if fromStr.(string) == "" {
-		return str, nil
-	}
+	{
+		str, _, err := sql.Unwrap[string](ctx, str)
+		if err != nil {
+			return nil, err
+		}
 
-	return strings.Replace(str.(string), fromStr.(string), toStr.(string), -1), nil
+		fromStr, _, err := sql.Unwrap[string](ctx, fromStr)
+		if err != nil {
+			return nil, err
+		}
+
+		toStr, _, err := sql.Unwrap[string](ctx, toStr)
+		if err != nil {
+			return nil, err
+		}
+
+		if fromStr == "" {
+			return str, nil
+		}
+
+		return strings.Replace(str, fromStr, toStr, -1), nil
+	}
 }

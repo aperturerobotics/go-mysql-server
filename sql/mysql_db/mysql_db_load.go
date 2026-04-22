@@ -132,11 +132,15 @@ func LoadUser(serialUser *serial.User) *User {
 		Host:                string(serialUser.Host()),
 		PrivilegeSet:        *privilegeSet,
 		Plugin:              string(serialUser.Plugin()),
-		Password:            string(serialUser.Password()),
+		AuthString:          string(serialUser.Password()),
 		PasswordLastChanged: time.Unix(serialUser.PasswordLastChanged(), 0),
 		Locked:              serialUser.Locked(),
 		Attributes:          attributes,
 		Identity:            string(serialUser.Identity()),
+		SslType:             string(serialUser.SslType()),
+		SslCipher:           string(serialUser.SslCipher()),
+		X509Issuer:          string(serialUser.X509Issuer()),
+		X509Subject:         string(serialUser.X509Subject()),
 	}
 }
 

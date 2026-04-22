@@ -29,12 +29,12 @@ import (
 // process.
 type Disposable interface {
 	// Dispose the contents.
-	Dispose()
+	Dispose(ctx *Context)
 }
 
-func Dispose(i interface{}) {
+func Dispose(ctx *Context, i interface{}) {
 	if d, ok := i.(Disposable); ok {
-		d.Dispose()
+		d.Dispose(ctx)
 	}
 }
 
@@ -64,15 +64,15 @@ type RowsCache interface {
 	Get() []Row
 }
 
-// Rows2Cache is a cache of Row2s.
-type Rows2Cache interface {
+// ValueRowsCache is a cache of ValueRows.
+type ValueRowsCache interface {
 	RowsCache
-	// Add2 a new row to the cache. If there is no memory available, it will try to
+	// AddValueRow a new row to the cache. If there is no memory available, it will try to
 	// free some memory. If after that there is still no memory available, it
 	// will return an error and erase all the content of the cache.
-	Add2(Row2) error
-	// Get2 gets all rows.
-	Get2() []Row2
+	AddValueRow(ValueRow) error
+	// GetValueRow gets all rows.
+	GetValueRow() []ValueRow
 }
 
 // ErrNoMemoryAvailable is returned when there is no more available memory.
@@ -138,10 +138,10 @@ func HasAvailableMemory(r Reporter) bool {
 // in memory. There should only be one instance of a memory manager running at the
 // same time in each process.
 type MemoryManager struct {
-	mu       sync.RWMutex
 	reporter Reporter
 	caches   map[uint64]Disposable
 	token    uint64
+	mu       sync.RWMutex
 }
 
 // NewMemoryManager creates a new manager with the given memory reporter. If nil is given,
@@ -167,44 +167,44 @@ type DisposeFunc func()
 
 // NewLRUCache returns an empty LRU cache and a function to dispose it when it's
 // no longer needed.
-func (m *MemoryManager) NewLRUCache(size uint) (KeyValueCache, DisposeFunc) {
+func (m *MemoryManager) NewLRUCache(ctx *Context, size uint) (KeyValueCache, DisposeFunc) {
 	c := newLRUCache(m, m.reporter, size)
 	pos := m.addCache(c)
 	return c, func() {
-		c.Dispose()
+		c.Dispose(ctx)
 		m.removeCache(pos)
 	}
 }
 
 // NewHistoryCache returns an empty history cache and a function to dispose it when it's
 // no longer needed.
-func (m *MemoryManager) NewHistoryCache() (KeyValueCache, DisposeFunc) {
+func (m *MemoryManager) NewHistoryCache(ctx *Context) (KeyValueCache, DisposeFunc) {
 	c := newHistoryCache(m, m.reporter)
 	pos := m.addCache(c)
 	return c, func() {
-		c.Dispose()
+		c.Dispose(ctx)
 		m.removeCache(pos)
 	}
 }
 
 // NewRowsCache returns an empty rows cache and a function to dispose it when it's
 // no longer needed.
-func (m *MemoryManager) NewRowsCache() (RowsCache, DisposeFunc) {
+func (m *MemoryManager) NewRowsCache(ctx *Context) (RowsCache, DisposeFunc) {
 	c := newRowsCache(m, m.reporter)
 	pos := m.addCache(c)
 	return c, func() {
-		c.Dispose()
+		c.Dispose(ctx)
 		m.removeCache(pos)
 	}
 }
 
-// NewRowsCache returns an empty rows cache and a function to dispose it when it's
+// NewRows2Cache returns an empty rows cache and a function to dispose it when it's
 // no longer needed.
-func (m *MemoryManager) NewRows2Cache() (Rows2Cache, DisposeFunc) {
+func (m *MemoryManager) NewRows2Cache(ctx *Context) (ValueRowsCache, DisposeFunc) {
 	c := newRowsCache(m, m.reporter)
 	pos := m.addCache(c)
 	return c, func() {
-		c.Dispose()
+		c.Dispose(ctx)
 		m.removeCache(pos)
 	}
 }

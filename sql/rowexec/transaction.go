@@ -156,11 +156,6 @@ func (b *BaseBuilder) buildCommit(ctx *sql.Context, n *plan.Commit, row sql.Row)
 	return sql.RowsToRowIter(), nil
 }
 
-func (b *BaseBuilder) buildNoopTriggerRollback(ctx *sql.Context, n *plan.NoopTriggerRollback, row sql.Row) (sql.RowIter, error) {
-	return b.buildNodeExec(ctx, n.Child, row)
-
-}
-
 func (b *BaseBuilder) buildKill(ctx *sql.Context, n *plan.Kill, row sql.Row) (sql.RowIter, error) {
 	return &lazyRowIter{
 		func(ctx *sql.Context) (sql.Row, error) {
@@ -223,7 +218,7 @@ func (b *BaseBuilder) buildLockTables(ctx *sql.Context, n *plan.LockTables, row 
 		lockable, err := getLockable(l.Table)
 		if err != nil {
 			// If a table is not lockable, just skip it
-			ctx.Warn(0, err.Error())
+			ctx.Warn(0, "%s", err.Error())
 			continue
 		}
 
@@ -270,6 +265,7 @@ func (b *BaseBuilder) buildSignal(ctx *sql.Context, n *plan.Signal, row sql.Row)
 		return nil, mysql.NewSQLError(
 			int(n.Info[plan.SignalConditionItemName_MysqlErrno].IntValue),
 			n.SqlStateValue,
+			"%s",
 			strValue,
 		)
 	}
@@ -299,12 +295,4 @@ func (b *BaseBuilder) buildExecuteQuery(ctx *sql.Context, n *plan.ExecuteQuery, 
 
 func (b *BaseBuilder) buildUse(ctx *sql.Context, n *plan.Use, row sql.Row) (sql.RowIter, error) {
 	return n.RowIter(ctx, row)
-}
-
-func (b *BaseBuilder) buildTransactionCommittingNode(ctx *sql.Context, n *plan.TransactionCommittingNode, row sql.Row) (sql.RowIter, error) {
-	iter, err := b.Build(ctx, n.Child(), row)
-	if err != nil {
-		return nil, err
-	}
-	return transactionCommittingIter{childIter: iter}, nil
 }

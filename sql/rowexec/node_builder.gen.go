@@ -26,8 +26,8 @@ import (
 func (b *BaseBuilder) buildNodeExec(ctx *sql.Context, n sql.Node, row sql.Row) (sql.RowIter, error) {
 	var iter sql.RowIter
 	var err error
-	if b.override != nil {
-		iter, err = b.override.Build(ctx, n, row)
+	if b.PriorityBuilder != nil {
+		iter, err = b.PriorityBuilder.Build(ctx, n, row)
 	}
 	if err != nil {
 		return nil, err
@@ -50,12 +50,12 @@ func (b *BaseBuilder) buildNodeExecNoAnalyze(ctx *sql.Context, n sql.Node, row s
 		return b.buildCreateForeignKey(ctx, n, row)
 	case *plan.AlterTableCollation:
 		return b.buildAlterTableCollation(ctx, n, row)
+	case *plan.AlterTableComment:
+		return b.buildAlterTableComment(ctx, n, row)
 	case *plan.CreateRole:
 		return b.buildCreateRole(ctx, n, row)
 	case *plan.Loop:
 		return b.buildLoop(ctx, n, row)
-	case *plan.TransactionCommittingNode:
-		return b.buildTransactionCommittingNode(ctx, n, row)
 	case *plan.DropColumn:
 		return b.buildDropColumn(ctx, n, row)
 	case *plan.AnalyzeTable:
@@ -64,8 +64,8 @@ func (b *BaseBuilder) buildNodeExecNoAnalyze(ctx *sql.Context, n sql.Node, row s
 		return b.buildUpdateHistogram(ctx, n, row)
 	case *plan.DropHistogram:
 		return b.buildDropHistogram(ctx, n, row)
-	case *plan.QueryProcess:
-		return b.buildQueryProcess(ctx, n, row)
+	case *plan.Binlog:
+		return b.buildBinlog(ctx, n, row)
 	case *plan.ShowBinlogs:
 		return b.buildShowBinlogs(ctx, n, row)
 	case *plan.ShowBinlogStatus:
@@ -148,14 +148,14 @@ func (b *BaseBuilder) buildNodeExecNoAnalyze(ctx *sql.Context, n sql.Node, row s
 		return b.buildRenameColumn(ctx, n, row)
 	case *plan.DropDB:
 		return b.buildDropDB(ctx, n, row)
+	case *plan.DropSchema:
+		return b.buildDropSchema(ctx, n, row)
 	case *plan.Distinct:
 		return b.buildDistinct(ctx, n, row)
 	case *plan.Having:
 		return b.buildHaving(ctx, n, row)
 	case *plan.Signal:
 		return b.buildSignal(ctx, n, row)
-	case *plan.TriggerRollback:
-		return b.buildTriggerRollback(ctx, n, row)
 	case *plan.ExternalProcedure:
 		return b.buildExternalProcedure(ctx, n, row)
 	case *plan.Into:
@@ -204,8 +204,6 @@ func (b *BaseBuilder) buildNodeExecNoAnalyze(ctx *sql.Context, n sql.Node, row s
 		return b.buildAlterPK(ctx, n, row)
 	case plan.Nothing:
 		return b.buildNothing(ctx, n, row)
-	case *plan.RevokeAll:
-		return b.buildRevokeAll(ctx, n, row)
 	case *plan.DeferredAsOfTable:
 		return b.buildDeferredAsOfTable(ctx, n, row)
 	case *plan.CreateUser:
@@ -216,8 +214,6 @@ func (b *BaseBuilder) buildNodeExecNoAnalyze(ctx *sql.Context, n sql.Node, row s
 		return b.buildDropView(ctx, n, row)
 	case *plan.GroupBy:
 		return b.buildGroupBy(ctx, n, row)
-	case *plan.RowUpdateAccumulator:
-		return b.buildRowUpdateAccumulator(ctx, n, row)
 	case *plan.Block:
 		return b.buildBlock(ctx, n, row)
 	case *plan.InsertDestination:
@@ -250,8 +246,6 @@ func (b *BaseBuilder) buildNodeExecNoAnalyze(ctx *sql.Context, n sql.Node, row s
 		return b.buildCreateIndex(ctx, n, row)
 	case *plan.Procedure:
 		return b.buildProcedure(ctx, n, row)
-	case *plan.NoopTriggerRollback:
-		return b.buildNoopTriggerRollback(ctx, n, row)
 	case *plan.With:
 		return b.buildWith(ctx, n, row)
 	case *plan.Project:
@@ -332,8 +326,6 @@ func (b *BaseBuilder) buildNodeExecNoAnalyze(ctx *sql.Context, n sql.Node, row s
 		return b.buildLoadData(ctx, n, row)
 	case *plan.ShowCharset:
 		return b.buildShowCharset(ctx, n, row)
-	case *plan.StripRowNode:
-		return b.buildStripRowNode(ctx, n, row)
 	case *plan.DropConstraint:
 		return b.buildDropConstraint(ctx, n, row)
 	case *plan.FlushPrivileges:
@@ -382,21 +374,22 @@ func (b *BaseBuilder) buildNodeExecNoAnalyze(ctx *sql.Context, n sql.Node, row s
 		return b.buildJSONTable(ctx, n, row)
 	case *plan.UnlockTables:
 		return b.buildUnlockTables(ctx, n, row)
-	case *plan.Exchange:
-		return b.buildExchange(ctx, n, row)
-	case *plan.ExchangePartition:
-		return b.buildExchangePartition(ctx, n, row)
 	case *plan.HashLookup:
 		return b.buildHashLookup(ctx, n, row)
 	case *plan.Iterate:
 		return b.buildIterate(ctx, n, row)
-	case sql.ExecSourceRel:
-		// escape hatch for custom data sources
-		return n.RowIter(ctx, row)
 	case *plan.CreateSpatialRefSys:
 		return b.buildCreateSpatialRefSys(ctx, n, row)
 	case *plan.RenameForeignKey:
 		return b.buildRenameForeignKey(ctx, n, row)
+	case sql.ExecBuilderNode:
+		// Escape hatch for custom node types implemented outside this package.
+		return n.BuildRowIter(ctx, b, row)
+	case sql.ExecSourceRel:
+		// Catch-all for nodes that implement their own RowIter method not represented above.
+		// All nodes defined in go-mysql-server should be present in the switch above, but not all have been migrated
+		// here yet.
+		return n.RowIter(ctx, row)
 	default:
 		return nil, fmt.Errorf("exec builder found unknown Node type %T", n)
 	}

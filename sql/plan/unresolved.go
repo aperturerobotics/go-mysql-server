@@ -89,15 +89,10 @@ func (*UnresolvedTable) Resolved() bool {
 func (*UnresolvedTable) Children() []sql.Node { return nil }
 
 // Schema implements the Node interface.
-func (*UnresolvedTable) Schema() sql.Schema { return nil }
-
-// RowIter implements the RowIter interface.
-func (*UnresolvedTable) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
-	return nil, ErrUnresolvedTable.New()
-}
+func (*UnresolvedTable) Schema(ctx *sql.Context) sql.Schema { return nil }
 
 // WithChildren implements the Node interface.
-func (t *UnresolvedTable) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (t *UnresolvedTable) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(t, len(children), 0)
 	}
@@ -110,17 +105,6 @@ func (t *UnresolvedTable) AsOf() sql.Expression {
 	return t.asOf
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (t *UnresolvedTable) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: t.Database().Name(),
-		Table:    t.name,
-	}
-
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Select))
-}
-
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (*UnresolvedTable) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.Collation_binary, 7
@@ -131,7 +115,7 @@ func (t *UnresolvedTable) IsReadOnly() bool {
 }
 
 // WithAsOf implements sql.UnresolvedTable
-func (t *UnresolvedTable) WithAsOf(asOf sql.Expression) (sql.Node, error) {
+func (t *UnresolvedTable) WithAsOf(ctx *sql.Context, asOf sql.Expression) (sql.Node, error) {
 	t2 := *t
 	t2.asOf = asOf
 	return &t2, nil
@@ -152,19 +136,19 @@ func (t *UnresolvedTable) Expressions() []sql.Expression {
 	return nil
 }
 
-func (t *UnresolvedTable) WithExpressions(expressions ...sql.Expression) (sql.Node, error) {
+func (t *UnresolvedTable) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if t.asOf == nil {
-		if len(expressions) != 0 {
-			return nil, sql.ErrInvalidChildrenNumber.New(t, len(expressions), 0)
+		if len(exprs) != 0 {
+			return nil, sql.ErrInvalidChildrenNumber.New(t, len(exprs), 0)
 		}
 		return t, nil
 	}
 
-	if len(expressions) != 1 {
-		return nil, sql.ErrInvalidChildrenNumber.New(t, len(expressions), 1)
+	if len(exprs) != 1 {
+		return nil, sql.ErrInvalidChildrenNumber.New(t, len(exprs), 1)
 	}
 
-	return t.WithAsOf(expressions[0])
+	return t.WithAsOf(ctx, exprs[0])
 }
 
 func (t UnresolvedTable) String() string {
@@ -196,19 +180,19 @@ func (t *DeferredAsOfTable) Expressions() []sql.Expression {
 	return []sql.Expression{t.asOf}
 }
 
-func (t *DeferredAsOfTable) WithExpressions(expressions ...sql.Expression) (sql.Node, error) {
+func (t *DeferredAsOfTable) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if t.asOf == nil {
-		if len(expressions) != 0 {
-			return nil, sql.ErrInvalidChildrenNumber.New(t, len(expressions), 0)
+		if len(exprs) != 0 {
+			return nil, sql.ErrInvalidChildrenNumber.New(t, len(exprs), 0)
 		}
 		return t, nil
 	}
 
-	if len(expressions) != 1 {
-		return nil, sql.ErrInvalidChildrenNumber.New(t, len(expressions), 1)
+	if len(exprs) != 1 {
+		return nil, sql.ErrInvalidChildrenNumber.New(t, len(exprs), 1)
 	}
 
-	return t.WithAsOf(expressions[0])
+	return t.WithAsOf(ctx, exprs[0])
 }
 
 // Name implements the Nameable interface.
@@ -222,7 +206,7 @@ func (t *DeferredAsOfTable) Database() sql.Database {
 }
 
 // WithAsOf implements sql.UnresolvedTable
-func (t *DeferredAsOfTable) WithAsOf(asOf sql.Expression) (sql.Node, error) {
+func (t *DeferredAsOfTable) WithAsOf(ctx *sql.Context, asOf sql.Expression) (sql.Node, error) {
 	t2 := *t
 	t2.asOf = asOf
 	return &t2, nil

@@ -50,17 +50,12 @@ func (p *ShowProcessList) Resolved() bool { return true }
 func (p *ShowProcessList) IsReadOnly() bool { return true }
 
 // WithChildren implements the Node interface.
-func (p *ShowProcessList) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (p *ShowProcessList) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(p, len(children), 0)
 	}
 
 	return p, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (p *ShowProcessList) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(sql.PrivilegeCheckSubject{}, sql.PrivilegeType_Process))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -69,6 +64,6 @@ func (*ShowProcessList) CollationCoercibility(ctx *sql.Context) (collation sql.C
 }
 
 // Schema implements the Node interface.
-func (p *ShowProcessList) Schema() sql.Schema { return processListSchema }
+func (p *ShowProcessList) Schema(ctx *sql.Context) sql.Schema { return processListSchema }
 
 func (p *ShowProcessList) String() string { return "ProcessList" }

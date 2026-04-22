@@ -36,12 +36,12 @@ const (
 // the input document, such as the occurrence of any given word. Such statistics may later be used when calculating the
 // relevancy within a MatchAgainst expression.
 type DefaultParser struct {
+	uniqueMap map[uint64]uint32
 	document  string
 	words     []parserWord
-	wordsIdx  int
 	unique    []string
+	wordsIdx  int
 	uniqueIdx int
-	uniqueMap map[uint64]uint32
 	collation sql.CollationID
 }
 
@@ -52,10 +52,14 @@ type parserWord struct {
 }
 
 // NewDefaultParser creates a new DefaultParser.
-func NewDefaultParser(ctx *sql.Context, collation sql.CollationID, colVals ...interface{}) (DefaultParser, error) {
+func NewDefaultParser(ctx *sql.Context, collation sql.CollationID, colVals ...interface{}) (parser DefaultParser, err error) {
 	//TODO: implement exact matching using double quotes
 	sb := strings.Builder{}
 	for i, colVal := range colVals {
+		colVal, err = sql.UnwrapAny(ctx, colVal)
+		if err != nil {
+			return DefaultParser{}, err
+		}
 		switch v := colVal.(type) {
 		case string:
 			if i > 0 {

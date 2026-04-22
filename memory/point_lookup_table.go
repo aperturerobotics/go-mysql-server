@@ -18,7 +18,7 @@ var _ sql.TableNode = PointLookupTable{}
 // PointLookupTable is a table whose indexes only support point lookups but not range scans.
 // It's used for testing optimizations on indexes.
 type PointLookupTable struct {
-	IntSequenceTable
+	LookupSequenceTable
 }
 
 func (s PointLookupTable) UnderlyingTable() sql.Table {
@@ -26,15 +26,15 @@ func (s PointLookupTable) UnderlyingTable() sql.Table {
 }
 
 func (s PointLookupTable) NewInstance(ctx *sql.Context, db sql.Database, args []sql.Expression) (sql.Node, error) {
-	node, err := s.IntSequenceTable.NewInstance(ctx, db, args)
-	return PointLookupTable{node.(IntSequenceTable)}, err
+	node, err := s.LookupSequenceTable.NewInstance(ctx, db, args)
+	return PointLookupTable{node.(LookupSequenceTable)}, err
 }
 
 func (s PointLookupTable) String() string {
 	return fmt.Sprintf("pointLookup")
 }
 
-func (s PointLookupTable) DebugString() string {
+func (s PointLookupTable) DebugString(ctx *sql.Context) string {
 	return "pointLookup"
 }
 
@@ -77,25 +77,26 @@ type pointLookupIndex struct {
 	sql.Index
 }
 
-func (i pointLookupIndex) CanSupport(ranges ...sql.Range) bool {
+func (i pointLookupIndex) CanSupport(ctx *sql.Context, ranges ...sql.Range) bool {
 	for _, r := range ranges {
-		if len(r) != 1 {
+		mysqlRange, ok := r.(sql.MySQLRange)
+		if !ok || len(mysqlRange) != 1 {
 			return false
 		}
-		below, ok := r[0].LowerBound.(sql.Below)
+		below, ok := mysqlRange[0].LowerBound.(sql.Below)
 		if !ok {
 			return false
 		}
-		belowKey, _, err := types.Int64.Convert(below.Key)
+		belowKey, _, err := types.Int64.Convert(ctx, below.Key)
 		if err != nil {
 			return false
 		}
 
-		above, ok := r[0].UpperBound.(sql.Above)
+		above, ok := mysqlRange[0].UpperBound.(sql.Above)
 		if !ok {
 			return false
 		}
-		aboveKey, _, err := types.Int64.Convert(above.Key)
+		aboveKey, _, err := types.Int64.Convert(ctx, above.Key)
 		if err != nil {
 			return false
 		}

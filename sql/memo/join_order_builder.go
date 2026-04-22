@@ -26,6 +26,10 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/plan"
 )
 
+// SplitConjunction is a pseudo-extension point of expression.SplitConjunction, used to alter the logic
+// for different integrators.
+var SplitConjunction func(ctx *sql.Context, expr sql.Expression) []sql.Expression = expression.SplitConjunction
+
 // joinOrderBuilder enumerates valid plans for a join tree.  We build the join
 // tree bottom up, first joining single nodes with join condition "edges", then
 // single nodes to hypernodes (1+n), and finally hyper nodes to
@@ -129,14 +133,14 @@ type joinOrderBuilder struct {
 	//
 	// The group for a single base relation is the base relation itself.
 	m                         *Memo
+	innerEdges                edgeSet
+	nonInnerEdges             edgeSet
 	plans                     map[vertexSet]*ExprGroup
+	newPlanCb                 func(j *joinOrderBuilder, rel RelExpr)
 	edges                     []edge
 	vertices                  []RelExpr
 	vertexGroups              []GroupId
 	vertexTableIds            []sql.TableId
-	innerEdges                edgeSet
-	nonInnerEdges             edgeSet
-	newPlanCb                 func(j *joinOrderBuilder, rel RelExpr)
 	forceFastDFSLookupForTest bool
 	hasCrossJoin              bool
 }
@@ -154,7 +158,7 @@ var ErrUnsupportedReorderNode = errors.New("unsupported join reorder node")
 
 // useFastReorder determines whether to skip the current brute force join planning and use an alternate
 // planning algorithm that analyzes the join tree to find a sequence that can be implemented purely as lookup joins.
-// Currently we only use it for large joins (20+ tables) with no join hints.
+// Currently, we only use it for large joins (15+ tables) with no join hints.
 func (j *joinOrderBuilder) useFastReorder() bool {
 	if j.forceFastDFSLookupForTest {
 		return true
@@ -165,64 +169,77 @@ func (j *joinOrderBuilder) useFastReorder() bool {
 	return len(j.vertices) > 15
 }
 
-func (j *joinOrderBuilder) ReorderJoin(n sql.Node) {
-	j.populateSubgraph(n)
+func (j *joinOrderBuilder) ReorderJoin(ctx *sql.Context, n sql.Node) {
+	j.m.Tracer.PushDebugContext("ReorderJoin")
+	defer j.m.Tracer.PopDebugContext()
+
+	j.populateSubgraph(ctx, n)
+
 	if j.useFastReorder() {
-		j.buildSingleLookupPlan()
-		return
-	} else if j.hasCrossJoin {
-		// Rely on FastReorder to avoid plans that drop filters with cross joins
-		if j.buildSingleLookupPlan() {
+		j.m.Tracer.Log("Using fast reorder algorithm (large join with %d tables)", len(j.vertices))
+		if j.buildSingleLookupPlan(ctx) {
+			j.m.Tracer.Log("Successfully built single lookup plan")
 			return
 		}
+		j.m.Tracer.Log("Failed to identify an ideal join plan, exhaustive enumeration would be too slow, so preserve the join order in the original query")
+		return
+	} else if j.hasCrossJoin {
+		j.m.Tracer.Log("Join contains cross joins, attempting single lookup plan first")
+		// Rely on FastReorder to avoid plans that drop filters with cross joins
+		if j.buildSingleLookupPlan(ctx) {
+			j.m.Tracer.Log("Successfully built single lookup plan for cross join")
+			return
+		}
+		j.m.Tracer.Log("Failed to build single lookup plan for cross join, using exhaustive enumeration")
 	}
+
 	// TODO: consider if buildSingleLookupPlan can/should run after ensureClosure. This could allow us to use analysis
 	// from ensureClosure in buildSingleLookupPlan, but the equivalence sets could create multiple possible join orders
 	// for the single-lookup plan, which would complicate things.
-	j.ensureClosure(j.m.root)
-	j.dbSube()
+	j.ensureClosure(ctx, j.m.root)
+	j.dpEnumerateSubsets(ctx)
+	j.m.Tracer.Log("Completed join reordering")
 	return
 }
 
 // populateSubgraph recursively tracks new join nodes as edges and new
 // leaf nodes as vertices to the joinOrderBuilder graph, returning
 // the subgraph's newly tracked vertices and edges.
-func (j *joinOrderBuilder) populateSubgraph(n sql.Node) (vertexSet, edgeSet, *ExprGroup) {
+func (j *joinOrderBuilder) populateSubgraph(ctx *sql.Context, n sql.Node) (vertexSet, edgeSet, *ExprGroup) {
 	var group *ExprGroup
 	startV := j.allVertices()
 	startE := j.allEdges()
 	// build operator
 	switch n := n.(type) {
 	case *plan.Filter:
-		return j.buildFilter(n.Child, n.Expression)
+		return j.buildFilter(ctx, n.Child, n.Expression)
 	case *plan.Having:
-		return j.buildFilter(n.Child, n.Cond)
+		return j.buildFilter(ctx, n.Child, n.Cond)
 	case *plan.Limit:
-		_, _, group = j.populateSubgraph(n.Child)
+		_, _, group = j.populateSubgraph(ctx, n.Child)
 		group.RelProps.Limit = n.Limit
 	case *plan.Project:
-		return j.buildProject(n)
+		return j.buildProject(ctx, n)
 	case *plan.Sort:
-		_, _, group = j.populateSubgraph(n.Child)
+		_, _, group = j.populateSubgraph(ctx, n.Child)
 		group.RelProps.sort = n.SortFields
 	case *plan.Distinct:
-		_, _, group = j.populateSubgraph(n.Child)
+		_, _, group = j.populateSubgraph(ctx, n.Child)
 		group.RelProps.Distinct = HashDistinctOp
+		group.RelProps.DistinctOn = n.Expressions()
 	case *plan.Max1Row:
-		return j.buildMax1Row(n)
+		return j.buildMax1Row(ctx, n)
 	case *plan.JoinNode:
-		group = j.buildJoinOp(n)
+		group = j.buildJoinOp(ctx, n)
 		if n.Op == plan.JoinTypeCross {
 			j.hasCrossJoin = true
 		}
 	case *plan.SetOp:
-		group = j.buildJoinLeaf(n)
+		group = j.buildJoinLeaf(ctx, n)
 	case sql.NameableNode:
-		group = j.buildJoinLeaf(n.(plan.TableIdNode))
-	case *plan.StripRowNode:
-		return j.populateSubgraph(n.Child)
+		group = j.buildJoinLeaf(ctx, n.(plan.TableIdNode))
 	case *plan.CachedResults:
-		return j.populateSubgraph(n.Child)
+		return j.populateSubgraph(ctx, n.Child)
 	default:
 		err := fmt.Errorf("%w: %T", ErrUnsupportedReorderNode, n)
 		j.m.HandleErr(err)
@@ -231,11 +248,11 @@ func (j *joinOrderBuilder) populateSubgraph(n sql.Node) (vertexSet, edgeSet, *Ex
 }
 
 // buildSingleLookupPlan attempts to build a plan consisting only of lookup joins.
-func (j *joinOrderBuilder) buildSingleLookupPlan() bool {
-	fds := j.m.root.RelProps.FuncDeps()
+func (j *joinOrderBuilder) buildSingleLookupPlan(ctx *sql.Context) bool {
+	fds := j.m.root.RelProps.FuncDeps(ctx)
 	fdKey, hasKey := fds.StrictKey()
 	// fdKey is a set of columns which constrain all other columns in the join.
-	// If a chain of lookups exist, then the columns in fdKey must be in the innermost join.
+	// If a chain of lookups exists, then the columns in fdKey must be in the innermost join.
 	if !hasKey {
 		return false
 	}
@@ -284,8 +301,8 @@ func (j *joinOrderBuilder) buildSingleLookupPlan() bool {
 				panic("Found an edge with multiple filters (that was previously validated as an inner join.) This shouldn't be possible.")
 			}
 			filter := edge.filters[0]
-			_, tables, _ := getExprScalarProps(filter)
-			if tables.Len() != 2 {
+			_, tables, _ := getExprScalarProps(ctx, filter)
+			if tables.Len() != 2 || !isSimpleEquality(ctx, filter) {
 				// We have encountered a filter condition more complicated than a simple equality check.
 				// We probably can't optimize this, so bail out.
 				return false
@@ -305,23 +322,14 @@ func (j *joinOrderBuilder) buildSingleLookupPlan() bool {
 			}
 		}
 
-		if len(joinCandidates) > 1 {
-			// We end up here if there are multiple possible choices for the next join.
-			// This could happen if there are redundant rules. For now, we bail out if this happens.
-			return false
-		}
-
-		if len(joinCandidates) == 0 {
-			// There are still tables left to join, but no more filters that match the already joined tables.
-			// This can happen, for instance, if the remaining table is a single-row table that was cross-joined.
-			// It's probably safe to just join the remaining tables here.
-			remainingVertexes := j.allVertices().difference(currentlyJoinedVertexes)
-			for idx, ok := remainingVertexes.next(0); ok; idx, ok = remainingVertexes.next(idx + 1) {
-				nextVertex := newBitSet(idx)
-				j.addJoin(plan.JoinTypeCross, currentlyJoinedVertexes, nextVertex, nil, nil, false)
-
-				currentlyJoinedVertexes = currentlyJoinedVertexes.union(nextVertex)
-			}
+		if len(joinCandidates) != 1 {
+			// For now, we bail out if there are no or multiple possible choices for the next join.
+			// There are no possible choices for the next join when the filters are not applicable to the table
+			// containing the functional dependency key. Suppose we have a query like
+			// `select from A, B, inner join C on B.c0 <=> C.c0` where table A has a primary key and tables B and C are
+			// keyless; in this case, keyColumn would match table A's primary key, currentlyJoinedTables would only
+			// contain table A, and the join filter for tables B and C would not apply.
+			// There are multiple possible choices for the next join if there are redundant rules.
 			return false
 		}
 
@@ -339,7 +347,7 @@ func (j *joinOrderBuilder) buildSingleLookupPlan() bool {
 		edge := j.edges[nextEdgeIdx]
 
 		isRedundant := edge.joinIsRedundant(currentlyJoinedVertexes, nextVertex)
-		j.addJoin(plan.JoinTypeInner, currentlyJoinedVertexes, nextVertex, j.edges[nextEdgeIdx].filters, nil, isRedundant)
+		j.addJoin(ctx, plan.JoinTypeInner, currentlyJoinedVertexes, nextVertex, j.edges[nextEdgeIdx].filters, nil, isRedundant)
 
 		currentlyJoinedVertexes = currentlyJoinedVertexes.union(nextVertex)
 		currentlyJoinedTables.Add(int(nextTableId))
@@ -353,13 +361,13 @@ func (j *joinOrderBuilder) buildSingleLookupPlan() bool {
 // to the join tree. Each transitive edge will add an inner edge, filter,
 // and join group that inherit join type and tree depth from the original
 // join tree.
-func (j *joinOrderBuilder) ensureClosure(grp *ExprGroup) {
-	fds := grp.RelProps.FuncDeps()
+func (j *joinOrderBuilder) ensureClosure(ctx *sql.Context, grp *ExprGroup) {
+	fds := grp.RelProps.FuncDeps(ctx)
 	for _, set := range fds.Equiv().Sets() {
 		for col1, hasNext1 := set.Next(1); hasNext1; col1, hasNext1 = set.Next(col1 + 1) {
 			for col2, hasNext2 := set.Next(col1 + 1); hasNext2; col2, hasNext2 = set.Next(col2 + 1) {
 				if !j.hasEqEdge(col1, col2) {
-					j.makeTransitiveEdge(col1, col2)
+					j.makeTransitiveEdge(ctx, col1, col2)
 				}
 			}
 		}
@@ -368,7 +376,7 @@ func (j *joinOrderBuilder) ensureClosure(grp *ExprGroup) {
 
 // hasEqEdge returns true if the inner edges include a direct equality between
 // the two given columns (e.g. x = a).
-func (j joinOrderBuilder) hasEqEdge(leftCol, rightCol sql.ColumnId) bool {
+func (j *joinOrderBuilder) hasEqEdge(leftCol, rightCol sql.ColumnId) bool {
 	for idx, ok := j.innerEdges.Next(0); ok; idx, ok = j.innerEdges.Next(idx + 1) {
 		for _, f := range j.edges[idx].filters {
 			var l *expression.GetField
@@ -380,6 +388,11 @@ func (j joinOrderBuilder) hasEqEdge(leftCol, rightCol sql.ColumnId) bool {
 			case *expression.NullSafeEquals:
 				l, _ = f.Left().(*expression.GetField)
 				r, _ = f.Right().(*expression.GetField)
+			case expression.Equality:
+				if f.RepresentsEquality() {
+					l, _ = f.Left().(*expression.GetField)
+					r, _ = f.Right().(*expression.GetField)
+				}
 			}
 			if l == nil || r == nil {
 				continue
@@ -393,15 +406,15 @@ func (j joinOrderBuilder) hasEqEdge(leftCol, rightCol sql.ColumnId) bool {
 	return false
 }
 
-func (j *joinOrderBuilder) findVertexFromCol(col sql.ColumnId) (vertexIndex, GroupId) {
+func (j *joinOrderBuilder) findVertexFromCol(ctx *sql.Context, col sql.ColumnId) (vertexIndex, GroupId, bool) {
 	for i, v := range j.vertices {
 		if t, ok := v.(SourceRel); ok {
-			if t.Group().RelProps.FuncDeps().All().Contains(col) {
-				return vertexIndex(i), t.Group().Id
+			if t.Group().RelProps.FuncDeps(ctx).All().Contains(col) {
+				return vertexIndex(i), t.Group().Id, true
 			}
 		}
 	}
-	panic("vertex not found")
+	return 0, 0, false
 }
 
 func (j *joinOrderBuilder) findVertexFromGroup(grp GroupId) vertexIndex {
@@ -417,10 +430,16 @@ func (j *joinOrderBuilder) findVertexFromGroup(grp GroupId) vertexIndex {
 
 // makeTransitiveEdge constructs a new join tree edge and memo group
 // on an equality filter between two columns.
-func (j *joinOrderBuilder) makeTransitiveEdge(col1, col2 sql.ColumnId) {
+func (j *joinOrderBuilder) makeTransitiveEdge(ctx *sql.Context, col1, col2 sql.ColumnId) {
+	j.m.Tracer.PushDebugContext("makeTransitiveEdge")
+	defer j.m.Tracer.PopDebugContext()
+
 	var vert vertexSet
-	v1, _ := j.findVertexFromCol(col1)
-	v2, _ := j.findVertexFromCol(col2)
+	v1, _, v1found := j.findVertexFromCol(ctx, col1)
+	v2, _, v2found := j.findVertexFromCol(ctx, col2)
+	if !v1found || !v2found {
+		return
+	}
 	vert = vert.add(v1).add(v2)
 
 	// find edge where the vertices are provided but partitioned
@@ -463,17 +482,22 @@ func (j *joinOrderBuilder) makeTransitiveEdge(col1, col2 sql.ColumnId) {
 		return
 	}
 
-	j.edges = append(j.edges, *j.makeEdge(op, expression.NewEquals(gf1, gf2)))
+	eq := expression.NewEquals(gf1, gf2)
+	j.m.Tracer.Log("adding edge %s", eq)
+	j.edges = append(j.edges, *j.makeEdge(ctx, op, eq))
 	j.innerEdges.Add(len(j.edges) - 1)
-
 }
 
-func (j *joinOrderBuilder) buildJoinOp(n *plan.JoinNode) *ExprGroup {
-	leftV, leftE, _ := j.populateSubgraph(n.Left())
-	rightV, rightE, _ := j.populateSubgraph(n.Right())
+func (j *joinOrderBuilder) buildJoinOp(ctx *sql.Context, n *plan.JoinNode) *ExprGroup {
+	j.m.Tracer.PushDebugContext("buildJoinOp")
+	defer j.m.Tracer.PopDebugContext()
+
+	leftV, leftE, _ := j.populateSubgraph(ctx, n.Left())
+	rightV, rightE, _ := j.populateSubgraph(ctx, n.Right())
 	typ := n.JoinType()
 	if typ.IsPhysical() {
 		typ = plan.JoinTypeInner
+		j.m.Tracer.Log("Converted physical join type to inner join")
 	}
 	isInner := typ.IsInner()
 	op := &operator{
@@ -484,31 +508,35 @@ func (j *joinOrderBuilder) buildJoinOp(n *plan.JoinNode) *ExprGroup {
 		rightEdges:    rightE,
 	}
 
-	filters := expression.SplitConjunction(n.JoinCond())
+	filters := SplitConjunction(ctx, n.JoinCond())
+	j.m.Tracer.Log("Join filters: %v", filters)
 	union := leftV.union(rightV)
 	group, ok := j.plans[union]
 	if !ok {
 		// TODO: memo and root should be initialized prior to join planning
 		left := j.plans[leftV]
 		right := j.plans[rightV]
-		group = j.memoize(op.joinType, left, right, filters, nil)
+		group = j.memoize(ctx, op.joinType, left, right, filters)
 		j.plans[union] = group
 		j.m.root = group
+		j.m.Tracer.Log("Created new memo group for join combination")
 	}
 
 	if !isInner {
-		j.buildNonInnerEdge(op, filters...)
+		j.m.Tracer.Log("Building non-inner edge for join type: %s", typ)
+		j.buildNonInnerEdge(ctx, op, filters...)
 	} else {
-		j.buildInnerEdge(op, filters...)
+		j.m.Tracer.Log("Building inner edge for join type: %s", typ)
+		j.buildInnerEdge(ctx, op, filters...)
 	}
 	return group
 }
 
-func (j *joinOrderBuilder) buildFilter(child sql.Node, e sql.Expression) (vertexSet, edgeSet, *ExprGroup) {
+func (j *joinOrderBuilder) buildFilter(ctx *sql.Context, child sql.Node, e sql.Expression) (vertexSet, edgeSet, *ExprGroup) {
 	// memoize child
-	childV, childE, childGrp := j.populateSubgraph(child)
+	childV, childE, childGrp := j.populateSubgraph(ctx, child)
 
-	filterGrp := j.m.MemoizeFilter(nil, childGrp, expression.SplitConjunction(e))
+	filterGrp := j.m.MemoizeFilter(ctx, nil, childGrp, SplitConjunction(ctx, e))
 
 	// filter will absorb child relation for join reordering
 	j.plans[childV] = filterGrp
@@ -516,28 +544,28 @@ func (j *joinOrderBuilder) buildFilter(child sql.Node, e sql.Expression) (vertex
 	return childV, childE, filterGrp
 }
 
-func (j *joinOrderBuilder) buildProject(n *plan.Project) (vertexSet, edgeSet, *ExprGroup) {
+func (j *joinOrderBuilder) buildProject(ctx *sql.Context, n *plan.Project) (vertexSet, edgeSet, *ExprGroup) {
 	// memoize child
-	childV, childE, childGrp := j.populateSubgraph(n.Child)
+	childV, childE, childGrp := j.populateSubgraph(ctx, n.Child)
 
-	projGrp := j.m.MemoizeProject(nil, childGrp, n.Projections)
+	projGrp := j.m.MemoizeProject(ctx, nil, childGrp, n.Projections)
 
 	// filter will absorb child relation for join reordering
 	j.plans[childV] = projGrp
 	return childV, childE, projGrp
 }
 
-func (j *joinOrderBuilder) buildMax1Row(n *plan.Max1Row) (vertexSet, edgeSet, *ExprGroup) {
+func (j *joinOrderBuilder) buildMax1Row(ctx *sql.Context, n *plan.Max1Row) (vertexSet, edgeSet, *ExprGroup) {
 	// memoize child
-	childV, childE, childGrp := j.populateSubgraph(n.Child)
+	childV, childE, childGrp := j.populateSubgraph(ctx, n.Child)
 
-	max1Grp := j.m.MemoizeMax1Row(nil, childGrp)
+	max1Grp := j.m.MemoizeMax1Row(ctx, nil, childGrp)
 
 	j.plans[childV] = max1Grp
 	return childV, childE, max1Grp
 }
 
-func (j *joinOrderBuilder) buildJoinLeaf(n plan.TableIdNode) *ExprGroup {
+func (j *joinOrderBuilder) buildJoinLeaf(ctx *sql.Context, n plan.TableIdNode) *ExprGroup {
 	j.checkSize()
 
 	var rel SourceRel
@@ -575,33 +603,33 @@ func (j *joinOrderBuilder) buildJoinLeaf(n plan.TableIdNode) *ExprGroup {
 	// Initialize the plan for this vertex.
 	idx := vertexIndex(len(j.vertices) - 1)
 	relSet := vertexSet(0).add(idx)
-	grp := j.m.memoizeSourceRel(rel)
+	grp := j.m.memoizeSourceRel(ctx, rel)
 	j.plans[relSet] = grp
 	j.vertexGroups = append(j.vertexGroups, grp.Id)
 	j.vertexTableIds = append(j.vertexTableIds, n.Id())
 	return grp
 }
 
-func (j *joinOrderBuilder) buildInnerEdge(op *operator, filters ...sql.Expression) {
+func (j *joinOrderBuilder) buildInnerEdge(ctx *sql.Context, op *operator, filters ...sql.Expression) {
 	if len(filters) == 0 {
 		// cross join
-		j.edges = append(j.edges, *j.makeEdge(op))
+		j.edges = append(j.edges, *j.makeEdge(ctx, op))
 		j.innerEdges.Add(len(j.edges) - 1)
 		return
 	}
 	for _, f := range filters {
-		j.edges = append(j.edges, *j.makeEdge(op, f))
+		j.edges = append(j.edges, *j.makeEdge(ctx, op, f))
 		j.innerEdges.Add(len(j.edges) - 1)
 	}
 }
 
-func (j *joinOrderBuilder) buildNonInnerEdge(op *operator, filters ...sql.Expression) {
+func (j *joinOrderBuilder) buildNonInnerEdge(ctx *sql.Context, op *operator, filters ...sql.Expression) {
 	// only single edge for non-inner
-	j.edges = append(j.edges, *j.makeEdge(op, filters...))
+	j.edges = append(j.edges, *j.makeEdge(ctx, op, filters...))
 	j.nonInnerEdges.Add(len(j.edges) - 1)
 }
 
-func (j *joinOrderBuilder) makeEdge(op *operator, filters ...sql.Expression) *edge {
+func (j *joinOrderBuilder) makeEdge(ctx *sql.Context, op *operator, filters ...sql.Expression) *edge {
 	// edge is an instance of operator with a unique set of transform rules depending
 	// on the subset of filters used
 	e := &edge{
@@ -613,7 +641,7 @@ func (j *joinOrderBuilder) makeEdge(op *operator, filters ...sql.Expression) *ed
 	// TODO: validate malformed join clauses like `ab join xy on a = u`
 	// prior to join planning, execBuilder currently throws getField errors
 	// for these
-	e.populateEdgeProps(j.vertexTableIds, j.edges)
+	e.populateEdgeProps(ctx, j.vertexTableIds, j.edges)
 	return e
 }
 
@@ -624,10 +652,13 @@ func (j *joinOrderBuilder) checkSize() {
 	}
 }
 
-// dpSube iterates all disjoint combinations of table sets,
+// dpEnumerateSubsets iterates all disjoint combinations of table sets,
 // adding plans to the tree when we find two sets that can
 // be joined
-func (j *joinOrderBuilder) dbSube() {
+func (j *joinOrderBuilder) dpEnumerateSubsets(ctx *sql.Context) {
+	j.m.Tracer.PushDebugContext("dpEnumerateSubsets")
+	defer j.m.Tracer.PopDebugContext()
+
 	all := j.allVertices()
 	for subset := vertexSet(1); subset <= all; subset++ {
 		if subset.isSingleton() {
@@ -638,7 +669,7 @@ func (j *joinOrderBuilder) dbSube() {
 				continue
 			}
 			s2 := subset.difference(s1)
-			j.addPlans(s1, s2)
+			j.addPlans(ctx, s1, s2)
 		}
 	}
 }
@@ -662,17 +693,21 @@ func setPrinter(all, s1, s2 vertexSet) {
 }
 
 // addPlans finds operators that let us join (s1 op s2) and (s2 op s1).
-func (j *joinOrderBuilder) addPlans(s1, s2 vertexSet) {
+func (j *joinOrderBuilder) addPlans(ctx *sql.Context, s1, s2 vertexSet) {
+	j.m.Tracer.PushDebugContextFmt("addPlans/%s<->%s", s1, s2)
+	defer j.m.Tracer.PopDebugContext()
+
 	// all inner filters could be applied
 	if j.plans[s1] == nil || j.plans[s2] == nil {
 		// Both inputs must have plans.
 		// need this to prevent cross-joins higher in tree
+		j.m.Tracer.Log("Skipping join - one or both input plans are nil")
 		return
 	}
 
-	//TODO collect all inner join filters that can be used as select filters
-	//TODO collect functional dependencies to avoid redundant filters
-	//TODO relational nodes track functional dependencies
+	// TODO collect all inner join filters that can be used as select filters
+	// TODO collect functional dependencies to avoid redundant filters
+	// TODO relational nodes track functional dependencies
 
 	var innerJoinFilters []sql.Expression
 	var addInnerJoin bool
@@ -686,6 +721,7 @@ func (j *joinOrderBuilder) addPlans(s1, s2 vertexSet) {
 			}
 			isRedundant = isRedundant || e.joinIsRedundant(s1, s2)
 			addInnerJoin = true
+			j.m.Tracer.Log("Found applicable inner edge %d with filters: %v", i, e.filters)
 		}
 	}
 
@@ -694,13 +730,15 @@ func (j *joinOrderBuilder) addPlans(s1, s2 vertexSet) {
 	for i, ok := j.nonInnerEdges.Next(0); ok; i, ok = j.nonInnerEdges.Next(i + 1) {
 		e := &j.edges[i]
 		if e.applicable(s1, s2) {
-			j.addJoin(e.op.joinType, s1, s2, e.filters, innerJoinFilters, e.joinIsRedundant(s1, s2))
+			j.m.Tracer.Log("Found applicable non-inner edge %d, adding join: %s", i, e.op.joinType)
+			j.addJoin(ctx, e.op.joinType, s1, s2, e.filters, innerJoinFilters, e.joinIsRedundant(s1, s2))
 			return
 		}
 		if e.applicable(s2, s1) {
 			// This is necessary because we only iterate s1 up to subset / 2
 			// in DPSube()
-			j.addJoin(e.op.joinType, s2, s1, e.filters, innerJoinFilters, e.joinIsRedundant(s2, s1))
+			j.m.Tracer.Log("Found applicable non-inner edge %d (swapped), adding join: %s", i, e.op.joinType)
+			j.addJoin(ctx, e.op.joinType, s2, s1, e.filters, innerJoinFilters, e.joinIsRedundant(s2, s1))
 			return
 		}
 	}
@@ -710,14 +748,18 @@ func (j *joinOrderBuilder) addPlans(s1, s2 vertexSet) {
 		// already been constructed, because doing so can lead to a case where an
 		// inner join replaces a non-inner join.
 		if innerJoinFilters == nil {
-			j.addJoin(plan.JoinTypeCross, s1, s2, nil, nil, isRedundant)
+			j.m.Tracer.Log("Adding cross join")
+			j.addJoin(ctx, plan.JoinTypeCross, s1, s2, nil, nil, isRedundant)
 		} else {
-			j.addJoin(plan.JoinTypeInner, s1, s2, innerJoinFilters, nil, isRedundant)
+			j.m.Tracer.Log("Adding inner join with filters: %v", innerJoinFilters)
+			j.addJoin(ctx, plan.JoinTypeInner, s1, s2, innerJoinFilters, nil, isRedundant)
 		}
+	} else {
+		j.m.Tracer.Log("No applicable edges found for join")
 	}
 }
 
-func (j *joinOrderBuilder) addJoin(op plan.JoinType, s1, s2 vertexSet, joinFilter, selFilters []sql.Expression, isRedundant bool) {
+func (j *joinOrderBuilder) addJoin(ctx *sql.Context, op plan.JoinType, s1, s2 vertexSet, joinFilter, selFilters []sql.Expression, isRedundant bool) {
 	if s1.intersects(s2) {
 		panic("sets are not disjoint")
 	}
@@ -728,7 +770,7 @@ func (j *joinOrderBuilder) addJoin(op plan.JoinType, s1, s2 vertexSet, joinFilte
 	group, ok := j.plans[union]
 	if !isRedundant {
 		if !ok {
-			group = j.memoize(op, left, right, joinFilter, selFilters)
+			group = j.memoize(ctx, op, left, right, joinFilter)
 			j.plans[union] = group
 		} else {
 			j.addJoinToGroup(op, left, right, joinFilter, selFilters, group)
@@ -772,14 +814,14 @@ func (j *joinOrderBuilder) addJoinToGroup(
 
 // memoize
 func (j *joinOrderBuilder) memoize(
+	ctx *sql.Context,
 	op plan.JoinType,
 	left *ExprGroup,
 	right *ExprGroup,
 	joinFilter []sql.Expression,
-	selFilter []sql.Expression,
 ) *ExprGroup {
 	rel := j.constructJoin(op, left, right, joinFilter, nil)
-	return j.m.NewExprGroup(rel)
+	return j.m.NewExprGroup(ctx, rel)
 }
 
 func (j *joinOrderBuilder) constructJoin(
@@ -808,7 +850,7 @@ func (j *joinOrderBuilder) constructJoin(
 		rel = &LeftJoin{b}
 	case plan.JoinTypeSemi:
 		rel = &SemiJoin{b}
-	case plan.JoinTypeAnti:
+	case plan.JoinTypeAnti, plan.JoinTypeAntiIncludeNulls:
 		rel = &AntiJoin{b}
 	case plan.JoinTypeLateralInner, plan.JoinTypeLateralCross,
 		plan.JoinTypeLateralRight, plan.JoinTypeLateralLeft:
@@ -842,66 +884,57 @@ func (j *joinOrderBuilder) allEdges() edgeSet {
 // tree. It is used in calculating the total eligibility sets for edges from any
 // 'parent' joins which were originally above this one in the tree.
 type operator struct {
-	// joinType is the operator type of the original join operator.
-	joinType plan.JoinType
-
-	// leftVertices is the set of vertexes (base relations) that were in the left
-	// input of the original join operator.
-	leftVertices vertexSet
-
-	// rightVertices is the set of vertexes (base relations) that were in the
-	// right input of the original join operator.
-	rightVertices vertexSet
-
 	// leftEdges is the set of edges that were constructed from join operators
 	// that were in the left input of the original join operator.
 	leftEdges edgeSet
-
 	// rightEdgers is the set of edges that were constructed from join operators
 	// that were in the right input of the original join operator.
 	rightEdges edgeSet
+	// leftVertices is the set of vertexes (base relations) that were in the left
+	// input of the original join operator.
+	leftVertices vertexSet
+	// rightVertices is the set of vertexes (base relations) that were in the
+	// right input of the original join operator.
+	rightVertices vertexSet
+	// joinType is the operator type of the original join operator.
+	joinType plan.JoinType
 }
 
 // edge is a generalization of a join edge that embeds rules for
 // determining the applicability of arbitrary subtrees. An edge is added to the
 // join graph when a new plan can be constructed between two vertexSet.
 type edge struct {
+	freeVars sql.ColSet
 	// op is the original join node source for the edge. there are multiple edges
 	// per op for inner joins with conjunct-predicate join conditions. Different predicates
 	// will have different conflict rules.
 	op *operator
-
 	// filters is the set of join filters that will be used to construct new join
 	// ON conditions.
-	filters  []sql.Expression
-	freeVars sql.ColSet
-
+	filters []sql.Expression
+	// rules is a set of conflict rules which must evaluate to true in order for
+	// a join between two sets of vertexes to be valid.
+	rules []conflictRule
 	// nullRejectedRels is the set of vertexes on which nulls are rejected by the
 	// filters. We do not set any nullRejectedRels currently, which is not accurate
 	// but prevents potentially invalid transformations.
 	nullRejectedRels vertexSet
-
 	// ses is the syntactic eligibility set of the edge; in other words, it is the
 	// set of base relations (tables) referenced by the filters field.
 	ses vertexSet
-
 	// tes is the total eligibility set of the edge. The TES gives the set of base
 	// relations (vertexes) that must be in the input of any join that uses the
 	// filters from this edge in its ON condition. The TES is initialized with the
 	// SES, and then expanded by the conflict detection algorithm.
 	tes vertexSet
-
-	// rules is a set of conflict rules which must evaluate to true in order for
-	// a join between two sets of vertexes to be valid.
-	rules []conflictRule
 }
 
-func (e *edge) populateEdgeProps(tableIds []sql.TableId, edges []edge) {
+func (e *edge) populateEdgeProps(ctx *sql.Context, tableIds []sql.TableId, edges []edge) {
 	var tables sql.FastIntSet
 	var cols sql.ColSet
 	if len(e.filters) > 0 {
 		for _, e := range e.filters {
-			eCols, eTabs, _ := getExprScalarProps(e)
+			eCols, eTabs, _ := getExprScalarProps(ctx, e)
 			cols = cols.Union(eCols)
 			tables = tables.Union(eTabs)
 		}
@@ -912,9 +945,9 @@ func (e *edge) populateEdgeProps(tableIds []sql.TableId, edges []edge) {
 	e.freeVars = cols
 
 	// TODO implement, we currently limit transforms assuming no strong null safety
-	//e.nullRejectedRels = e.nullRejectingTables(nullAccepting, allNames, allV)
+	// e.nullRejectedRels = e.nullRejectingTables(nullAccepting, allNames, allV)
 
-	//SES is vertexSet of all tables referenced in cols
+	// SES is vertexSet of all tables referenced in cols
 	e.calcSES(tables, tableIds)
 	// use CD-C to expand dependency sets for operators
 	// front load preventing applicable operators that would push crossjoins
@@ -1425,7 +1458,7 @@ func getOpIdx(e *edge) int {
 		return 1
 	case plan.JoinTypeSemi:
 		return 2
-	case plan.JoinTypeAnti:
+	case plan.JoinTypeAnti, plan.JoinTypeAntiIncludeNulls:
 		return 3
 	case plan.JoinTypeLeftOuter:
 		return 4

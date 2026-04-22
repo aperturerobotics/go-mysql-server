@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/dolthub/vitess/go/mysql"
 	"github.com/shopspring/decimal"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -25,17 +26,36 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
+// numericRetType returns the appropriate return type for numeric functions
+// like ROUND() and TRUNCATE() according to MySQL specification:
+// Integer types return BIGINT
+// Floating-point types or non-numeric types return DOUBLE
+// DECIMAL values return DECIMAL
+func numericRetType(inputType sql.Type) sql.Type {
+	if types.IsSigned(inputType) || types.IsUnsigned(inputType) {
+		return types.Int64
+	} else if types.IsFloat(inputType) {
+		return types.Float64
+	} else if types.IsDecimal(inputType) {
+		return inputType
+	} else if types.IsTextBlob(inputType) {
+		return types.Float64 // DOUBLE for non-numeric types
+	}
+
+	return types.Float64
+}
+
 // Ceil returns the smallest integer value not less than X.
 type Ceil struct {
-	expression.UnaryExpression
+	expression.UnaryExpressionStub
 }
 
 var _ sql.FunctionExpression = (*Ceil)(nil)
 var _ sql.CollationCoercible = (*Ceil)(nil)
 
 // NewCeil creates a new Ceil expression.
-func NewCeil(num sql.Expression) sql.Expression {
-	return &Ceil{expression.UnaryExpression{Child: num}}
+func NewCeil(ctx *sql.Context, num sql.Expression) sql.Expression {
+	return &Ceil{expression.UnaryExpressionStub{Child: num}}
 }
 
 // FunctionName implements sql.FunctionExpression
@@ -49,12 +69,15 @@ func (c *Ceil) Description() string {
 }
 
 // Type implements the Expression interface.
-func (c *Ceil) Type() sql.Type {
-	childType := c.Child.Type()
-	if types.IsInteger(childType) {
-		return childType
+func (c *Ceil) Type(ctx *sql.Context) sql.Type {
+	childType := c.Child.Type(ctx)
+	if types.IsUnsigned(childType) {
+		return types.Uint64
 	}
-	return types.Int32
+	if types.IsNumber(childType) {
+		return types.Int64
+	}
+	return types.Float64
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -67,59 +90,55 @@ func (c *Ceil) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (c *Ceil) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (c *Ceil) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(c, len(children), 1)
 	}
-	return NewCeil(children[0]), nil
+	return NewCeil(ctx, children[0]), nil
 }
 
 // Eval implements the Expression interface.
 func (c *Ceil) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	child, err := c.Child.Eval(ctx, row)
-
 	if err != nil {
 		return nil, err
 	}
-
 	if child == nil {
 		return nil, nil
 	}
-
-	// non number type will be caught here
-	if !types.IsNumber(c.Child.Type()) {
-		child, _, err = types.Float64.Convert(child)
+	if !types.IsNumber(c.Child.Type(ctx)) {
+		child, _, err = types.Float64.Convert(ctx, child)
 		if err != nil {
-			return int32(0), nil
+			if !sql.ErrTruncatedIncorrect.Is(err) {
+				return nil, err
+			}
+			ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 		}
-
-		return int32(math.Ceil(child.(float64))), nil
 	}
-
 	// if it's number type and not float value, it does not need ceil-ing
 	switch num := child.(type) {
-	case float64:
-		return math.Ceil(num), nil
 	case float32:
-		return float32(math.Ceil(float64(num))), nil
+		child = math.Ceil(float64(num))
+	case float64:
+		child = math.Ceil(num)
 	case decimal.Decimal:
-		return num.Ceil(), nil
-	default:
-		return child, nil
+		child = num.Ceil()
 	}
+	child, _, _ = c.Type(ctx).Convert(ctx, child)
+	return child, nil
 }
 
 // Floor returns the biggest integer value not less than X.
 type Floor struct {
-	expression.UnaryExpression
+	expression.UnaryExpressionStub
 }
 
 var _ sql.FunctionExpression = (*Floor)(nil)
 var _ sql.CollationCoercible = (*Floor)(nil)
 
 // NewFloor returns a new Floor expression.
-func NewFloor(num sql.Expression) sql.Expression {
-	return &Floor{expression.UnaryExpression{Child: num}}
+func NewFloor(ctx *sql.Context, num sql.Expression) sql.Expression {
+	return &Floor{expression.UnaryExpressionStub{Child: num}}
 }
 
 // FunctionName implements sql.FunctionExpression
@@ -133,12 +152,15 @@ func (f *Floor) Description() string {
 }
 
 // Type implements the Expression interface.
-func (f *Floor) Type() sql.Type {
-	childType := f.Child.Type()
-	if types.IsInteger(childType) {
-		return childType
+func (f *Floor) Type(ctx *sql.Context) sql.Type {
+	childType := f.Child.Type(ctx)
+	if types.IsUnsigned(childType) {
+		return types.Uint64
 	}
-	return types.Int32
+	if types.IsNumber(childType) {
+		return types.Int64
+	}
+	return types.Float64
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -151,46 +173,42 @@ func (f *Floor) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (f *Floor) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (f *Floor) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(f, len(children), 1)
 	}
-	return NewFloor(children[0]), nil
+	return NewFloor(ctx, children[0]), nil
 }
 
 // Eval implements the Expression interface.
 func (f *Floor) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	child, err := f.Child.Eval(ctx, row)
-
 	if err != nil {
 		return nil, err
 	}
-
 	if child == nil {
 		return nil, nil
 	}
-
-	// non number type will be caught here
-	if !types.IsNumber(f.Child.Type()) {
-		child, _, err = types.Float64.Convert(child)
+	if !types.IsNumber(f.Child.Type(ctx)) {
+		child, _, err = types.Float64.Convert(ctx, child)
 		if err != nil {
-			return int32(0), nil
+			if !sql.ErrTruncatedIncorrect.Is(err) {
+				return nil, err
+			}
+			ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 		}
-
-		return int32(math.Floor(child.(float64))), nil
 	}
-
-	// if it's number type and not float value, it does not need floor-ing
+	// if it's number type and not float value, it does not need ceil-ing
 	switch num := child.(type) {
-	case float64:
-		return math.Floor(num), nil
 	case float32:
-		return float32(math.Floor(float64(num))), nil
+		child = math.Floor(float64(num))
+	case float64:
+		child = math.Floor(num)
 	case decimal.Decimal:
-		return num.Floor(), nil
-	default:
-		return child, nil
+		child = num.Floor()
 	}
+	child, _, _ = f.Type(ctx).Convert(ctx, child)
+	return child, nil
 }
 
 // Round returns the number (x) with (d) requested decimal places.
@@ -198,25 +216,29 @@ func (f *Floor) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 // digits of it's integer part set to 0. If d is not specified or nil/null
 // it defaults to 0.
 type Round struct {
-	expression.BinaryExpressionStub
+	Num sql.Expression
+	Dec sql.Expression
 }
 
 var _ sql.FunctionExpression = (*Round)(nil)
 var _ sql.CollationCoercible = (*Round)(nil)
 
 // NewRound returns a new Round expression.
-func NewRound(args ...sql.Expression) (sql.Expression, error) {
+func NewRound(ctx *sql.Context, args ...sql.Expression) (sql.Expression, error) {
 	argLen := len(args)
-	if argLen == 0 || argLen > 2 {
+	switch argLen {
+	case 1:
+		return &Round{
+			Num: args[0],
+		}, nil
+	case 2:
+		return &Round{
+			Num: args[0],
+			Dec: args[1],
+		}, nil
+	default:
 		return nil, sql.ErrInvalidArgumentNumber.New("ROUND", "1 or 2", argLen)
 	}
-
-	var right sql.Expression
-	if len(args) == 2 {
-		right = args[1]
-	}
-
-	return &Round{expression.BinaryExpressionStub{LeftChild: args[0], RightChild: right}}, nil
 }
 
 // FunctionName implements sql.FunctionExpression
@@ -231,103 +253,96 @@ func (r *Round) Description() string {
 
 // Children implements the Expression interface.
 func (r *Round) Children() []sql.Expression {
-	if r.RightChild == nil {
-		return []sql.Expression{r.LeftChild}
+	if r.Dec == nil {
+		return []sql.Expression{r.Num}
 	}
-
-	return r.BinaryExpressionStub.Children()
+	return []sql.Expression{r.Num, r.Dec}
 }
 
 // Eval implements the Expression interface.
 func (r *Round) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
-	val, err := r.LeftChild.Eval(ctx, row)
+	val, err := r.Num.Eval(ctx, row)
 	if err != nil {
 		return nil, err
 	}
-
 	if val == nil {
 		return nil, nil
 	}
 
-	decType := types.MustCreateDecimalType(types.DecimalTypeMaxPrecision, types.DecimalTypeMaxScale)
-	val, _, err = decType.Convert(val)
-	if err != nil {
-		// TODO: truncate
-		return nil, err
+	val, _, err = types.InternalDecimalType.Convert(ctx, val)
+	if err != nil && sql.ErrTruncatedIncorrect.Is(err) {
+		ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 	}
 
 	prec := int32(0)
-	if r.RightChild != nil {
-		var tmp interface{}
-		tmp, err = r.RightChild.Eval(ctx, row)
+	if r.Dec != nil {
+		var tmp any
+		tmp, err = r.Dec.Eval(ctx, row)
 		if err != nil {
 			return nil, err
 		}
-
 		if tmp == nil {
 			return nil, nil
 		}
-
-		if tmp != nil {
-			tmp, _, err = types.Int32.Convert(tmp)
-			if err != nil {
-				// TODO: truncate
+		tmp, _, err = types.Int32.Convert(ctx, tmp)
+		if err != nil {
+			if !sql.ErrTruncatedIncorrect.Is(err) {
 				return nil, err
 			}
-			prec = tmp.(int32)
-			// MySQL cuts off at 30 for larger values
-			// TODO: these limits are fine only because we can't handle decimals larger than this
-			if prec > types.DecimalTypeMaxPrecision {
-				prec = types.DecimalTypeMaxPrecision
-			}
-			if prec < -types.DecimalTypeMaxScale {
-				prec = -types.DecimalTypeMaxScale
-			}
+			ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
+		}
+		prec = tmp.(int32)
+		// MySQL cuts off at 30 for larger values
+		// TODO: these limits are fine only because we can't handle decimals larger than this
+		if prec > types.DecimalTypeMaxPrecision {
+			prec = types.DecimalTypeMaxPrecision
+		}
+		if prec < -types.DecimalTypeMaxScale {
+			prec = -types.DecimalTypeMaxScale
 		}
 	}
 
 	var res interface{}
 	tmp := val.(decimal.Decimal).Round(prec)
-	if types.IsSigned(r.LeftChild.Type()) {
-		res, _, err = types.Int64.Convert(tmp)
-	} else if types.IsUnsigned(r.LeftChild.Type()) {
-		res, _, err = types.Uint64.Convert(tmp)
-	} else if types.IsFloat(r.LeftChild.Type()) {
-		res, _, err = types.Float64.Convert(tmp)
-	} else if types.IsDecimal(r.LeftChild.Type()) {
+	lType := r.Num.Type(ctx)
+	if types.IsSigned(lType) {
+		res, _, err = types.Int64.Convert(ctx, tmp)
+	} else if types.IsUnsigned(lType) {
+		res, _, err = types.Uint64.Convert(ctx, tmp)
+	} else if types.IsFloat(lType) {
+		res, _, err = types.Float64.Convert(ctx, tmp)
+	} else if types.IsDecimal(lType) {
 		res = tmp
-	} else if types.IsTextBlob(r.LeftChild.Type()) {
-		res, _, err = types.Float64.Convert(tmp)
+	} else if types.IsTextBlob(lType) {
+		res, _, err = types.Float64.Convert(ctx, tmp)
 	}
-
+	if err != nil && sql.ErrTruncatedIncorrect.Is(err) {
+		ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
+		err = nil
+	}
 	return res, err
 }
 
 // IsNullable implements the Expression interface.
-func (r *Round) IsNullable() bool {
-	return r.LeftChild.IsNullable()
+func (r *Round) IsNullable(ctx *sql.Context) bool {
+	return r.Num.IsNullable(ctx) || (r.Dec != nil && r.Dec.IsNullable(ctx))
 }
 
 func (r *Round) String() string {
-	if r.RightChild == nil {
-		return fmt.Sprintf("%s(%s,0)", r.FunctionName(), r.LeftChild.String())
+	if r.Dec == nil {
+		return fmt.Sprintf("%s(%s,0)", r.FunctionName(), r.Num.String())
 	}
-
-	return fmt.Sprintf("%s(%s,%s)", r.FunctionName(), r.LeftChild.String(), r.RightChild.String())
+	return fmt.Sprintf("%s(%s,%s)", r.FunctionName(), r.Num.String(), r.Dec.String())
 }
 
 // Resolved implements the Expression interface.
 func (r *Round) Resolved() bool {
-	return r.LeftChild.Resolved() && (r.RightChild == nil || r.RightChild.Resolved())
+	return r.Num.Resolved() && (r.Dec == nil || r.Dec.Resolved())
 }
 
 // Type implements the Expression interface.
-func (r *Round) Type() sql.Type {
-	leftChildType := r.LeftChild.Type()
-	if types.IsNumber(leftChildType) {
-		return leftChildType
-	}
-	return types.Int32
+func (r *Round) Type(ctx *sql.Context) sql.Type {
+	return numericRetType(r.Num.Type(ctx))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -336,6 +351,6 @@ func (*Round) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID
 }
 
 // WithChildren implements the Expression interface.
-func (r *Round) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return NewRound(children...)
+func (r *Round) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return NewRound(ctx, children...)
 }

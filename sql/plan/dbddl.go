@@ -50,7 +50,7 @@ func (c *CreateDB) String() string {
 	return fmt.Sprintf("%s database%s %v", sqlparser.CreateStr, ifNotExists, c.DbName)
 }
 
-func (c *CreateDB) Schema() sql.Schema {
+func (c *CreateDB) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -58,13 +58,8 @@ func (c *CreateDB) Children() []sql.Node {
 	return nil
 }
 
-func (c *CreateDB) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (c *CreateDB) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(c, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (c *CreateDB) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(sql.PrivilegeCheckSubject{}, sql.PrivilegeType_Create))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -111,23 +106,22 @@ func (c *CreateSchema) String() string {
 	return fmt.Sprintf("%s schema%s %v", sqlparser.CreateStr, ifNotExists, c.DbName)
 }
 
-func (c *CreateSchema) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (c *CreateSchema) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(c, children...)
 }
 
 // DropDB removes a databases from the Catalog and updates the active database if it gets removed itself.
 type DropDB struct {
-	Catalog  sql.Catalog
-	DbName   string
-	IfExists bool
+	Catalog sql.Catalog
 	// EventScheduler is used to notify EventSchedulerStatus of database deletion,
 	// so the events of this database in the scheduler will be removed.
-	EventScheduler sql.EventScheduler
+	Scheduler sql.EventScheduler
+	DbName    string
+	IfExists  bool
 }
 
 var _ sql.Node = (*DropDB)(nil)
 var _ sql.CollationCoercible = (*DropDB)(nil)
-var _ sql.EventSchedulerStatement = (*DropDB)(nil)
 
 func (d *DropDB) Resolved() bool {
 	return true
@@ -145,7 +139,7 @@ func (d *DropDB) String() string {
 	return fmt.Sprintf("%s database%s %v", sqlparser.DropStr, ifExists, d.DbName)
 }
 
-func (d *DropDB) Schema() sql.Schema {
+func (d *DropDB) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -153,20 +147,8 @@ func (d *DropDB) Children() []sql.Node {
 	return nil
 }
 
-func (d *DropDB) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (d *DropDB) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(d, children...)
-}
-
-// WithEventScheduler is used to drop all events from EventSchedulerStatus for DROP DATABASE.
-func (d *DropDB) WithEventScheduler(scheduler sql.EventScheduler) sql.Node {
-	na := *d
-	na.EventScheduler = scheduler
-	return &na
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (d *DropDB) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(sql.PrivilegeCheckSubject{}, sql.PrivilegeType_Drop))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -178,6 +160,23 @@ func NewDropDatabase(dbName string, ifExists bool) *DropDB {
 	return &DropDB{
 		DbName:   dbName,
 		IfExists: ifExists,
+	}
+}
+
+// DropSchema removes a schema from the Catalog using the currently selected database.
+type DropSchema struct {
+	*DropDB
+}
+
+var _ sql.Node = (*DropSchema)(nil)
+
+// NewDropSchema returns a new DropSchema.
+func NewDropSchema(schemaName string, ifExists bool) *DropSchema {
+	return &DropSchema{
+		&DropDB{
+			DbName:   schemaName,
+			IfExists: ifExists,
+		},
 	}
 }
 
@@ -210,7 +209,7 @@ func (c *AlterDB) String() string {
 }
 
 // Schema implements the interface sql.Node.
-func (c *AlterDB) Schema() sql.Schema {
+func (c *AlterDB) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -220,16 +219,8 @@ func (c *AlterDB) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (c *AlterDB) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (c *AlterDB) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(c, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (c *AlterDB) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: c.Database(ctx),
-	}
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Alter))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

@@ -28,15 +28,15 @@ import (
 // and returns 0.
 // It can be useful to test timeouts or long queries.
 type Sleep struct {
-	expression.UnaryExpression
+	expression.UnaryExpressionStub
 }
 
 var _ sql.FunctionExpression = (*Sleep)(nil)
 var _ sql.CollationCoercible = (*Sleep)(nil)
 
 // NewSleep creates a new Sleep expression.
-func NewSleep(e sql.Expression) sql.Expression {
-	return &Sleep{expression.UnaryExpression{Child: e}}
+func NewSleep(ctx *sql.Context, e sql.Expression) sql.Expression {
+	return &Sleep{expression.UnaryExpressionStub{Child: e}}
 }
 
 // FunctionName implements sql.FunctionExpression
@@ -61,7 +61,7 @@ func (s *Sleep) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	child, _, err = types.Float64.Convert(child)
+	child, _, err = types.Float64.Convert(ctx, child)
 	if err != nil {
 		return nil, err
 	}
@@ -83,20 +83,20 @@ func (s *Sleep) String() string {
 }
 
 // IsNullable implements the Expression interface.
-func (s *Sleep) IsNullable() bool {
-	return false
+func (s *Sleep) IsNullable(ctx *sql.Context) bool {
+	return s.Child.IsNullable(ctx)
 }
 
 // WithChildren implements the Expression interface.
-func (s *Sleep) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (s *Sleep) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(s, len(children), 1)
 	}
-	return NewSleep(children[0]), nil
+	return NewSleep(ctx, children[0]), nil
 }
 
 // Type implements the Expression interface.
-func (s *Sleep) Type() sql.Type {
+func (s *Sleep) Type(ctx *sql.Context) sql.Type {
 	return types.Int32
 }
 

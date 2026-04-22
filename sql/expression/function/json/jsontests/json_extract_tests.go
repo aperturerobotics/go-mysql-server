@@ -15,6 +15,7 @@
 package jsontests
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -26,13 +27,16 @@ import (
 )
 
 func JsonExtractTestCases(t *testing.T, prepare prepareJsonValue) []testCase {
+	ctx := sql.NewEmptyContext()
 	f2, err := json.NewJSONExtract(
+		ctx,
 		expression.NewGetField(0, types.LongText, "arg1", false),
 		expression.NewGetField(1, types.LongText, "arg2", false),
 	)
 	require.NoError(t, err)
 
 	f3, err := json.NewJSONExtract(
+		ctx,
 		expression.NewGetField(0, types.LongText, "arg1", false),
 		expression.NewGetField(1, types.LongText, "arg2", false),
 		expression.NewGetField(2, types.LongText, "arg3", false),
@@ -40,6 +44,7 @@ func JsonExtractTestCases(t *testing.T, prepare prepareJsonValue) []testCase {
 	require.NoError(t, err)
 
 	f4, err := json.NewJSONExtract(
+		ctx,
 		expression.NewGetField(0, types.LongText, "arg1", false),
 		expression.NewGetField(1, types.LongText, "arg2", false),
 		expression.NewGetField(2, types.LongText, "arg3", false),
@@ -67,7 +72,7 @@ func JsonExtractTestCases(t *testing.T, prepare prepareJsonValue) []testCase {
 	}}
 	// Workaround for https://github.com/dolthub/dolt/issues/7998
 	// Otherwise, converting this to a string will create invalid JSON
-	jsonBytes, err := types.MarshallJson(jsonDocument)
+	jsonBytes, err := types.MarshallJson(context.Background(), jsonDocument)
 	require.NoError(t, err)
 	jsonInput := prepare(t, jsonBytes)
 
@@ -126,6 +131,7 @@ func testJSONExtractAsterisk(t *testing.T, prepare prepareJsonValue) {
 	}
 }`)
 		f, err := json.NewJSONExtract(
+			sql.NewEmptyContext(),
 			expression.NewLiteral(jsonStr, types.LongText),
 			expression.NewLiteral("$.*", types.LongText))
 		require.NoError(err)

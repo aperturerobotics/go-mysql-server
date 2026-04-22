@@ -70,16 +70,16 @@ func (c *CaseStatement) String() string {
 }
 
 // DebugString implements the sql.DebugStringer interface.
-func (c *CaseStatement) DebugString() string {
+func (c *CaseStatement) DebugString(ctx *sql.Context) string {
 	p := sql.NewTreePrinter()
-	_ = p.WriteNode("CASE %s", sql.DebugString(c.Expr))
-	_ = p.WriteChildren(sql.DebugString(c.IfElse))
+	_ = p.WriteNode("CASE %s", sql.DebugString(ctx, c.Expr))
+	_ = p.WriteChildren(sql.DebugString(ctx, c.IfElse))
 	return p.String()
 }
 
 // Schema implements the interface sql.Node.
-func (c *CaseStatement) Schema() sql.Schema {
-	return c.IfElse.Schema()
+func (c *CaseStatement) Schema(ctx *sql.Context) sql.Schema {
+	return c.IfElse.Schema(ctx)
 }
 
 // Children implements the interface sql.Node.
@@ -88,8 +88,8 @@ func (c *CaseStatement) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (c *CaseStatement) WithChildren(children ...sql.Node) (sql.Node, error) {
-	newIfElseNode, err := c.IfElse.WithChildren(children...)
+func (c *CaseStatement) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
+	newIfElseNode, err := c.IfElse.WithChildren(ctx, children...)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +110,7 @@ func (c *CaseStatement) Expressions() []sql.Expression {
 }
 
 // WithExpressions implements the interface sql.Node.
-func (c *CaseStatement) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (c *CaseStatement) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(c, len(exprs), 1)
 	}
@@ -119,11 +119,6 @@ func (c *CaseStatement) WithExpressions(exprs ...sql.Expression) (sql.Node, erro
 		Expr:   exprs[0],
 		IfElse: c.IfElse,
 	}, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (c *CaseStatement) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return c.IfElse.CheckPrivileges(ctx, opChecker)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -150,7 +145,7 @@ func (e ElseCaseError) String() string {
 }
 
 // Schema implements the interface sql.Node.
-func (e ElseCaseError) Schema() sql.Schema {
+func (e ElseCaseError) Schema(ctx *sql.Context) sql.Schema {
 	return nil
 }
 
@@ -160,13 +155,8 @@ func (e ElseCaseError) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (e ElseCaseError) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (e ElseCaseError) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(e, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (e ElseCaseError) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

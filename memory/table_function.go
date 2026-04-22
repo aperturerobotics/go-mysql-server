@@ -19,7 +19,7 @@ type TableFunc struct {
 	value int64
 }
 
-func (s TableFunc) NewInstance(_ *sql.Context, db sql.Database, args []sql.Expression) (sql.Node, error) {
+func (s TableFunc) NewInstance(ctx *sql.Context, db sql.Database, args []sql.Expression) (sql.Node, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("table_func table expects 2 arguments: (name, len)")
 	}
@@ -35,7 +35,7 @@ func (s TableFunc) NewInstance(_ *sql.Context, db sql.Database, args []sql.Expre
 	if !ok {
 		return nil, fmt.Errorf("table_func table expects arguments to be literal expressions")
 	}
-	value, _, err := types.Int64.Convert(valueExpr.Value())
+	value, _, err := types.Int64.Convert(ctx, valueExpr.Value())
 	if !ok {
 		return nil, fmt.Errorf("%w; table_func table expects 2nd argument to be a table_func length integer", err)
 	}
@@ -54,7 +54,7 @@ func (s TableFunc) String() string {
 	return fmt.Sprintf("table_func(%s, %d)", s.name, s.value)
 }
 
-func (s TableFunc) DebugString() string {
+func (s TableFunc) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("table_func")
 	children := []string{
@@ -65,7 +65,7 @@ func (s TableFunc) DebugString() string {
 	return pr.String()
 }
 
-func (s TableFunc) Schema() sql.Schema {
+func (s TableFunc) Schema(ctx *sql.Context) sql.Schema {
 	schema := []*sql.Column{
 		{
 			DatabaseSource: s.db.Name(),
@@ -87,12 +87,8 @@ func (s TableFunc) RowIter(_ *sql.Context, _ sql.Row) (sql.RowIter, error) {
 	return rowIter, nil
 }
 
-func (s TableFunc) WithChildren(_ ...sql.Node) (sql.Node, error) {
+func (s TableFunc) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return s, nil
-}
-
-func (s TableFunc) CheckPrivileges(_ *sql.Context, _ sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -109,7 +105,7 @@ func (s TableFunc) Expressions() []sql.Expression {
 	return []sql.Expression{}
 }
 
-func (s TableFunc) WithExpressions(e ...sql.Expression) (sql.Node, error) {
+func (s TableFunc) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	return s, nil
 }
 

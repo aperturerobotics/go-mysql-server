@@ -59,52 +59,8 @@ func (r *RenameTable) IsReadOnly() bool {
 	return false
 }
 
-func (r *RenameTable) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
-	renamer, _ := r.Db.(sql.TableRenamer)
-	viewDb, _ := r.Db.(sql.ViewDatabase)
-	viewRegistry := ctx.GetViewRegistry()
-
-	for i, oldName := range r.OldNames {
-		if tbl, exists := r.tableExists(ctx, oldName); exists {
-			err := r.renameTable(ctx, renamer, tbl, oldName, r.NewNames[i])
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			success, err := r.renameView(ctx, viewDb, viewRegistry, oldName, r.NewNames[i])
-			if err != nil {
-				return nil, err
-			} else if !success {
-				return nil, sql.ErrTableNotFound.New(oldName)
-			}
-		}
-	}
-
-	return sql.RowsToRowIter(sql.NewRow(types.NewOkResult(0))), nil
-}
-
-func (r *RenameTable) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (r *RenameTable) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(r, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (r *RenameTable) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	var operations []sql.PrivilegedOperation
-	for _, oldName := range r.OldNames {
-		subject := sql.PrivilegeCheckSubject{
-			Database: CheckPrivilegeNameForDatabase(r.Db),
-			Table:    oldName,
-		}
-		operations = append(operations, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Alter, sql.PrivilegeType_Drop))
-	}
-	for _, newName := range r.NewNames {
-		subject := sql.PrivilegeCheckSubject{
-			Database: CheckPrivilegeNameForDatabase(r.Db),
-			Table:    newName,
-		}
-		operations = append(operations, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Create, sql.PrivilegeType_Insert))
-	}
-	return opChecker.UserHasPrivileges(ctx, operations...)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -112,7 +68,7 @@ func (*RenameTable) CollationCoercibility(ctx *sql.Context) (collation sql.Colla
 	return sql.Collation_binary, 7
 }
 
-func (r *RenameTable) tableExists(ctx *sql.Context, name string) (sql.Table, bool) {
+func (r *RenameTable) TableExists(ctx *sql.Context, name string) (sql.Table, bool) {
 	tbl, ok, err := r.Db.GetTableInsensitive(ctx, name)
 	if err != nil || !ok {
 		return nil, false
@@ -120,7 +76,7 @@ func (r *RenameTable) tableExists(ctx *sql.Context, name string) (sql.Table, boo
 	return tbl, true
 }
 
-func (r *RenameTable) renameTable(ctx *sql.Context, renamer sql.TableRenamer, tbl sql.Table, oldName, newName string) error {
+func (r *RenameTable) RenameTable(ctx *sql.Context, renamer sql.TableRenamer, tbl sql.Table, oldName, newName string) error {
 	if renamer == nil {
 		return sql.ErrRenameTableNotSupported.New(r.Db.Name())
 	}
@@ -180,7 +136,7 @@ func (r *RenameTable) renameTable(ctx *sql.Context, renamer sql.TableRenamer, tb
 	return nil
 }
 
-func (r *RenameTable) renameView(ctx *sql.Context, viewDb sql.ViewDatabase, vr *sql.ViewRegistry, oldName, newName string) (bool, error) {
+func (r *RenameTable) RenameView(ctx *sql.Context, viewDb sql.ViewDatabase, vr *sql.ViewRegistry, oldName, newName string) (bool, error) {
 	if viewDb != nil {
 		oldView, exists, err := viewDb.GetViewDefinition(ctx, oldName)
 		if err != nil {
@@ -239,14 +195,14 @@ var _ sql.Expressioner = (*AddColumn)(nil)
 var _ sql.SchemaTarget = (*AddColumn)(nil)
 var _ sql.CollationCoercible = (*AddColumn)(nil)
 
-func (a *AddColumn) DebugString() string {
+func (a *AddColumn) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	pr.WriteNode("add column %s to %s", a.column.Name, a.Table)
 
 	var children []string
-	children = append(children, sql.DebugString(a.column))
+	children = append(children, sql.DebugString(ctx, a.column))
 	for _, col := range a.targetSch {
-		children = append(children, sql.DebugString(col))
+		children = append(children, sql.DebugString(ctx, col))
 	}
 
 	pr.WriteChildren(children...)
@@ -277,7 +233,7 @@ func (a *AddColumn) Column() *sql.Column {
 	return a.column
 }
 
-func (a *AddColumn) Order() *sql.ColumnOrder {
+func (a *AddColumn) Order(ctx *sql.Context) *sql.ColumnOrder {
 	return a.order
 }
 
@@ -292,7 +248,7 @@ func (a *AddColumn) WithDatabase(db sql.Database) (sql.Node, error) {
 }
 
 // Schema implements the sql.Node interface.
-func (a *AddColumn) Schema() sql.Schema {
+func (a *AddColumn) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -304,7 +260,7 @@ func (a *AddColumn) Expressions() []sql.Expression {
 	return append(transform.WrappedColumnDefaults(a.targetSch), transform.WrappedColumnDefaults(sql.Schema{a.column})...)
 }
 
-func (a AddColumn) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (a AddColumn) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != 1+len(a.targetSch) {
 		return nil, sql.ErrInvalidChildrenNumber.New(a, len(exprs), 1+len(a.targetSch))
 	}
@@ -342,7 +298,7 @@ func (a *AddColumn) TargetSchema() sql.Schema {
 	return a.targetSch
 }
 
-func (a *AddColumn) ValidateDefaultPosition(tblSch sql.Schema) error {
+func (a *AddColumn) ValidateDefaultPosition(ctx *sql.Context, tblSch sql.Schema) error {
 	colsAfterThis := map[string]*sql.Column{a.column.Name: a.column}
 	if a.order != nil {
 		if a.order.First {
@@ -362,7 +318,7 @@ func (a *AddColumn) ValidateDefaultPosition(tblSch sql.Schema) error {
 		}
 	}
 
-	err := inspectDefaultForInvalidColumns(a.column, colsAfterThis)
+	err := inspectDefaultForInvalidColumns(ctx, a.column, colsAfterThis)
 	if err != nil {
 		return err
 	}
@@ -370,12 +326,12 @@ func (a *AddColumn) ValidateDefaultPosition(tblSch sql.Schema) error {
 	return nil
 }
 
-func inspectDefaultForInvalidColumns(col *sql.Column, columnsAfterThis map[string]*sql.Column) error {
+func inspectDefaultForInvalidColumns(ctx *sql.Context, col *sql.Column, columnsAfterThis map[string]*sql.Column) error {
 	if col.Default == nil {
 		return nil
 	}
 	var err error
-	sql.Inspect(col.Default, func(expr sql.Expression) bool {
+	sql.Inspect(ctx, col.Default, func(ctx *sql.Context, expr sql.Expression) bool {
 		switch expr := expr.(type) {
 		case *expression.GetField:
 			if col, ok := columnsAfterThis[expr.Name()]; ok && col.Default != nil && !col.Default.IsLiteral() {
@@ -388,22 +344,12 @@ func inspectDefaultForInvalidColumns(col *sql.Column, columnsAfterThis map[strin
 	return err
 }
 
-func (a AddColumn) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (a AddColumn) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(a, len(children), 1)
 	}
 	a.Table = children[0]
 	return &a, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (a *AddColumn) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: CheckPrivilegeNameForDatabase(a.Db),
-		Table:    getTableName(a.Table),
-	}
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Alter))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -424,10 +370,10 @@ type ColDefaultExpression struct {
 var _ sql.Expression = ColDefaultExpression{}
 var _ sql.CollationCoercible = ColDefaultExpression{}
 
-func (c ColDefaultExpression) Resolved() bool   { return true }
-func (c ColDefaultExpression) String() string   { return "" }
-func (c ColDefaultExpression) Type() sql.Type   { return c.Column.Type }
-func (c ColDefaultExpression) IsNullable() bool { return c.Column.Default == nil }
+func (c ColDefaultExpression) Resolved() bool               { return true }
+func (c ColDefaultExpression) String() string               { return "" }
+func (c ColDefaultExpression) Type(*sql.Context) sql.Type   { return c.Column.Type }
+func (c ColDefaultExpression) IsNullable(*sql.Context) bool { return c.Column.Default == nil }
 func (c ColDefaultExpression) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	if c.Column != nil && c.Column.Default != nil {
 		return c.Column.Default.CollationCoercibility(ctx)
@@ -439,7 +385,7 @@ func (c ColDefaultExpression) Children() []sql.Expression {
 	panic("ColDefaultExpression is only meant for immediate evaluation and should never be modified")
 }
 
-func (c ColDefaultExpression) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (c ColDefaultExpression) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	panic("ColDefaultExpression is only meant for immediate evaluation and should never be modified")
 }
 
@@ -451,14 +397,14 @@ func (c ColDefaultExpression) Eval(ctx *sql.Context, row sql.Row) (interface{}, 
 
 	if columnDefaultExpr == nil && !c.Column.Nullable {
 		val := c.Column.Type.Zero()
-		ret, _, err := c.Column.Type.Convert(val)
+		ret, _, err := c.Column.Type.Convert(ctx, val)
 		return ret, err
 	} else if columnDefaultExpr != nil {
 		val, err := columnDefaultExpr.Eval(ctx, row)
 		if err != nil {
 			return nil, err
 		}
-		ret, _, err := c.Column.Type.Convert(val)
+		ret, _, err := c.Column.Type.Convert(ctx, val)
 		return ret, err
 	}
 
@@ -533,7 +479,7 @@ func (d *DropColumn) Validate(ctx *sql.Context, tbl sql.Table) error {
 			continue
 		}
 		var err error
-		sql.Inspect(col.Default, func(expr sql.Expression) bool {
+		sql.Inspect(ctx, col.Default, func(ctx *sql.Context, expr sql.Expression) bool {
 			switch expr := expr.(type) {
 			case *expression.GetField:
 				if expr.Name() == d.Column {
@@ -577,7 +523,7 @@ func (d *DropColumn) Validate(ctx *sql.Context, tbl sql.Table) error {
 	return nil
 }
 
-func (d *DropColumn) Schema() sql.Schema {
+func (d *DropColumn) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -589,21 +535,12 @@ func (d *DropColumn) Children() []sql.Node {
 	return []sql.Node{d.Table}
 }
 
-func (d DropColumn) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (d DropColumn) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(d, len(children), 1)
 	}
 	d.Table = children[0]
 	return &d, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (d *DropColumn) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: CheckPrivilegeNameForDatabase(d.Db),
-		Table:    getTableName(d.Table),
-	}
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Alter))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -624,7 +561,7 @@ func (d *DropColumn) Expressions() []sql.Expression {
 	return transform.WrappedColumnDefaults(d.targetSchema)
 }
 
-func (d DropColumn) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (d DropColumn) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != len(d.targetSchema) {
 		return nil, sql.ErrInvalidChildrenNumber.New(d, len(exprs), len(d.targetSchema))
 	}
@@ -704,13 +641,13 @@ func (r *RenameColumn) IsReadOnly() bool {
 	return false
 }
 
-func (r *RenameColumn) DebugString() string {
+func (r *RenameColumn) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	pr.WriteNode("rename column %s to %s", r.ColumnName, r.NewColumnName)
 
 	var children []string
 	for _, col := range r.targetSchema {
-		children = append(children, sql.DebugString(col))
+		children = append(children, sql.DebugString(ctx, col))
 	}
 
 	pr.WriteChildren(children...)
@@ -721,7 +658,7 @@ func (r *RenameColumn) Resolved() bool {
 	return r.Table.Resolved() && r.ddlNode.Resolved() && r.targetSchema.Resolved()
 }
 
-func (r *RenameColumn) Schema() sql.Schema {
+func (r *RenameColumn) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -729,7 +666,7 @@ func (r *RenameColumn) Expressions() []sql.Expression {
 	return transform.WrappedColumnDefaults(r.targetSchema)
 }
 
-func (r RenameColumn) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (r RenameColumn) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != len(r.targetSchema) {
 		return nil, sql.ErrInvalidChildrenNumber.New(r, len(exprs), len(r.targetSchema))
 	}
@@ -747,23 +684,12 @@ func (r *RenameColumn) Children() []sql.Node {
 	return []sql.Node{r.Table}
 }
 
-func (r RenameColumn) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (r RenameColumn) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(r, len(children), 1)
 	}
 	r.Table = children[0]
 	return &r, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (r *RenameColumn) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: CheckPrivilegeNameForDatabase(r.Db),
-		Table:    getTableName(r.Table),
-	}
-
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Alter))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -822,12 +748,12 @@ func (m *ModifyColumn) NewColumn() *sql.Column {
 	return m.column
 }
 
-func (m *ModifyColumn) Order() *sql.ColumnOrder {
+func (m *ModifyColumn) Order(*sql.Context) *sql.ColumnOrder {
 	return m.order
 }
 
 // Schema implements the sql.Node interface.
-func (m *ModifyColumn) Schema() sql.Schema {
+func (m *ModifyColumn) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -853,23 +779,13 @@ func (m *ModifyColumn) Children() []sql.Node {
 	return []sql.Node{m.Table}
 }
 
-func (m *ModifyColumn) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (m *ModifyColumn) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(m, len(children), 1)
 	}
 	nm := *m
 	nm.Table = children[0]
 	return &nm, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (m *ModifyColumn) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: CheckPrivilegeNameForDatabase(m.Db),
-		Table:    getTableName(m.Table),
-	}
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Alter))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -881,7 +797,7 @@ func (m *ModifyColumn) Expressions() []sql.Expression {
 	return append(transform.WrappedColumnDefaults(m.targetSchema), expression.WrapExpressions(m.column.Default)...)
 }
 
-func (m *ModifyColumn) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (m *ModifyColumn) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != 1+len(m.targetSchema) {
 		return nil, sql.ErrInvalidChildrenNumber.New(m, len(exprs), 1+len(m.targetSchema))
 	}
@@ -907,7 +823,7 @@ func (m *ModifyColumn) Resolved() bool {
 	return m.Table.Resolved() && m.column.Default.Resolved() && m.ddlNode.Resolved() && m.targetSchema.Resolved()
 }
 
-func (m *ModifyColumn) ValidateDefaultPosition(tblSch sql.Schema) error {
+func (m *ModifyColumn) ValidateDefaultPosition(ctx *sql.Context, tblSch sql.Schema) error {
 	colsBeforeThis := make(map[string]*sql.Column)
 	colsAfterThis := make(map[string]*sql.Column) // includes the modified column
 	if m.order == nil {
@@ -941,13 +857,13 @@ func (m *ModifyColumn) ValidateDefaultPosition(tblSch sql.Schema) error {
 		colsAfterThis[m.column.Name] = m.column
 	}
 
-	err := inspectDefaultForInvalidColumns(m.column, colsAfterThis)
+	err := inspectDefaultForInvalidColumns(ctx, m.column, colsAfterThis)
 	if err != nil {
 		return err
 	}
 	thisCol := map[string]*sql.Column{m.column.Name: m.column}
 	for _, colBefore := range colsBeforeThis {
-		err = inspectDefaultForInvalidColumns(colBefore, thisCol)
+		err = inspectDefaultForInvalidColumns(ctx, colBefore, thisCol)
 		if err != nil {
 			return err
 		}
@@ -1000,7 +916,7 @@ func (atc *AlterTableCollation) String() string {
 }
 
 // DebugString implements the interface sql.Node.
-func (atc *AlterTableCollation) DebugString() string {
+func (atc *AlterTableCollation) DebugString(ctx *sql.Context) string {
 	return atc.String()
 }
 
@@ -1010,7 +926,7 @@ func (atc *AlterTableCollation) Resolved() bool {
 }
 
 // Schema implements the interface sql.Node.
-func (atc *AlterTableCollation) Schema() sql.Schema {
+func (atc *AlterTableCollation) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -1020,7 +936,7 @@ func (atc *AlterTableCollation) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (atc *AlterTableCollation) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (atc *AlterTableCollation) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(atc, len(children), 1)
 	}
@@ -1029,12 +945,66 @@ func (atc *AlterTableCollation) WithChildren(children ...sql.Node) (sql.Node, er
 	return &natc, nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (atc *AlterTableCollation) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: CheckPrivilegeNameForDatabase(atc.Db),
-		Table:    getTableName(atc.Table),
-	}
+type AlterTableComment struct {
+	ddlNode
+	Table   sql.Node
+	Comment string
+}
 
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Alter))
+var _ sql.Node = (*AlterTableComment)(nil)
+var _ sql.Databaser = (*AlterTableComment)(nil)
+
+func NewAlterTableComment(table *ResolvedTable, comment string) *AlterTableComment {
+	return &AlterTableComment{
+		ddlNode: ddlNode{Db: table.SqlDatabase},
+		Table:   table,
+		Comment: comment,
+	}
+}
+
+// WithDatabase implements the interface sql.Databaser
+func (atc *AlterTableComment) WithDatabase(db sql.Database) (sql.Node, error) {
+	natc := *atc
+	natc.Db = db
+	return &natc, nil
+}
+
+// IsReadOnly implements the interface sql.Node
+func (atc *AlterTableComment) IsReadOnly() bool {
+	return false
+}
+
+// String implements the interface sql.Node
+func (atc *AlterTableComment) String() string {
+	return fmt.Sprintf("alter table %s comment %s", atc.Table.String(), atc.Comment)
+}
+
+// DebugString implements the interface sql.Node
+func (atc *AlterTableComment) DebugString(ctx *sql.Context) string {
+	return atc.String()
+}
+
+// Resolved implements the interface sql.Node
+func (atc *AlterTableComment) Resolved() bool {
+	return atc.Table.Resolved() && atc.ddlNode.Resolved()
+}
+
+// Schema implements the interface sql.Node
+func (atc *AlterTableComment) Schema(ctx *sql.Context) sql.Schema {
+	return atc.Table.Schema(ctx)
+}
+
+// Children implements the interface sql.Node
+func (atc *AlterTableComment) Children() []sql.Node {
+	return []sql.Node{atc.Table}
+}
+
+// WithChildren implements the interface sql.Node
+func (atc *AlterTableComment) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
+	if len(children) != 1 {
+		return nil, sql.ErrInvalidChildrenNumber.New(atc, len(children), 1)
+	}
+	natc := *atc
+	natc.Table = children[0]
+	return &natc, nil
 }

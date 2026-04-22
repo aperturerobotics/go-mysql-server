@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"reflect"
 
 	"github.com/dolthub/vitess/go/sqltypes"
@@ -32,6 +33,7 @@ type systemStringType struct {
 
 var _ sql.SystemVariableType = systemStringType{}
 var _ sql.CollationCoercible = systemStringType{}
+var _ sql.StringType = systemStringType{}
 
 // NewSystemStringType returns a new systemStringType.
 func NewSystemStringType(varName string) sql.SystemVariableType {
@@ -39,12 +41,12 @@ func NewSystemStringType(varName string) sql.SystemVariableType {
 }
 
 // Compare implements Type interface.
-func (t systemStringType) Compare(a interface{}, b interface{}) (int, error) {
-	as, _, err := t.Convert(a)
+func (t systemStringType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+	as, _, err := t.Convert(ctx, a)
 	if err != nil {
 		return 0, err
 	}
-	bs, _, err := t.Convert(b)
+	bs, _, err := t.Convert(ctx, b)
 	if err != nil {
 		return 0, err
 	}
@@ -61,7 +63,7 @@ func (t systemStringType) Compare(a interface{}, b interface{}) (int, error) {
 }
 
 // Convert implements Type interface.
-func (t systemStringType) Convert(v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t systemStringType) Convert(c context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
 	if v == nil {
 		return "", sql.InRange, nil
 	}
@@ -69,16 +71,7 @@ func (t systemStringType) Convert(v interface{}) (interface{}, sql.ConvertInRang
 		return value, sql.InRange, nil
 	}
 
-	return nil, sql.OutOfRange, sql.ErrInvalidSystemVariableValue.New(t.varName, v)
-}
-
-// MustConvert implements the Type interface.
-func (t systemStringType) MustConvert(v interface{}) interface{} {
-	value, _, err := t.Convert(v)
-	if err != nil {
-		panic(err)
-	}
-	return value
+	return nil, sql.InRange, sql.ErrInvalidSystemVariableValue.New(t.varName, v)
 }
 
 // Equals implements the Type interface.
@@ -105,7 +98,7 @@ func (t systemStringType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sql
 		return sqltypes.NULL, nil
 	}
 
-	v, _, err := t.Convert(v)
+	v, _, err := t.Convert(ctx, v)
 	if err != nil {
 		return sqltypes.Value{}, err
 	}
@@ -156,4 +149,34 @@ func (t systemStringType) DecodeValue(val string) (interface{}, error) {
 
 func (t systemStringType) UnderlyingType() sql.Type {
 	return LongText
+}
+
+// CharacterSet implements sql.StringType interface
+func (t systemStringType) CharacterSet() sql.CharacterSetID {
+	return LongText.CharacterSet()
+}
+
+// Collation implements sql.StringType interface
+func (t systemStringType) Collation() sql.CollationID {
+	return LongText.Collation()
+}
+
+// IsStringType implements sql.StringType interface
+func (t systemStringType) IsStringType() bool {
+	return true
+}
+
+// MaxCharacterLength implements sql.StringType interface
+func (t systemStringType) MaxCharacterLength() int64 {
+	return LongText.MaxCharacterLength()
+}
+
+// MaxByteLength implements sql.StringType interface
+func (t systemStringType) MaxByteLength() int64 {
+	return LongText.MaxByteLength()
+}
+
+// Length implements sql.StringType interface
+func (t systemStringType) Length() int64 {
+	return LongText.Length()
 }

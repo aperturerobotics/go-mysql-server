@@ -52,7 +52,7 @@ func (f *If) Children() []sql.Expression {
 }
 
 // NewIf returns a new IF UDF
-func NewIf(expr, ifTrue, ifFalse sql.Expression) sql.Expression {
+func NewIf(ctx *sql.Context, expr, ifTrue, ifFalse sql.Expression) sql.Expression {
 	return &If{
 		expr:    expr,
 		ifTrue:  ifTrue,
@@ -77,26 +77,27 @@ func (f *If) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		}
 	}
 
+	var eval interface{}
 	if asBool {
-		return f.ifTrue.Eval(ctx, row)
+		eval, err = f.ifTrue.Eval(ctx, row)
+		if err != nil {
+			return nil, err
+		}
 	} else {
-		return f.ifFalse.Eval(ctx, row)
+		eval, err = f.ifFalse.Eval(ctx, row)
+		if err != nil {
+			return nil, err
+		}
 	}
+	if ret, _, err := f.Type(ctx).Convert(ctx, eval); err == nil {
+		return ret, nil
+	}
+	return eval, err
 }
 
 // Type implements the Expression interface.
-func (f *If) Type() sql.Type {
-	// if either type is string type, this should be a string type, regardless need to promote
-	typ1 := f.ifTrue.Type()
-	typ2 := f.ifFalse.Type()
-	if types.IsText(typ1) || types.IsText(typ2) {
-		return types.Text
-	}
-
-	if typ1 == types.Null {
-		return typ2.Promote()
-	}
-	return typ1.Promote()
+func (f *If) Type(ctx *sql.Context) sql.Type {
+	return types.GeneralizeTypes(f.ifTrue.Type(ctx), f.ifFalse.Type(ctx))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -107,8 +108,8 @@ func (f *If) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID,
 }
 
 // IsNullable implements the Expression interface.
-func (f *If) IsNullable() bool {
-	return f.ifTrue.IsNullable()
+func (f *If) IsNullable(ctx *sql.Context) bool {
+	return f.ifTrue.IsNullable(ctx) || f.ifFalse.IsNullable(ctx)
 }
 
 func (f *If) String() string {
@@ -116,9 +117,9 @@ func (f *If) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (f *If) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (f *If) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 3 {
 		return nil, sql.ErrInvalidChildrenNumber.New(f, len(children), 3)
 	}
-	return NewIf(children[0], children[1], children[2]), nil
+	return NewIf(ctx, children[0], children[1], children[2]), nil
 }

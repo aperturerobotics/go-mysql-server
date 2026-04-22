@@ -31,8 +31,8 @@ type CaseBranch struct {
 // condition is met.
 type Case struct {
 	Expr     sql.Expression
-	Branches []CaseBranch
 	Else     sql.Expression
+	Branches []CaseBranch
 }
 
 var _ sql.Expression = (*Case)(nil)
@@ -40,64 +40,18 @@ var _ sql.CollationCoercible = (*Case)(nil)
 
 // NewCase returns an new Case expression.
 func NewCase(expr sql.Expression, branches []CaseBranch, elseExpr sql.Expression) *Case {
-	return &Case{expr, branches, elseExpr}
-}
-
-// From the description of operator typing here:
-// https://dev.mysql.com/doc/refman/8.0/en/flow-control-functions.html#operator_case
-func combinedCaseBranchType(left, right sql.Type) sql.Type {
-	if left == types.Null {
-		return right
-	}
-	if right == types.Null {
-		return left
-	}
-	if types.IsTextOnly(left) && types.IsTextOnly(right) {
-		return types.LongText
-	}
-	if types.IsTextBlob(left) && types.IsTextBlob(right) {
-		return types.LongBlob
-	}
-	if types.IsTime(left) && types.IsTime(right) {
-		if left == right {
-			return left
-		}
-		return types.DatetimeMaxPrecision
-	}
-	if types.IsNumber(left) && types.IsNumber(right) {
-		if left == types.Float64 || right == types.Float64 {
-			return types.Float64
-		}
-		if left == types.Float32 || right == types.Float32 {
-			return types.Float32
-		}
-		if types.IsDecimal(left) || types.IsDecimal(right) {
-			return types.MustCreateDecimalType(65, 10)
-		}
-		if left == types.Uint64 && types.IsSigned(right) ||
-			right == types.Uint64 && types.IsSigned(left) {
-			return types.MustCreateDecimalType(65, 10)
-		}
-		if !types.IsSigned(left) && !types.IsSigned(right) {
-			return types.Uint64
-		} else {
-			return types.Int64
-		}
-	}
-	if types.IsJSON(left) && types.IsJSON(right) {
-		return types.JSON
-	}
-	return types.LongText
+	return &Case{Expr: expr, Branches: branches, Else: elseExpr}
 }
 
 // Type implements the sql.Expression interface.
-func (c *Case) Type() sql.Type {
-	curr := types.Null
+func (c *Case) Type(ctx *sql.Context) sql.Type {
+	var curr sql.Type
+	curr = types.Null
 	for _, b := range c.Branches {
-		curr = combinedCaseBranchType(curr, b.Value.Type())
+		curr = types.GeneralizeTypes(curr, b.Value.Type(ctx))
 	}
 	if c.Else != nil {
-		curr = combinedCaseBranchType(curr, c.Else.Type())
+		curr = types.GeneralizeTypes(curr, c.Else.Type(ctx))
 	}
 	return curr
 }
@@ -106,18 +60,18 @@ func (c *Case) Type() sql.Type {
 func (c *Case) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	// This should be calculated during the expression's evaluation, but that's not possible with the
 	// current abstraction
-	return c.Type().CollationCoercibility(ctx)
+	return c.Type(ctx).CollationCoercibility(ctx)
 }
 
 // IsNullable implements the sql.Expression interface.
-func (c *Case) IsNullable() bool {
+func (c *Case) IsNullable(ctx *sql.Context) bool {
 	for _, b := range c.Branches {
-		if b.Value.IsNullable() {
+		if b.Value.IsNullable(ctx) {
 			return true
 		}
 	}
 
-	return c.Else == nil || c.Else.IsNullable()
+	return c.Else == nil || c.Else.IsNullable(ctx)
 }
 
 // Resolved implements the sql.Expression interface.
@@ -160,7 +114,7 @@ func (c *Case) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	span, ctx := ctx.Span("expression.Case")
 	defer span.End()
 
-	t := c.Type()
+	t := c.Type(ctx)
 
 	for _, b := range c.Branches {
 		var cond sql.Expression
@@ -182,7 +136,7 @@ func (c *Case) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 			}
 			// When unable to convert to the type of the case, return the original value
 			// A common error here is "Out of bounds value for decimal type"
-			if ret, _, err := t.Convert(bval); err == nil {
+			if ret, inRange, err := types.TypeAwareConversion(ctx, bval, b.Value.Type(ctx), t); inRange == sql.InRange && err == nil {
 				return ret, nil
 			}
 			return bval, nil
@@ -196,7 +150,7 @@ func (c *Case) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		}
 		// When unable to convert to the type of the case, return the original value
 		// A common error here is "Out of bounds value for decimal type"
-		if ret, _, err := t.Convert(val); err == nil {
+		if ret, inRange, err := types.TypeAwareConversion(ctx, val, c.Else.Type(ctx), t); inRange == sql.InRange && err == nil {
 			return ret, nil
 		}
 		return val, nil
@@ -207,7 +161,7 @@ func (c *Case) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 }
 
 // WithChildren implements the Expression interface.
-func (c *Case) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (c *Case) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	var expected = len(c.Branches) * 2
 	if c.Expr != nil {
 		expected++
@@ -267,24 +221,48 @@ func (c *Case) String() string {
 	return buf.String()
 }
 
-func (c *Case) DebugString() string {
+func (c *Case) DebugString(ctx *sql.Context) string {
 	var buf bytes.Buffer
 
 	buf.WriteString("CASE ")
 	if c.Expr != nil {
-		buf.WriteString(sql.DebugString(c.Expr))
+		buf.WriteString(sql.DebugString(ctx, c.Expr))
 	}
 
 	for _, b := range c.Branches {
 		buf.WriteString(" WHEN ")
-		buf.WriteString(sql.DebugString(b.Cond))
+		buf.WriteString(sql.DebugString(ctx, b.Cond))
 		buf.WriteString(" THEN ")
-		buf.WriteString(sql.DebugString(b.Value))
+		buf.WriteString(sql.DebugString(ctx, b.Value))
 	}
 
 	if c.Else != nil {
 		buf.WriteString(" ELSE ")
-		buf.WriteString(sql.DebugString(c.Else))
+		buf.WriteString(sql.DebugString(ctx, c.Else))
+	}
+
+	buf.WriteString(" END")
+	return buf.String()
+}
+
+func (c *Case) Describe(ctx *sql.Context, options sql.DescribeOptions) string {
+	var buf bytes.Buffer
+
+	buf.WriteString("CASE ")
+	if c.Expr != nil {
+		buf.WriteString(sql.Describe(ctx, c.Expr, options))
+	}
+
+	for _, b := range c.Branches {
+		buf.WriteString(" WHEN ")
+		buf.WriteString(sql.Describe(ctx, b.Cond, options))
+		buf.WriteString(" THEN ")
+		buf.WriteString(sql.Describe(ctx, b.Value, options))
+	}
+
+	if c.Else != nil {
+		buf.WriteString(" ELSE ")
+		buf.WriteString(sql.Describe(ctx, c.Else, options))
 	}
 
 	buf.WriteString(" END")

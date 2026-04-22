@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"math"
 	"reflect"
 
@@ -35,8 +36,8 @@ type MultiPointType struct {
 
 // MultiPoint is the value type returned from MultiPointType. Implements GeometryValue.
 type MultiPoint struct {
-	SRID   uint32
 	Points []Point
+	SRID   uint32
 }
 
 var _ sql.Type = MultiPointType{}
@@ -51,34 +52,40 @@ var (
 )
 
 // Compare implements Type interface.
-func (t MultiPointType) Compare(a interface{}, b interface{}) (int, error) {
-	return GeometryType{}.Compare(a, b)
+func (t MultiPointType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+	return GeometryType{}.Compare(ctx, a, b)
 }
 
 // Convert implements Type interface.
-func (t MultiPointType) Convert(v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t MultiPointType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
 	switch buf := v.(type) {
 	case nil:
 		return nil, sql.InRange, nil
 	case []byte:
-		multipoint, _, err := GeometryType{}.Convert(buf)
+		multipoint, _, err := GeometryType{}.Convert(ctx, buf)
 		if err != nil {
-			return nil, sql.OutOfRange, err
+			return nil, sql.InRange, err
 		}
 		// TODO: is this even possible?
 		if _, ok := multipoint.(MultiPoint); !ok {
-			return nil, sql.OutOfRange, sql.ErrInvalidGISData.New("MultiPointType.Convert")
+			return nil, sql.InRange, sql.ErrInvalidGISData.New("MultiPointType.Convert")
 		}
 		return multipoint, sql.InRange, nil
 	case string:
-		return t.Convert([]byte(buf))
+		return t.Convert(ctx, []byte(buf))
 	case MultiPoint:
 		if err := t.MatchSRID(buf); err != nil {
-			return nil, sql.OutOfRange, err
+			return nil, sql.InRange, err
 		}
 		return buf, sql.InRange, nil
+	case sql.AnyWrapper:
+		unwrapped, err := buf.UnwrapAny(ctx)
+		if err != nil {
+			return nil, sql.InRange, err
+		}
+		return t.Convert(ctx, unwrapped)
 	default:
-		return nil, sql.OutOfRange, sql.ErrSpatialTypeConversion.New()
+		return nil, sql.InRange, sql.ErrSpatialTypeConversion.New()
 	}
 }
 
@@ -104,7 +111,7 @@ func (t MultiPointType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqlty
 		return sqltypes.NULL, nil
 	}
 
-	v, _, err := t.Convert(v)
+	v, _, err := t.Convert(ctx, v)
 	if err != nil {
 		return sqltypes.Value{}, nil
 	}

@@ -32,7 +32,7 @@ func TestSubquery(t *testing.T) {
 	pro := memory.NewDBProvider(db)
 	ctx := newContext(pro)
 
-	table := memory.NewTable(db, "", sql.PrimaryKeySchema{}, nil)
+	table := memory.NewTable(ctx, db, "", sql.PrimaryKeySchema{}, nil)
 	require.NoError(table.Insert(ctx, nil))
 
 	subquery := plan.NewSubquery(plan.NewProject(
@@ -53,7 +53,7 @@ func TestSubqueryTooManyRows(t *testing.T) {
 	pro := memory.NewDBProvider(db)
 	ctx := newContext(pro)
 
-	table := memory.NewTable(db, "", sql.PrimaryKeySchema{}, nil)
+	table := memory.NewTable(ctx, db, "", sql.PrimaryKeySchema{}, nil)
 	require.NoError(table.Insert(ctx, nil))
 	require.NoError(table.Insert(ctx, nil))
 
@@ -75,7 +75,7 @@ func TestSubqueryMultipleRows(t *testing.T) {
 	pro := memory.NewDBProvider(db)
 	ctx := newContext(pro)
 
-	table := memory.NewTable(db, "foo", sql.NewPrimaryKeySchema(sql.Schema{
+	table := memory.NewTable(ctx, db, "foo", sql.NewPrimaryKeySchema(sql.Schema{
 		{Name: "t", Source: "foo", Type: types.Text},
 	}), nil)
 
@@ -92,5 +92,5 @@ func TestSubqueryMultipleRows(t *testing.T) {
 
 	values, err := subquery.EvalMultiple(ctx, nil)
 	require.NoError(err)
-	require.Equal(values, []interface{}{"one", "two", "three"})
+	require.Equal([]any{"one", "two", "three"}, values)
 }

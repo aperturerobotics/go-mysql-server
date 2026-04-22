@@ -21,37 +21,38 @@ import (
 	"sync/atomic"
 
 	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/vitess/go/vt/sqlparser"
 	"github.com/sirupsen/logrus"
 )
 
 // BaseSession is the basic session implementation. Integrators should typically embed this type into their custom
 // session implementations to get base functionality.
 type BaseSession struct {
-	id     uint32
-	addr   string
-	client Client
-
+	tx               Transaction
+	privilegeSet     PrivilegeSet
+	userVars         SessionUserVariables
 	logger           *logrus.Entry
-	currentDB        string
-	transactionDb    string
+	locks            map[string]bool
+	storedProcParams map[string]*StoredProcParam
 	systemVars       map[string]SystemVarValue
 	statusVars       map[string]StatusVarValue
-	userVars         SessionUserVariables
+	preparedQueries  map[string]sqlparser.Statement
+	cachedQueries    map[string]sqlparser.Statement // TODO: limit size
+	lastQueryInfo    *LastQueryInfo
 	idxReg           *IndexRegistry
 	viewReg          *ViewRegistry
-	warnings         []*Warning
-	warningLock      bool
-	warncnt          uint16
-	locks            map[string]bool
+	transactionDb    string
 	queriedDb        string
-	lastQueryInfo    map[string]*atomic.Value
-	tx               Transaction
+	currentDB        string
+	addr             string
+	client           Client
+	warnings         []*Warning
+	privSetCounter   uint64
+	id               uint32
+	warningCount     uint16
+	charset          CharacterSetID
+	warningLock      bool
 	ignoreAutocommit bool
-
-	// When the MySQL database updates any tables related to privileges, it increments its counter. We then update our
-	// privilege set if our counter doesn't equal the database's counter.
-	privSetCounter uint64
-	privilegeSet   PrivilegeSet
 }
 
 func (s *BaseSession) GetLogger() *logrus.Entry {
@@ -98,7 +99,6 @@ func (s *BaseSession) Client() Client { return s.client }
 // SetClient implements the Session interface.
 func (s *BaseSession) SetClient(c Client) {
 	s.client = c
-	return
 }
 
 // GetAllSessionVariables implements the Session interface.
@@ -161,22 +161,46 @@ func (s *BaseSession) InitSessionVariable(ctx *Context, sysVarName string, value
 	return s.setSessVar(ctx, sysVar, value, true)
 }
 
-func (s *BaseSession) setSessVar(ctx *Context, sysVar SystemVariable, value interface{}, init bool) error {
+// InitSessionVariableDefault implements the Session interface and is used to initialize variables (Including read-only variables)
+func (s *BaseSession) InitSessionVariableDefault(ctx *Context, sysVarName string, value interface{}) error {
+	sysVar, _, ok := SystemVariables.GetGlobal(sysVarName)
+	if !ok {
+		return ErrUnknownSystemVariable.New(sysVarName)
+	}
+
+	sysVar.SetDefault(value)
+	svv, err := sysVar.InitValue(ctx, value, false)
+	if err != nil {
+		return err
+	}
+
+	sysVarName = strings.ToLower(sysVarName)
+	s.systemVars[sysVarName] = svv
+	if sysVarName == characterSetResultsSysVarName {
+		s.charset = CharacterSet_Unspecified
+	}
+	return nil
+}
+
+func (s *BaseSession) setSessVar(ctx *Context, sysVar SystemVariable, val interface{}, init bool) error {
 	var svv SystemVarValue
 	var err error
 	if init {
-		svv, err = sysVar.InitValue(value, false)
+		svv, err = sysVar.InitValue(ctx, val, false)
 		if err != nil {
 			return err
 		}
 	} else {
-		svv, err = sysVar.SetValue(value, false)
+		svv, err = sysVar.SetValue(ctx, val, false)
 		if err != nil {
 			return err
 		}
 	}
 	sysVarName := strings.ToLower(sysVar.GetName())
 	s.systemVars[sysVarName] = svv
+	if sysVarName == characterSetResultsSysVarName {
+		s.charset = CharacterSet_Unspecified
+	}
 	return nil
 }
 
@@ -199,6 +223,22 @@ func (s *BaseSession) GetSessionVariable(ctx *Context, sysVarName string) (inter
 		}
 	}
 	return sysVar.Val, nil
+}
+
+// GetSessionVariableDefault implements the Session interface.
+func (s *BaseSession) GetSessionVariableDefault(ctx *Context, sysVarName string) (interface{}, error) {
+	sysVarName = strings.ToLower(sysVarName)
+	sysVar, ok := s.systemVars[sysVarName]
+	if !ok {
+		return nil, ErrUnknownSystemVariable.New(sysVarName)
+	}
+	// TODO: this is duplicated from within variables.globalSystemVariables, suggesting the need for an interface
+	if sysType, ok := sysVar.Var.GetType().(SetType); ok {
+		if sv, ok := sysVar.Var.GetDefault().(uint64); ok {
+			return sysType.BitsToString(sv)
+		}
+	}
+	return sysVar.Var.GetDefault(), nil
 }
 
 // GetUserVariable implements the Session interface.
@@ -248,6 +288,36 @@ func (s *BaseSession) IncrementStatusVariable(ctx *Context, statVarName string, 
 	return
 }
 
+// NewStoredProcParam creates a new Stored Procedure Parameter in the Session
+func (s *BaseSession) NewStoredProcParam(name string, param *StoredProcParam) *StoredProcParam {
+	name = strings.ToLower(name)
+	if spp, ok := s.storedProcParams[name]; ok {
+		return spp
+	}
+	s.storedProcParams[name] = param
+	return param
+}
+
+// GetStoredProcParam retrieves the named stored procedure parameter, from the Session, returning nil if not found.
+func (s *BaseSession) GetStoredProcParam(name string) *StoredProcParam {
+	name = strings.ToLower(name)
+	if param, ok := s.storedProcParams[name]; ok {
+		return param
+	}
+	return nil
+}
+
+// SetStoredProcParam sets the named Stored Procedure Parameter from the Session to val and marks it as HasSet.
+// If the Parameter has not been initialized, this will throw an error.
+func (s *BaseSession) SetStoredProcParam(name string, val any) error {
+	param := s.GetStoredProcParam(name)
+	if param == nil {
+		return fmt.Errorf("variable `%s` could not be found", name)
+	}
+	param.SetValue(val)
+	return nil
+}
+
 // GetCharacterSet returns the character set for this session (defined by the system variable `character_set_connection`).
 func (s *BaseSession) GetCharacterSet() CharacterSetID {
 	sysVar, _ := s.systemVars[characterSetConnectionSysVarName]
@@ -263,15 +333,18 @@ func (s *BaseSession) GetCharacterSet() CharacterSetID {
 
 // GetCharacterSetResults returns the result character set for this session (defined by the system variable `character_set_results`).
 func (s *BaseSession) GetCharacterSetResults() CharacterSetID {
-	sysVar, _ := s.systemVars[characterSetResultsSysVarName]
-	if sysVar.Val == nil {
-		return CharacterSet_Unspecified
+	if s.charset == CharacterSet_Unspecified {
+		sysVar, _ := s.systemVars[characterSetResultsSysVarName]
+		if sysVar.Val == nil {
+			return CharacterSet_Unspecified
+		}
+		var err error
+		s.charset, err = ParseCharacterSet(sysVar.Val.(string))
+		if err != nil {
+			panic(err) // shouldn't happen
+		}
 	}
-	charSet, err := ParseCharacterSet(sysVar.Val.(string))
-	if err != nil {
-		panic(err) // shouldn't happen
-	}
-	return charSet
+	return s.charset
 }
 
 // GetCollation returns the collation for this session (defined by the system variable `collation_connection`).
@@ -331,6 +404,7 @@ func (s *BaseSession) SetConnectionId(id uint32) {
 // Warn stores the warning in the session.
 func (s *BaseSession) Warn(warn *Warning) {
 	s.warnings = append(s.warnings, warn)
+	s.warningCount = uint16(len(s.warnings))
 }
 
 // Warnings returns a copy of session warnings (from the most recent - the last one)
@@ -354,25 +428,25 @@ func (s *BaseSession) UnlockWarnings() {
 	s.warningLock = false
 }
 
+// ClearWarningCount cleans up session warnings
+func (s *BaseSession) ClearWarningCount() {
+	s.warningCount = 0
+}
+
 // ClearWarnings cleans up session warnings
 func (s *BaseSession) ClearWarnings() {
 	if s.warningLock {
 		return
 	}
-	cnt := uint16(len(s.warnings))
-	if s.warncnt != cnt {
-		s.warncnt = cnt
-		return
-	}
 	if s.warnings != nil {
 		s.warnings = s.warnings[:0]
 	}
-	s.warncnt = 0
+	s.ClearWarningCount()
 }
 
 // WarningCount returns a number of session warnings
 func (s *BaseSession) WarningCount() uint16 {
-	return uint16(len(s.warnings))
+	return s.warningCount
 }
 
 // AddLock adds a lock to the set of locks owned by this user which will need to be released if this session terminates
@@ -426,28 +500,8 @@ func (s *BaseSession) SetViewRegistry(reg *ViewRegistry) {
 	s.viewReg = reg
 }
 
-func (s *BaseSession) SetLastQueryInfoInt(key string, value int64) {
-	s.lastQueryInfo[key].Store(value)
-}
-
-func (s *BaseSession) GetLastQueryInfoInt(key string) int64 {
-	value, ok := s.lastQueryInfo[key].Load().(int64)
-	if !ok {
-		panic(fmt.Sprintf("last query info value stored for %s is not an int64 value, but a %T", key, s.lastQueryInfo[key]))
-	}
-	return value
-}
-
-func (s *BaseSession) SetLastQueryInfoString(key string, value string) {
-	s.lastQueryInfo[key].Store(value)
-}
-
-func (s *BaseSession) GetLastQueryInfoString(key string) string {
-	value, ok := s.lastQueryInfo[key].Load().(string)
-	if !ok {
-		panic(fmt.Sprintf("last query info value stored for %s is not a string value, but a %T", key, s.lastQueryInfo[key]))
-	}
-	return value
+func (s *BaseSession) GetLastQueryInfo() *LastQueryInfo {
+	return s.lastQueryInfo
 }
 
 func (s *BaseSession) GetTransaction() Transaction {
@@ -465,6 +519,28 @@ func (s *BaseSession) GetPrivilegeSet() (PrivilegeSet, uint64) {
 func (s *BaseSession) SetPrivilegeSet(newPs PrivilegeSet, counter uint64) {
 	s.privSetCounter = counter
 	s.privilegeSet = newPs
+}
+
+func (s *BaseSession) PrepareQuery(query string, stmt sqlparser.Statement) {
+	s.preparedQueries[query] = stmt
+}
+
+func (s *BaseSession) UnprepareQuery(query string) {
+	delete(s.preparedQueries, query)
+}
+
+func (s *BaseSession) GetPreparedQuery(query string) (sqlparser.Statement, bool) {
+	stmt, ok := s.preparedQueries[query]
+	return stmt, ok
+}
+
+func (s *BaseSession) CacheQuery(query string, stmt sqlparser.Statement) {
+	s.cachedQueries[query] = stmt
+}
+
+func (s *BaseSession) GetCachedQuery(query string) (sqlparser.Statement, bool) {
+	stmt, ok := s.cachedQueries[query]
+	return stmt, ok
 }
 
 // BaseSessionFromConnection is a SessionBuilder that returns a base session for the given connection and remote address
@@ -496,17 +572,20 @@ func NewBaseSessionWithClientServer(server string, client Client, id uint32) *Ba
 		statusVars = make(map[string]StatusVarValue)
 	}
 	return &BaseSession{
-		addr:           server,
-		client:         client,
-		id:             id,
-		systemVars:     systemVars,
-		statusVars:     statusVars,
-		userVars:       NewUserVars(),
-		idxReg:         NewIndexRegistry(),
-		viewReg:        NewViewRegistry(),
-		locks:          make(map[string]bool),
-		lastQueryInfo:  defaultLastQueryInfo(),
-		privSetCounter: 0,
+		addr:             server,
+		client:           client,
+		id:               id,
+		systemVars:       systemVars,
+		statusVars:       statusVars,
+		userVars:         NewUserVars(),
+		storedProcParams: make(map[string]*StoredProcParam),
+		preparedQueries:  make(map[string]sqlparser.Statement),
+		cachedQueries:    make(map[string]sqlparser.Statement),
+		idxReg:           NewIndexRegistry(),
+		viewReg:          NewViewRegistry(),
+		locks:            make(map[string]bool),
+		lastQueryInfo:    defaultLastQueryInfo(),
+		privSetCounter:   0,
 	}
 }
 
@@ -526,14 +605,17 @@ func NewBaseSession() *BaseSession {
 		statusVars = make(map[string]StatusVarValue)
 	}
 	return &BaseSession{
-		id:             atomic.AddUint32(&autoSessionIDs, 1),
-		systemVars:     systemVars,
-		statusVars:     statusVars,
-		userVars:       NewUserVars(),
-		idxReg:         NewIndexRegistry(),
-		viewReg:        NewViewRegistry(),
-		locks:          make(map[string]bool),
-		lastQueryInfo:  defaultLastQueryInfo(),
-		privSetCounter: 0,
+		id:               atomic.AddUint32(&autoSessionIDs, 1),
+		systemVars:       systemVars,
+		statusVars:       statusVars,
+		userVars:         NewUserVars(),
+		storedProcParams: make(map[string]*StoredProcParam),
+		preparedQueries:  make(map[string]sqlparser.Statement),
+		cachedQueries:    make(map[string]sqlparser.Statement),
+		idxReg:           NewIndexRegistry(),
+		viewReg:          NewViewRegistry(),
+		locks:            make(map[string]bool),
+		lastQueryInfo:    defaultLastQueryInfo(),
+		privSetCounter:   0,
 	}
 }

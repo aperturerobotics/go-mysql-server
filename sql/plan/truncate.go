@@ -26,8 +26,8 @@ var ErrTruncateNotSupported = errors.NewKind("table doesn't support TRUNCATE")
 
 // Truncate is a node describing the deletion of all rows from some table.
 type Truncate struct {
-	db string
 	UnaryNode
+	db string
 }
 
 var _ sql.Node = (*Truncate)(nil)
@@ -79,29 +79,18 @@ func (p *Truncate) DatabaseName() string {
 }
 
 // Schema implements the Node interface.
-func (p *Truncate) Schema() sql.Schema {
+func (p *Truncate) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
 // WithChildren implements the Node interface.
-func (p *Truncate) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (p *Truncate) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(p, len(children), 1)
 	}
 	nt := *p
 	nt.UnaryNode = UnaryNode{children[0]}
 	return &nt, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (p *Truncate) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: p.db,
-		Table:    getTableName(p.Child),
-	}
-
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Drop))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -122,9 +111,9 @@ func (p Truncate) String() string {
 }
 
 // DebugString implements the DebugStringer interface.
-func (p Truncate) DebugString() string {
+func (p Truncate) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("Truncate")
-	_ = pr.WriteChildren(sql.DebugString(p.Child))
+	_ = pr.WriteChildren(sql.DebugString(ctx, p.Child))
 	return pr.String()
 }

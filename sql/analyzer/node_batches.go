@@ -5,10 +5,22 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/plan"
 )
 
+// isSimpleSelect checks if an unanalyzed plan tree is SELECT query with a FILTER that doesn't need thorough analysis
+func isSimpleSelect(proj *plan.Project) bool {
+	child := proj.Child
+	switch c := child.(type) {
+	case *plan.Filter:
+		child = c.Child
+	default:
+	}
+	_, isResTbl := child.(*plan.ResolvedTable)
+	return isResTbl
+}
+
 // getBatchesForNode returns a partial analyzer ruleset for simple node
 // types that require little prior validation before execution.
-func getBatchesForNode(n sql.Node, orig []*Batch) ([]*Batch, bool) {
-	switch n := n.(type) {
+func getBatchesForNode(scope *plan.Scope, node sql.Node, qFlags *sql.QueryFlags) ([]*Batch, bool) {
+	switch n := node.(type) {
 	case *plan.Commit:
 		return nil, true
 	case *plan.StartTransaction:
@@ -26,12 +38,8 @@ func getBatchesForNode(n sql.Node, orig []*Batch) ([]*Batch, bool) {
 					Iterations: 1,
 					Rules: []Rule{
 						{
-							Id:    applyFKsId,
+							Id:    applyForeignKeysId,
 							Apply: applyForeignKeys,
-						},
-						{
-							Id:    validatePrivilegesId,
-							Apply: validatePrivileges,
 						},
 						{
 							Id:    validateReadOnlyDatabaseId,
@@ -71,12 +79,8 @@ func getBatchesForNode(n sql.Node, orig []*Batch) ([]*Batch, bool) {
 							Apply: validateReadOnlyTransaction,
 						},
 						{
-							Id:    applyFKsId,
+							Id:    applyForeignKeysId,
 							Apply: applyForeignKeys,
-						},
-						{
-							Id:    validatePrivilegesId,
-							Apply: validatePrivileges,
 						},
 						{
 							Id:    optimizeJoinsId,
@@ -120,12 +124,8 @@ func getBatchesForNode(n sql.Node, orig []*Batch) ([]*Batch, bool) {
 							Apply: processTruncate,
 						},
 						{
-							Id:    applyFKsId,
+							Id:    applyForeignKeysId,
 							Apply: applyForeignKeys,
-						},
-						{
-							Id:    validatePrivilegesId,
-							Apply: validatePrivileges,
 						},
 						{
 							Id:    optimizeJoinsId,
@@ -141,6 +141,107 @@ func getBatchesForNode(n sql.Node, orig []*Batch) ([]*Batch, bool) {
 					Desc:       "onceAfterAll",
 					Iterations: 1,
 					Rules:      OnceAfterAll,
+				},
+			}, true
+		}
+	case *plan.Project:
+		// TODO: hacky, but if using a custom rule set, do not apply this optimization
+		if len(AlwaysBeforeDefault) != 0 {
+			return nil, false
+		}
+		// Scope checks to prevent this from applying to subqueries
+		if (scope == nil || scope.RecursionDepth() < 1) && (qFlags == nil || !qFlags.SubqueryIsSet()) && isSimpleSelect(n) {
+			return []*Batch{
+				{
+					Desc:       "onceBeforeDefault",
+					Iterations: 1,
+					Rules: []Rule{
+						{
+							Id:    simplifyFiltersId,
+							Apply: simplifyFilters,
+						},
+						{
+							Id:    pushNotFiltersId,
+							Apply: pushNotFilters,
+						},
+					},
+				},
+				{
+					Desc:       "alwaysBeforeDefault",
+					Iterations: 1,
+					Rules:      AlwaysBeforeDefault,
+				},
+				{
+					Desc:       "defaultRules",
+					Iterations: 1,
+					Rules: []Rule{
+						{
+							Id:    validateStarExpressionsId,
+							Apply: validateStarExpressions,
+						},
+						{
+							Id:    pruneTablesId,
+							Apply: pruneTables,
+						},
+					},
+				},
+				{
+					Desc:       "simpleSelect",
+					Iterations: 1,
+					Rules: []Rule{
+						{
+							Id:    stripTableNameInDefaultsId,
+							Apply: stripTableNamesFromColumnDefaults,
+						},
+						{
+							Id:    pushFiltersId,
+							Apply: pushFilters,
+						},
+						{
+							Id:    optimizeJoinsId,
+							Apply: optimizeJoins,
+						},
+						{
+							Id:    eraseProjectionId,
+							Apply: eraseProjection,
+						},
+						{
+							Id:    applyHashInId,
+							Apply: applyHashIn,
+						},
+						{
+							Id:    assignRoutinesId,
+							Apply: assignRoutines,
+						},
+					},
+				},
+				{
+					Desc:       "onceAfterAll",
+					Iterations: 1,
+					Rules: []Rule{
+						{
+							Id:    assignExecIndexesId,
+							Apply: assignExecIndexes,
+						},
+						{
+							Id:    QuoteDefaultColumnValueNamesId,
+							Apply: quoteDefaultColumnValueNames,
+						},
+						{
+							Id:    TrackProcessId,
+							Apply: trackProcess,
+						},
+					},
+				},
+				{
+					Desc:       "simpleSelectValidationRules",
+					Iterations: 1,
+					Rules: []Rule{
+						{
+							Id:    ValidateOperandsId,
+							Apply: validateOperands,
+						},
+					},
 				},
 			}, true
 		}

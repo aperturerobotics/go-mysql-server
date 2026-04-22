@@ -24,6 +24,9 @@ import (
 )
 
 func (b *Builder) buildKill(inScope *scope, kill *ast.Kill) (outScope *scope) {
+	if err := b.cat.AuthorizationHandler().HandleAuth(b.ctx, b.authQueryState, kill.Auth); err != nil && b.authEnabled {
+		b.handleErr(err)
+	}
 	outScope = inScope.push()
 	connID64 := b.getInt64Value(inScope, kill.ConnID, "Error parsing KILL, expected int literal")
 	connID32 := uint32(connID64)
@@ -59,17 +62,17 @@ func (b *Builder) getInt64Literal(inScope *scope, expr ast.Expr, errStr string) 
 
 	switch e := e.(type) {
 	case *expression.Literal:
-		if !types.IsInteger(e.Type()) {
+		if !types.IsInteger(e.Type(b.ctx)) {
 			err := sql.ErrUnsupportedFeature.New(errStr)
 			b.handleErr(err)
 		}
 	}
 	nl, ok := e.(*expression.Literal)
-	if !ok || !types.IsInteger(nl.Type()) {
+	if !ok || !types.IsInteger(nl.Type(b.ctx)) {
 		err := sql.ErrUnsupportedFeature.New(errStr)
 		b.handleErr(err)
 	} else {
-		i64, _, err := types.Int64.Convert(nl.Value())
+		i64, _, err := types.Int64.Convert(b.ctx, nl.Value())
 		if err != nil {
 			err := sql.ErrUnsupportedFeature.New(errStr)
 			b.handleErr(err)

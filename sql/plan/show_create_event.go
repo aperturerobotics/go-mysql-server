@@ -69,19 +69,13 @@ func (s *ShowCreateEvent) Children() []sql.Node {
 }
 
 // Schema implements the sql.Node interface.
-func (s *ShowCreateEvent) Schema() sql.Schema {
+func (s *ShowCreateEvent) Schema(ctx *sql.Context) sql.Schema {
 	return showCreateEventSchema
 }
 
 // WithChildren implements the sql.Node interface.
-func (s *ShowCreateEvent) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (s *ShowCreateEvent) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(s, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (s *ShowCreateEvent) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	// TODO: figure out what privileges are needed here
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

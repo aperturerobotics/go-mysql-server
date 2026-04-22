@@ -24,8 +24,8 @@ import (
 
 // Open represents the OPEN statement, which opens a cursor.
 type Open struct {
-	Name string
 	Pref *expression.ProcedureReference
+	Name string
 }
 
 var _ sql.Node = (*Open)(nil)
@@ -54,7 +54,7 @@ func (o *Open) String() string {
 }
 
 // Schema implements the interface sql.Node.
-func (o *Open) Schema() sql.Schema {
+func (o *Open) Schema(ctx *sql.Context) sql.Schema {
 	return nil
 }
 
@@ -64,13 +64,8 @@ func (o *Open) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (o *Open) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (o *Open) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(o, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (o *Open) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

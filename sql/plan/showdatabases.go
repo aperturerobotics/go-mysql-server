@@ -47,7 +47,7 @@ func (*ShowDatabases) IsReadOnly() bool {
 }
 
 // Schema implements the Node interface.
-func (*ShowDatabases) Schema() sql.Schema {
+func (*ShowDatabases) Schema(ctx *sql.Context) sql.Schema {
 	return sql.Schema{{
 		Name:     "Database",
 		Type:     types.LongText,
@@ -56,19 +56,12 @@ func (*ShowDatabases) Schema() sql.Schema {
 }
 
 // WithChildren implements the Node interface.
-func (p *ShowDatabases) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (p *ShowDatabases) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(p, len(children), 0)
 	}
 
 	return p, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (p *ShowDatabases) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	//TODO: Having the "SHOW DATABASES" privilege should allow one to see all databases
-	// Currently, only shows databases that the user has access to
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

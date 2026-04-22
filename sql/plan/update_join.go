@@ -15,19 +15,21 @@
 package plan
 
 import (
+	"strings"
+
 	"github.com/dolthub/go-mysql-server/sql"
 )
 
 type UpdateJoin struct {
-	Updaters map[string]sql.RowUpdater
+	UpdateTargets map[string]sql.Node
 	UnaryNode
 }
 
-// NewUpdateJoin returns an *UpdateJoin node.
-func NewUpdateJoin(editorMap map[string]sql.RowUpdater, child sql.Node) *UpdateJoin {
+// NewUpdateJoin returns a new *UpdateJoin node.
+func NewUpdateJoin(updateTargets map[string]sql.Node, child sql.Node) *UpdateJoin {
 	return &UpdateJoin{
-		Updaters:  editorMap,
-		UnaryNode: UnaryNode{Child: child},
+		UpdateTargets: updateTargets,
+		UnaryNode:     UnaryNode{Child: child},
 	}
 }
 
@@ -43,37 +45,32 @@ func (u *UpdateJoin) String() string {
 }
 
 // DebugString implements the sql.Node interface.
-func (u *UpdateJoin) DebugString() string {
+func (u *UpdateJoin) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("Update Join")
-	_ = pr.WriteChildren(sql.DebugString(u.Child))
+	_ = pr.WriteChildren(sql.DebugString(ctx, u.Child))
 	return pr.String()
 }
 
 // GetUpdatable returns an updateJoinTable which implements sql.UpdatableTable.
 func (u *UpdateJoin) GetUpdatable() sql.UpdatableTable {
 	return &updatableJoinTable{
-		updaters: u.Updaters,
-		joinNode: u.Child.(*UpdateSource).Child,
+		updateTargets: u.UpdateTargets,
+		joinNode:      u.Child.(*UpdateSource).Child,
 	}
 }
 
 // WithChildren implements the sql.Node interface.
-func (u *UpdateJoin) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (u *UpdateJoin) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(u, len(children), 1)
 	}
 
-	return NewUpdateJoin(u.Updaters, children[0]), nil
+	return NewUpdateJoin(u.UpdateTargets, children[0]), nil
 }
 
 func (u *UpdateJoin) IsReadOnly() bool {
 	return false
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (u *UpdateJoin) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return u.Child.CheckPrivileges(ctx, opChecker)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -81,10 +78,26 @@ func (u *UpdateJoin) CollationCoercibility(ctx *sql.Context) (collation sql.Coll
 	return sql.GetCoercibility(ctx, u.Child)
 }
 
+func (u *UpdateJoin) GetUpdaters(ctx *sql.Context) (map[string]sql.RowUpdater, error) {
+	return getUpdaters(u.UpdateTargets, ctx)
+}
+
+func getUpdaters(updateTargets map[string]sql.Node, ctx *sql.Context) (map[string]sql.RowUpdater, error) {
+	updaterMap := make(map[string]sql.RowUpdater)
+	for tableName, updateTarget := range updateTargets {
+		updatable, err := GetUpdatable(updateTarget)
+		if err != nil {
+			return nil, err
+		}
+		updaterMap[tableName] = updatable.Updater(ctx)
+	}
+	return updaterMap, nil
+}
+
 // updatableJoinTable manages the update of multiple tables.
 type updatableJoinTable struct {
-	updaters map[string]sql.RowUpdater
-	joinNode sql.Node
+	updateTargets map[string]sql.Node
+	joinNode      sql.Node
 }
 
 var _ sql.UpdatableTable = (*updatableJoinTable)(nil)
@@ -110,8 +123,8 @@ func (u *updatableJoinTable) String() string {
 }
 
 // Schema implements the sql.UpdatableTable interface.
-func (u *updatableJoinTable) Schema() sql.Schema {
-	return u.joinNode.Schema()
+func (u *updatableJoinTable) Schema(ctx *sql.Context) sql.Schema {
+	return u.joinNode.Schema(ctx)
 }
 
 // Collation implements the sql.Table interface.
@@ -121,10 +134,11 @@ func (u *updatableJoinTable) Collation() sql.CollationID {
 
 // Updater implements the sql.UpdatableTable interface.
 func (u *updatableJoinTable) Updater(ctx *sql.Context) sql.RowUpdater {
+	updaters, _ := getUpdaters(u.updateTargets, ctx)
 	return &updatableJoinUpdater{
-		updaterMap: u.updaters,
-		schemaMap:  RecreateTableSchemaFromJoinSchema(u.joinNode.Schema()),
-		joinSchema: u.joinNode.Schema(),
+		updaterMap: updaters,
+		schemaMap:  RecreateTableSchemaFromJoinSchema(u.joinNode.Schema(ctx)),
+		joinSchema: u.joinNode.Schema(ctx),
 	}
 }
 
@@ -196,7 +210,7 @@ func (u *updatableJoinUpdater) Update(ctx *sql.Context, old sql.Row, new sql.Row
 		newRow := tableToNewRowMap[tableName]
 		schema := u.schemaMap[tableName]
 
-		eq, err := oldRow.Equals(newRow, schema)
+		eq, err := oldRow.Equals(ctx, newRow, schema)
 		if err != nil {
 			return err
 		}
@@ -221,18 +235,18 @@ func SplitRowIntoTableRowMap(row sql.Row, joinSchema sql.Schema) map[string]sql.
 		return ret
 	}
 
-	currentTable := joinSchema[0].Source
+	currentTable := strings.ToLower(joinSchema[0].Source)
 	currentRow := sql.Row{row[0]}
 
 	for i := 1; i < len(joinSchema); i++ {
 		c := joinSchema[i]
 
-		if c.Source != currentTable {
+		newTable := strings.ToLower(c.Source)
+		if newTable != currentTable {
 			ret[currentTable] = currentRow
-			currentTable = c.Source
+			currentTable = newTable
 			currentRow = sql.Row{row[i]}
 		} else {
-			currentTable = c.Source
 			currentRow = append(currentRow, row[i])
 		}
 	}

@@ -29,18 +29,19 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/dolthub/go-mysql-server/errguard"
 	"github.com/dolthub/go-mysql-server/sql"
 )
 
 type Validator struct {
 	handler mysql.Handler
+	logger  *logrus.Logger
 	golden  MySqlProxy
-	logger  *logrus.Entry
 }
 
 // NewValidatingHandler creates a new Validator wrapping a MySQL connection.
-func NewValidatingHandler(handler mysql.Handler, mySqlConn string, le *logrus.Entry) (Validator, error) {
-	golden, err := NewMySqlProxyHandler(le, mySqlConn)
+func NewValidatingHandler(handler mysql.Handler, mySqlConn string, logger *logrus.Logger) (Validator, error) {
+	golden, err := NewMySqlProxyHandler(logger, mySqlConn)
 	if err != nil {
 		return Validator{}, err
 	}
@@ -53,7 +54,7 @@ func NewValidatingHandler(handler mysql.Handler, mySqlConn string, le *logrus.En
 	return Validator{
 		handler: handler,
 		golden:  golden,
-		logger:  le,
+		logger:  logger,
 	}, nil
 }
 
@@ -91,6 +92,10 @@ func (v Validator) ConnectionClosed(c *mysql.Conn) {
 	v.golden.ConnectionClosed(c)
 }
 
+func (v Validator) ConnectionAuthenticated(c *mysql.Conn) error {
+	return nil
+}
+
 func (v Validator) ConnectionAborted(c *mysql.Conn, reason string) error {
 	return nil
 }
@@ -104,11 +109,11 @@ func (v Validator) ComMultiQuery(
 	ag := newResultAggregator(callback)
 	var remainder string
 	eg, _ := errgroup.WithContext(context.Background())
-	eg.Go(func() (err error) {
+	errguard.Go(eg, func() (err error) {
 		remainder, err = v.handler.ComMultiQuery(ctx, c, query, ag.processResults)
 		return
 	})
-	eg.Go(func() error {
+	errguard.Go(eg, func() error {
 		// ignore errors from MySQL connection
 		_, _ = v.golden.ComMultiQuery(ctx, c, query, ag.processGoldenResults)
 		return nil
@@ -132,10 +137,10 @@ func (v Validator) ComQuery(
 ) error {
 	ag := newResultAggregator(callback)
 	eg, _ := errgroup.WithContext(context.Background())
-	eg.Go(func() error {
+	errguard.Go(eg, func() error {
 		return v.handler.ComQuery(ctx, c, query, ag.processResults)
 	})
-	eg.Go(func() error {
+	errguard.Go(eg, func() error {
 		// ignore errors from MySQL connection
 		_ = v.golden.ComQuery(ctx, c, query, ag.processGoldenResults)
 		return nil
@@ -174,15 +179,14 @@ func (v Validator) ParserOptionsForConnection(_ *mysql.Conn) (sqlparser.ParserOp
 }
 
 func (v Validator) getLogger(c *mysql.Conn) *logrus.Entry {
-	return v.logger.WithField(
-		sql.ConnectionIdLogField, c.ConnectionID,
-	)
+	return logrus.NewEntry(v.logger).WithField(
+		sql.ConnectionIdLogField, c.ConnectionID)
 }
 
 type aggregator struct {
+	callback func(*sqltypes.Result, bool) error
 	results  []*sqltypes.Result
 	golden   []*sqltypes.Result
-	callback func(*sqltypes.Result, bool) error
 }
 
 const maxRows = 1024

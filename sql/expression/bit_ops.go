@@ -71,37 +71,28 @@ func (b *BitOp) String() string {
 	return fmt.Sprintf("(%s %s %s)", b.LeftChild, b.Op, b.RightChild)
 }
 
-func (b *BitOp) DebugString() string {
-	return fmt.Sprintf("(%s %s %s)", sql.DebugString(b.LeftChild), b.Op, sql.DebugString(b.RightChild))
+func (b *BitOp) DebugString(ctx *sql.Context) string {
+	return fmt.Sprintf("(%s %s %s)", sql.DebugString(ctx, b.LeftChild), b.Op, sql.DebugString(ctx, b.RightChild))
 }
 
 // IsNullable implements the sql.Expression interface.
-func (b *BitOp) IsNullable() bool {
-	return b.BinaryExpressionStub.IsNullable()
+func (b *BitOp) IsNullable(ctx *sql.Context) bool {
+	return b.BinaryExpressionStub.IsNullable(ctx)
 }
 
 // Type returns the greatest type for given operation.
-func (b *BitOp) Type() sql.Type {
-	rTyp := b.RightChild.Type()
+func (b *BitOp) Type(ctx *sql.Context) sql.Type {
+	rTyp := b.RightChild.Type(ctx)
 	if types.IsDeferredType(rTyp) {
 		return rTyp
 	}
-	lTyp := b.LeftChild.Type()
+	lTyp := b.LeftChild.Type(ctx)
 	if types.IsDeferredType(lTyp) {
 		return lTyp
 	}
 
-	if types.IsText(lTyp) || types.IsText(rTyp) {
-		return types.Float64
-	}
-
-	if types.IsUnsigned(lTyp) && types.IsUnsigned(rTyp) {
-		return types.Uint64
-	} else if types.IsSigned(lTyp) && types.IsSigned(rTyp) {
-		return types.Int64
-	}
-
-	return types.Float64
+	// MySQL bitwise operations always return unsigned results, even for signed operands.
+	return types.Uint64
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -110,7 +101,7 @@ func (*BitOp) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID
 }
 
 // WithChildren implements the Expression interface.
-func (b *BitOp) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (b *BitOp) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(b, len(children), 2)
 	}
@@ -168,10 +159,23 @@ func (b *BitOp) evalLeftRight(ctx *sql.Context, row sql.Row) (interface{}, inter
 }
 
 func (b *BitOp) convertLeftRight(ctx *sql.Context, left interface{}, right interface{}) (interface{}, interface{}, error) {
-	typ := b.Type()
+	// Determine the appropriate conversion type based on operand types
+	var typ sql.Type
+	lTyp := b.LeftChild.Type(ctx)
+	rTyp := b.RightChild.Type(ctx)
 
-	left = convertValueToType(ctx, typ, left, types.IsTime(b.LeftChild.Type()))
-	right = convertValueToType(ctx, typ, right, types.IsTime(b.RightChild.Type()))
+	if types.IsText(lTyp) || types.IsText(rTyp) {
+		typ = types.Float64
+	} else if types.IsUnsigned(lTyp) && types.IsUnsigned(rTyp) {
+		typ = types.Uint64
+	} else if types.IsSigned(lTyp) && types.IsSigned(rTyp) {
+		typ = types.Int64
+	} else {
+		typ = types.Float64
+	}
+
+	left = convertValueToType(ctx, typ, left, types.IsTime(b.LeftChild.Type(ctx)))
+	right = convertValueToType(ctx, typ, right, types.IsTime(b.RightChild.Type(ctx)))
 
 	return left, right, nil
 }

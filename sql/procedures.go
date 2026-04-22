@@ -17,7 +17,16 @@ package sql
 import (
 	"fmt"
 	"time"
+
+	"github.com/dolthub/vitess/go/vt/sqlparser"
 )
+
+// StatementRunner is essentially an interface that the engine will implement. We cannot directly reference the engine
+// here as it will cause an import cycle, so this may be updated to suit any function changes that the engine
+// experiences.
+type StatementRunner interface {
+	QueryWithBindings(ctx *Context, query string, parsed sqlparser.Statement, bindings map[string]sqlparser.Expr, qFlags *QueryFlags) (Schema, RowIter, *QueryFlags, error)
+}
 
 // StoredProcedureDetails are the details of the stored procedure. Integrators only need to store and retrieve the given
 // details for a stored procedure, as the engine handles all parsing and processing.
@@ -27,6 +36,7 @@ type StoredProcedureDetails struct {
 	CreatedAt       time.Time // The time that the stored procedure was created.
 	ModifiedAt      time.Time // The time of the last modification to the stored procedure.
 	SqlMode         string    // The SQL_MODE when this procedure was defined.
+	SchemaName      string    // The name of the schema that this stored procedure belongs to, for databases that support schemas.
 }
 
 // ExternalStoredProcedureDetails are the details of an external stored procedure. Compared to standard stored
@@ -34,11 +44,6 @@ type StoredProcedureDetails struct {
 // or deleted by a user. In addition, they're implemented as a function taking standard parameters, compared to stored
 // procedures being implemented as expressions.
 type ExternalStoredProcedureDetails struct {
-	// Name is the name of the external stored procedure. If two external stored procedures share a name, then they're
-	// considered overloaded. Standard stored procedures do not support overloading.
-	Name string
-	// Schema describes the row layout of the RowIter returned from Function.
-	Schema Schema
 	// Function is the implementation of the external stored procedure. All functions should have the following definition:
 	// `func(*Context, <PARAMETERS>) (RowIter, error)`. The <PARAMETERS> may be any of the following types: `bool`,
 	// `string`, `[]byte`, `int8`-`int64`, `uint8`-`uint64`, `float32`, `float64`, `time.Time`, or `Decimal`
@@ -63,6 +68,11 @@ type ExternalStoredProcedureDetails struct {
 	// to the usage of the integer-max for the parameter count, only one variadic function is allowed per function name.
 	// The type of the variadic parameter may not have a pointer type.
 	Function interface{}
+	// Name is the name of the external stored procedure. If two external stored procedures share a name, then they're
+	// considered overloaded. Standard stored procedures do not support overloading.
+	Name string
+	// Schema describes the row layout of the RowIter returned from Function.
+	Schema Schema
 	// If true, the procedure is ReadOnly and can be run against a locked or read-only server.
 	ReadOnly bool
 	// If true, then this procedure's access control requires that the user must have explicit Execute permissions

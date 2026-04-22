@@ -52,22 +52,22 @@ func (ic *IfConditional) Resolved() bool {
 // String implements the sql.Node interface.
 func (ic *IfConditional) String() string {
 	p := sql.NewTreePrinter()
-	_ = p.WriteNode(fmt.Sprintf("IF(%s)", ic.Condition.String()))
+	_ = p.WriteNode("IF(%s)", ic.Condition.String())
 	_ = p.WriteChildren(ic.Body.String())
 	return p.String()
 }
 
 // DebugString implements the sql.DebugStringer interface.
-func (ic *IfConditional) DebugString() string {
+func (ic *IfConditional) DebugString(ctx *sql.Context) string {
 	p := sql.NewTreePrinter()
-	_ = p.WriteNode(fmt.Sprintf("IF(%s)", sql.DebugString(ic.Condition)))
-	_ = p.WriteChildren(sql.DebugString(ic.Body))
+	_ = p.WriteNode("IF(%s)", sql.DebugString(ctx, ic.Condition))
+	_ = p.WriteChildren(sql.DebugString(ctx, ic.Body))
 	return p.String()
 }
 
 // Schema implements the sql.Node interface.
-func (ic *IfConditional) Schema() sql.Schema {
-	return ic.Body.Schema()
+func (ic *IfConditional) Schema(ctx *sql.Context) sql.Schema {
+	return ic.Body.Schema(ctx)
 }
 
 // Children implements the sql.Node interface.
@@ -76,7 +76,7 @@ func (ic *IfConditional) Children() []sql.Node {
 }
 
 // WithChildren implements the sql.Node interface.
-func (ic *IfConditional) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (ic *IfConditional) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(ic, len(children), 1)
 	}
@@ -84,11 +84,6 @@ func (ic *IfConditional) WithChildren(children ...sql.Node) (sql.Node, error) {
 	nic := *ic
 	nic.Body = children[0]
 	return &nic, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (ic *IfConditional) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return ic.Body.CheckPrivileges(ctx, opChecker)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -102,7 +97,7 @@ func (ic *IfConditional) Expressions() []sql.Expression {
 }
 
 // WithExpressions implements the sql.Expressioner interface.
-func (ic *IfConditional) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (ic *IfConditional) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(ic, len(exprs), 1)
 	}
@@ -117,8 +112,8 @@ func (ic *IfConditional) implementsRepresentsBlock() {}
 
 // IfElseBlock represents IF/ELSE IF/ELSE statements.
 type IfElseBlock struct {
-	IfConditionals []*IfConditional
 	Else           sql.Node
+	IfConditionals []*IfConditional
 }
 
 var _ sql.CollationCoercible = (*IfElseBlock)(nil)
@@ -171,25 +166,25 @@ func (ieb *IfElseBlock) String() string {
 }
 
 // DebugString implements the sql.DebugStringer interface.
-func (ieb *IfElseBlock) DebugString() string {
+func (ieb *IfElseBlock) DebugString(ctx *sql.Context) string {
 	p := sql.NewTreePrinter()
 	_ = p.WriteNode("IF BLOCK")
 	var children []string
 	for _, s := range ieb.IfConditionals {
-		children = append(children, sql.DebugString(s))
+		children = append(children, sql.DebugString(ctx, s))
 	}
 	_ = p.WriteChildren(children...)
 
 	ep := sql.NewTreePrinter()
 	_ = ep.WriteNode("ELSE")
-	_ = ep.WriteChildren(sql.DebugString(ieb.Else))
+	_ = ep.WriteChildren(sql.DebugString(ctx, ieb.Else))
 	_ = p.WriteChildren(ep.String())
 
 	return p.String()
 }
 
 // Schema implements the sql.Node interface.
-func (ieb *IfElseBlock) Schema() sql.Schema {
+func (ieb *IfElseBlock) Schema(ctx *sql.Context) sql.Schema {
 	// NOTE: nil schema causes no result for over the wire clients
 	return emptySch
 }
@@ -205,7 +200,7 @@ func (ieb *IfElseBlock) Children() []sql.Node {
 }
 
 // WithChildren implements the sql.Node interface.
-func (ieb *IfElseBlock) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (ieb *IfElseBlock) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) < 2 {
 		return nil, fmt.Errorf("%T: invalid children number, got %d, expected at least 2", ieb, len(children))
 	}
@@ -218,19 +213,6 @@ func (ieb *IfElseBlock) WithChildren(children ...sql.Node) (sql.Node, error) {
 		ifConditionals[i] = ifConditional
 	}
 	return NewIfElse(ifConditionals, children[len(children)-1]), nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (ieb *IfElseBlock) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	for _, ifBlock := range ieb.IfConditionals {
-		if !ifBlock.CheckPrivileges(ctx, opChecker) {
-			return false
-		}
-	}
-	if ieb.Else != nil {
-		return ieb.Else.CheckPrivileges(ctx, opChecker)
-	}
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

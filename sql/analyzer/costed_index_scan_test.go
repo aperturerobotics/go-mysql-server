@@ -189,12 +189,12 @@ Or
 	ctx := sql.NewEmptyContext()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := newIndexCoster(ctx, "xyz")
-			root, leftover, _ := c.flatten(tt.in)
+			c := newIndexCoster("xyz")
+			root, leftover, _ := c.buildRoot(ctx, tt.in, NewDefaultLogicTreeWalker())
 			costTree := formatIndexFilter(root)
 			require.Equal(t, strings.TrimSpace(tt.exp), strings.TrimSpace(costTree), costTree)
 			if leftover != nil {
-				leftoverCmp := sql.DebugString(leftover)
+				leftoverCmp := sql.DebugString(ctx, leftover)
 				require.Equal(t, strings.TrimSpace(tt.leftover), strings.TrimSpace(leftoverCmp), leftoverCmp)
 			} else {
 				require.Equal(t, "", tt.leftover)
@@ -213,7 +213,7 @@ func TestRangeBuilder(t *testing.T) {
 
 	tests := []struct {
 		filter sql.Expression
-		exp    sql.RangeCollection
+		exp    sql.MySQLRangeCollection
 		cnt    int
 	}{
 		{
@@ -231,7 +231,7 @@ func TestRangeBuilder(t *testing.T) {
 					gte2(x, 10),
 				),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(sql.EmptyRangeColumnExpr(rangeType)),
 			},
 			2,
@@ -243,7 +243,7 @@ func TestRangeBuilder(t *testing.T) {
 				and(gt2(x, 8), gt2(y, 5)),
 				and(gt2(x, 5), gt2(y, 8)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rlt(2), rgt(5)),
 				r(rgt(8), rgt(5)),
 				r(rgt(5), rgt(8)),
@@ -256,7 +256,7 @@ func TestRangeBuilder(t *testing.T) {
 				and(gt2(x, 8), gt2(y, 5)),
 				and(gt2(x, 5), lt2(y, 8)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rlt(2), rgt(5)),
 				r(rgt(8), rgt(5)),
 				r(rgt(5), rlt(8)),
@@ -284,7 +284,7 @@ func TestRangeBuilder(t *testing.T) {
 				and(lt2(x, 8), lt2(y, 8)),
 				and(lt2(x, 9), lt2(y, 9)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rgt(1), rgt(1)),
 				r(rgt(2), rgt(2)),
 				r(rgt(3), rgt(3)),
@@ -314,7 +314,7 @@ func TestRangeBuilder(t *testing.T) {
 				and(eq2(x, 6), eq2(y, 6)),
 				and(eq2(x, 8), eq2(y, 8)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rgt(2), rgt(2)),
 				r(req(4), req(4)),
 				r(rlt(9), rlt(9)),
@@ -331,7 +331,7 @@ func TestRangeBuilder(t *testing.T) {
 				and(eq2(x, 6), eq2(y, 6)),
 				and(eq2(x, 8), eq2(y, 8)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rgt(2), rgt(2)),
 				r(req(4), req(4)),
 				r(rlt(9), rlt(9)),
@@ -347,7 +347,7 @@ func TestRangeBuilder(t *testing.T) {
 				and(oo(x, 4, 8), oo(y, 2, 5)),
 				and(oc(x, 5, 10), oc(y, 4, 7)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rcc(2, 6), rcc(5, 10)),
 				r(rcc(3, 7), rcc(1, 4)),
 				r(roo(4, 8), roo(2, 5)),
@@ -363,7 +363,7 @@ func TestRangeBuilder(t *testing.T) {
 				and(cc(x, 5, 6), cc(y, 1, 3)),
 				and(cc(x, 2, 3), cc(y, 1, 2)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rcc(1, 6), rcc(1, 3)),
 				r(rcc(1, 2), rcc(1, 3)),
 				r(rcc(3, 4), rcc(1, 3)),
@@ -377,7 +377,7 @@ func TestRangeBuilder(t *testing.T) {
 				and(cc(x, 4, 5), cc(y, 3, 8)),
 				and(cc(x, 3, 8), cc(y, 1, 6)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rcc(1, 6), rcc(4, 7)),
 				r(rcc(4, 5), rcc(3, 8)),
 				r(rcc(3, 8), rcc(1, 6)),
@@ -390,7 +390,7 @@ func TestRangeBuilder(t *testing.T) {
 				and2(gt2(x, 2), gt2(y, 2), gt2(z, 2)),
 				and2(lt2(x, 8), lt2(y, 8), lt2(z, 8)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rgt(2), rgt(2), rgt(2)),
 				r(rlt(8), rlt(8), rlt(8)),
 			},
@@ -401,7 +401,7 @@ func TestRangeBuilder(t *testing.T) {
 				and2(gte2(x, 3), gte2(y, 3), gte2(z, 3)),
 				and2(lte2(x, 5), lte2(y, 5), lte2(z, 5)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rgte(3), rgte(3), rgte(3)),
 				r(rlte(5), rlte(5), rlte(5)),
 			},
@@ -412,7 +412,7 @@ func TestRangeBuilder(t *testing.T) {
 				and2(gte2(x, 3), gte2(y, 4), gt2(z, 5)),
 				and2(lte2(x, 6), lt2(y, 7), lte2(z, 8)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rgte(3), rgte(4), rgt(5)),
 				r(rlte(6), rlt(7), rlte(8)),
 			},
@@ -423,7 +423,7 @@ func TestRangeBuilder(t *testing.T) {
 				and2(gte2(x, 4), gte2(y, 4), gte2(z, 3)),
 				and2(lte2(x, 4), lte2(y, 4), lte2(z, 5)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rgte(4), rgte(4), rgte(3)),
 				r(rlte(4), rlte(4), rlte(5)),
 			},
@@ -434,7 +434,7 @@ func TestRangeBuilder(t *testing.T) {
 				and2(gte2(x, 4), gte2(y, 3), gte2(z, 4)),
 				and2(lte2(x, 4), lte2(y, 5), lte2(z, 4)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rgte(4), rgte(3), rgte(4)),
 				r(rlte(4), rlte(5), rlte(4)),
 			},
@@ -445,7 +445,7 @@ func TestRangeBuilder(t *testing.T) {
 				and2(gte2(x, 3), gte2(y, 4), gte2(z, 4)),
 				and2(lte2(x, 5), lte2(y, 4), lte2(z, 4)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rgte(3), rgte(4), rgte(4)),
 				r(rlte(5), rlte(4), rlte(4)),
 			},
@@ -456,7 +456,7 @@ func TestRangeBuilder(t *testing.T) {
 				and2(lt2(x, 4), gte2(y, 3), lt2(z, 4)),
 				and2(gt2(x, 4), lte2(y, 5), gt2(z, 4)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rlt(4), rgte(3), rlt(4)),
 				r(rgt(4), rlte(5), rgt(4)),
 			},
@@ -468,7 +468,7 @@ func TestRangeBuilder(t *testing.T) {
 				and2(lt2(x, 4), gte2(y, 7), lte2(z, 2)),
 				and2(lte2(x, 9), gt2(y, 5), gt2(z, 1)),
 			),
-			sql.RangeCollection{
+			sql.MySQLRangeCollection{
 				r(rgt(3), rgt(2), req(2)),
 				r(rlt(4), rgte(7), rlte(2)),
 				r(rlte(9), rgt(5), rgt(1)),
@@ -477,67 +477,53 @@ func TestRangeBuilder(t *testing.T) {
 		},
 		// nulls
 		{
-			or2(
-				and2(isNull(x), gt2(y, 5)),
-			),
-			sql.RangeCollection{
+			and2(isNull(x), gt2(y, 5)),
+			sql.MySQLRangeCollection{
 				r(null2(), rgt(5)),
 			},
-			1,
+			2,
 		},
 		{
-			or2(
-				and2(isNull(x), isNotNull(y)),
-			),
-			sql.RangeCollection{
+			and2(isNull(x), isNotNull(y)),
+			sql.MySQLRangeCollection{
 				r(null2(), notNull()),
 			},
-			1,
+			2,
 		},
 		{
-			or2(
-				and2(isNull(x), lt2(y, 5)),
-			),
-			sql.RangeCollection{
+			and2(isNull(x), lt2(y, 5)),
+			sql.MySQLRangeCollection{
 				r(null2(), rlt(5)),
 			},
-			1,
+			2,
 		},
 		{
-			or2(
-				and(isNull(x), gte2(y, 5)),
-			),
-			sql.RangeCollection{
+			and(isNull(x), gte2(y, 5)),
+			sql.MySQLRangeCollection{
 				r(null2(), rgte(5)),
 			},
-			1,
+			2,
 		},
 		{
-			or2(
-				and(isNull(x), lte2(y, 5)),
-			),
-			sql.RangeCollection{
+			and(isNull(x), lte2(y, 5)),
+			sql.MySQLRangeCollection{
 				r(null2(), rlte(5)),
 			},
-			1,
+			2,
 		},
 		{
-			or2(
-				and(isNull(x), lte2(y, 5)),
-			),
-			sql.RangeCollection{
+			and(isNull(x), lte2(y, 5)),
+			sql.MySQLRangeCollection{
 				r(null2(), rlte(5)),
 			},
-			1,
+			2,
 		},
 		{
-			or2(
-				and2(isNull(x), eq2(y, 1)),
-			),
-			sql.RangeCollection{
+			and2(isNull(x), eq2(y, 1)),
+			sql.MySQLRangeCollection{
 				r(null2(), req(1)),
 			},
-			1,
+			2,
 		},
 	}
 
@@ -564,14 +550,14 @@ func TestRangeBuilder(t *testing.T) {
 
 	var sch = make(sql.Schema, 3)
 	for i, e := range []*expression.GetField{x, y, z} {
-		sch[i] = transform.ExpressionToColumn(e, testTable)
+		sch[i] = transform.ExpressionToColumn(ctx, e, testTable)
 	}
 
 	for _, tt := range tests {
-		t.Run(fmt.Sprintf("Expr:  %s\nRange: %s", tt.filter.String(), tt.exp.DebugString()), func(t *testing.T) {
+		t.Run(fmt.Sprintf("Expr:  %s\nRange: %s", tt.filter.String(), tt.exp.DebugString(ctx)), func(t *testing.T) {
 
-			c := newIndexCoster(ctx, testTable)
-			root, _, _ := c.flatten(tt.filter)
+			c := newIndexCoster(testTable)
+			root, _, _ := c.buildRoot(ctx, tt.filter, NewDefaultLogicTreeWalker())
 
 			var idx sql.Index
 			switch len(tt.exp[0]) {
@@ -583,15 +569,13 @@ func TestRangeBuilder(t *testing.T) {
 				idx = idx_1
 			}
 
-			stat, err := newUniformDistStatistic("mydb", testTable, sch, idx, 10, 10)
+			stat, err := newUniformDistStatistic(ctx, "mydb", "", testTable, sch, idx, 10, 10)
 			require.NoError(t, err)
 
-			err = c.cost(root, stat, idx)
+			err = c.cost(ctx, root, stat, idx)
 			require.NoError(t, err)
 
 			include := c.bestFilters
-			// most tests are designed so that all filters are supported
-			// |included| = |root.id|
 			require.Equal(t, tt.cnt, include.Len())
 			if tt.cnt == 1 {
 				require.True(t, include.Contains(1))
@@ -615,7 +599,7 @@ func TestRangeBuilder(t *testing.T) {
 			require.NoError(t, err)
 			assert.True(t, ok)
 			if !ok {
-				log.Printf("expected: %s\nfound: %s\n", expRanges.DebugString(), cmpRanges.DebugString())
+				log.Printf("expected: %s\nfound: %s\n", expRanges.DebugString(ctx), cmpRanges.DebugString(ctx))
 			}
 		})
 	}
@@ -629,7 +613,7 @@ func TestRangeBuilderInclude(t *testing.T) {
 		name    string
 		in      sql.Expression
 		include sql.FastIntSet
-		exp     sql.RangeCollection
+		exp     sql.MySQLRangeCollection
 	}{
 		{
 			name: "fraction of ands",
@@ -641,7 +625,7 @@ func TestRangeBuilderInclude(t *testing.T) {
 				gt2(y, 0),
 			),
 			include: sql.NewFastIntSet(3, 5),
-			exp: sql.RangeCollection{
+			exp: sql.MySQLRangeCollection{
 				r(req(1), rgt(0)),
 			},
 		},
@@ -659,7 +643,7 @@ func TestRangeBuilderInclude(t *testing.T) {
 				gt2(y, 0),
 			),
 			include: sql.NewFastIntSet(2),
-			exp: sql.RangeCollection{
+			exp: sql.MySQLRangeCollection{
 				r(rlt(1), rlt(1)),
 				r(rgt(5), rgt(5)),
 			},
@@ -678,11 +662,11 @@ func TestRangeBuilderInclude(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			//t.Skip("todo add tests and implement")
+			// t.Skip("todo add tests and implement")
 
 			// TODO make index
-			c := newIndexCoster(ctx, "xyz")
-			root, _, _ := c.flatten(tt.in)
+			c := newIndexCoster("xyz")
+			root, _, _ := c.buildRoot(ctx, tt.in, NewDefaultLogicTreeWalker())
 			b := newIndexScanRangeBuilder(ctx, dummy1, tt.include, sql.FastIntSet{}, c.idToExpr)
 			cmpRanges, err := b.buildRangeCollection(root)
 			require.NoError(t, err)
@@ -699,7 +683,7 @@ func TestRangeBuilderInclude(t *testing.T) {
 			require.NoError(t, err)
 			assert.True(t, ok)
 			if !ok {
-				log.Printf("expected: %s\nfound: %s\n", expRanges.DebugString(), cmpRanges.DebugString())
+				log.Printf("expected: %s\nfound: %s\n", expRanges.DebugString(ctx), cmpRanges.DebugString(ctx))
 			}
 		})
 	}
@@ -766,52 +750,76 @@ func not(field sql.Expression, val uint8) sql.Expression {
 	return expression.NewNot(eq2(field, val))
 }
 
-func r(colExprs ...sql.RangeColumnExpr) sql.Range {
+func r(colExprs ...sql.MySQLRangeColumnExpr) sql.MySQLRange {
 	return colExprs
 }
 
-func req(val byte) sql.RangeColumnExpr {
+func req(val byte) sql.MySQLRangeColumnExpr {
 	return sql.ClosedRangeColumnExpr(val, val, rangeType)
 }
 
-func rlt(val byte) sql.RangeColumnExpr {
+func rlt(val byte) sql.MySQLRangeColumnExpr {
 	return sql.LessThanRangeColumnExpr(val, rangeType)
 }
 
-func rlte(val byte) sql.RangeColumnExpr {
+func rlte(val byte) sql.MySQLRangeColumnExpr {
 	return sql.LessOrEqualRangeColumnExpr(val, rangeType)
 }
 
-func rgt(val byte) sql.RangeColumnExpr {
+func rgt(val byte) sql.MySQLRangeColumnExpr {
 	return sql.GreaterThanRangeColumnExpr(val, rangeType)
 }
 
-func rgte(val byte) sql.RangeColumnExpr {
+func rgte(val byte) sql.MySQLRangeColumnExpr {
 	return sql.GreaterOrEqualRangeColumnExpr(val, rangeType)
 }
 
-func null2() sql.RangeColumnExpr {
+func null2() sql.MySQLRangeColumnExpr {
 	return sql.NullRangeColumnExpr(rangeType)
 }
 
-func notNull() sql.RangeColumnExpr {
+func notNull() sql.MySQLRangeColumnExpr {
 	return sql.NotNullRangeColumnExpr(rangeType)
 }
 
-func rcc(lowerbound, upperbound byte) sql.RangeColumnExpr {
-	return sql.CustomRangeColumnExpr(lowerbound, upperbound, sql.Closed, sql.Closed, rangeType)
+func rcc(lowerbound, upperbound byte) sql.MySQLRangeColumnExpr {
+	return newRangeColumnExpr(lowerbound, upperbound, sql.Closed, sql.Closed, rangeType)
 }
 
-func rco(lowerbound, upperbound byte) sql.RangeColumnExpr {
-	return sql.CustomRangeColumnExpr(lowerbound, upperbound, sql.Closed, sql.Open, rangeType)
+func rco(lowerbound, upperbound byte) sql.MySQLRangeColumnExpr {
+	return newRangeColumnExpr(lowerbound, upperbound, sql.Closed, sql.Open, rangeType)
 }
 
-func roc(lowerbound, upperbound byte) sql.RangeColumnExpr {
-	return sql.CustomRangeColumnExpr(lowerbound, upperbound, sql.Open, sql.Closed, rangeType)
+func roc(lowerbound, upperbound byte) sql.MySQLRangeColumnExpr {
+	return newRangeColumnExpr(lowerbound, upperbound, sql.Open, sql.Closed, rangeType)
 }
 
-func roo(lowerbound, upperbound byte) sql.RangeColumnExpr {
-	return sql.CustomRangeColumnExpr(lowerbound, upperbound, sql.Open, sql.Open, rangeType)
+func roo(lowerbound, upperbound byte) sql.MySQLRangeColumnExpr {
+	return newRangeColumnExpr(lowerbound, upperbound, sql.Open, sql.Open, rangeType)
+}
+
+// CustomRangeColumnExpr returns a MySQLRangeColumnExpr defined by the bounds given.
+func newRangeColumnExpr(lower, upper interface{}, lowerBound, upperBound sql.MySQLRangeBoundType, typ sql.Type) sql.MySQLRangeColumnExpr {
+	if lower == nil || upper == nil {
+		return sql.EmptyRangeColumnExpr(typ)
+	}
+	var lCut sql.MySQLRangeCut
+	var uCut sql.MySQLRangeCut
+	if lowerBound == sql.Open {
+		lCut = sql.Above{Key: lower}
+	} else {
+		lCut = sql.Below{Key: lower}
+	}
+	if upperBound == sql.Open {
+		uCut = sql.Below{Key: upper}
+	} else {
+		uCut = sql.Above{Key: upper}
+	}
+	return sql.MySQLRangeColumnExpr{
+		LowerBound: lCut,
+		UpperBound: uCut,
+		Typ:        typ,
+	}
 }
 
 func or2(expressions ...sql.Expression) sql.Expression {
@@ -875,8 +883,8 @@ func (i *indexSearchableTable) String() string {
 	return i.underlying.String()
 }
 
-func (i *indexSearchableTable) Schema() sql.Schema {
-	return i.underlying.Schema()
+func (i *indexSearchableTable) Schema(ctx *sql.Context) sql.Schema {
+	return i.underlying.Schema(ctx)
 }
 
 func (i *indexSearchableTable) Collation() sql.CollationID {
@@ -891,12 +899,12 @@ func (i *indexSearchableTable) Comment() string {
 }
 
 func (i *indexSearchableTable) Partitions(context *sql.Context) (sql.PartitionIter, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (i *indexSearchableTable) PartitionRows(context *sql.Context, partition sql.Partition) (sql.RowIter, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
@@ -905,7 +913,7 @@ func (i *indexSearchableTable) SkipIndexCosting() bool {
 }
 
 func (i *indexSearchableTable) IndexWithPrefix(ctx *sql.Context, expressions []string) (sql.Index, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
@@ -913,7 +921,7 @@ func (i *indexSearchableTable) LookupForExpressions(ctx *sql.Context, exprs ...s
 	if eq, ok := exprs[0].(*expression.Equals); ok {
 		if gf, ok := eq.Left().(*expression.GetField); ok && strings.EqualFold(gf.Name(), "x") {
 			if lit, ok := eq.Right().(*expression.Literal); ok {
-				ranges := sql.RangeCollection{{sql.ClosedRangeColumnExpr(lit.Value(), lit.Value(), lit.Type())}}
+				ranges := sql.MySQLRangeCollection{{sql.ClosedRangeColumnExpr(lit.Value(), lit.Value(), lit.Type(ctx))}}
 				return sql.IndexLookup{Index: xIdx, Ranges: ranges}, nil, nil, true, nil
 			}
 		}
@@ -921,7 +929,7 @@ func (i *indexSearchableTable) LookupForExpressions(ctx *sql.Context, exprs ...s
 	return sql.IndexLookup{}, nil, nil, false, nil
 }
 
-func (i *indexSearchableTable) IndexedAccess(lookup sql.IndexLookup) sql.IndexedTable {
+func (i *indexSearchableTable) IndexedAccess(ctx *sql.Context, lookup sql.IndexLookup) sql.IndexedTable {
 	return i
 }
 
@@ -933,6 +941,6 @@ func (i *indexSearchableTable) PreciseMatch() bool {
 	return false
 }
 func (i *indexSearchableTable) LookupPartitions(context *sql.Context, lookup sql.IndexLookup) (sql.PartitionIter, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }

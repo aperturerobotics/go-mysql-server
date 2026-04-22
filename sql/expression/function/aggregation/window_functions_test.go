@@ -184,6 +184,7 @@ func TestGroupedAggFuncs(t *testing.T) {
 			Name: "json object null",
 			Agg: NewWindowedJSONObjectAgg(
 				NewJSONObjectAgg(
+					sql.NewEmptyContext(),
 					expression.NewGetField(1, types.LongText, "x", true),
 					expression.NewGetField(0, types.LongText, "y", true),
 				).(*JSONObjectAgg),
@@ -198,6 +199,7 @@ func TestGroupedAggFuncs(t *testing.T) {
 			Name: "json object int",
 			Agg: NewWindowedJSONObjectAgg(
 				NewJSONObjectAgg(
+					sql.NewEmptyContext(),
 					expression.NewGetField(1, types.LongText, "x", true),
 					expression.NewGetField(0, types.LongText, "x", true),
 				).(*JSONObjectAgg),
@@ -212,6 +214,7 @@ func TestGroupedAggFuncs(t *testing.T) {
 			Name: "json object float",
 			Agg: NewWindowedJSONObjectAgg(
 				NewJSONObjectAgg(
+					sql.NewEmptyContext(),
 					expression.NewGetField(1, types.LongText, "x", true),
 					expression.NewGetField(3, types.LongText, "x", true),
 				).(*JSONObjectAgg),
@@ -226,6 +229,7 @@ func TestGroupedAggFuncs(t *testing.T) {
 			Name: "json object float",
 			Agg: NewWindowedJSONObjectAgg(
 				NewJSONObjectAgg(
+					sql.NewEmptyContext(),
 					expression.NewGetField(1, types.LongText, "x", true),
 					expression.NewGetField(3, types.LongText, "x", true),
 				).(*JSONObjectAgg),
@@ -268,7 +272,8 @@ func TestGroupedAggFuncs(t *testing.T) {
 			for i, p := range partitions {
 				err := tt.Agg.StartPartition(ctx, p, buf)
 				require.NoError(t, err)
-				res[i] = tt.Agg.Compute(ctx, p, buf)
+				res[i], err = tt.Agg.Compute(ctx, p, buf)
+				require.NoError(t, err)
 			}
 			require.Equal(t, tt.Expected, res)
 		})
@@ -382,7 +387,8 @@ func TestWindowedAggFuncs(t *testing.T) {
 					if errors.Is(err, io.EOF) {
 						break
 					}
-					res[i] = tt.Agg.Compute(ctx, interval, buf)
+					res[i], err = tt.Agg.Compute(ctx, interval, buf)
+					require.NoError(t, err)
 					i++
 				}
 			}

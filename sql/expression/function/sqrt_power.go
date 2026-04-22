@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/dolthub/vitess/go/mysql"
+
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/types"
@@ -25,15 +27,15 @@ import (
 
 // Sqrt is a function that returns the square value of the number provided.
 type Sqrt struct {
-	expression.UnaryExpression
+	expression.UnaryExpressionStub
 }
 
 var _ sql.FunctionExpression = (*Sqrt)(nil)
 var _ sql.CollationCoercible = (*Sqrt)(nil)
 
 // NewSqrt creates a new Sqrt expression.
-func NewSqrt(e sql.Expression) sql.Expression {
-	return &Sqrt{expression.UnaryExpression{Child: e}}
+func NewSqrt(ctx *sql.Context, e sql.Expression) sql.Expression {
+	return &Sqrt{expression.UnaryExpressionStub{Child: e}}
 }
 
 // FunctionName implements sql.FunctionExpression
@@ -51,7 +53,7 @@ func (s *Sqrt) String() string {
 }
 
 // Type implements the Expression interface.
-func (s *Sqrt) Type() sql.Type {
+func (s *Sqrt) Type(ctx *sql.Context) sql.Type {
 	return types.Float64
 }
 
@@ -61,33 +63,34 @@ func (*Sqrt) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID,
 }
 
 // IsNullable implements the Expression interface.
-func (s *Sqrt) IsNullable() bool {
-	return s.Child.IsNullable()
+func (s *Sqrt) IsNullable(ctx *sql.Context) bool {
+	return true
 }
 
 // WithChildren implements the Expression interface.
-func (s *Sqrt) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (s *Sqrt) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(s, len(children), 1)
 	}
-	return NewSqrt(children[0]), nil
+	return NewSqrt(ctx, children[0]), nil
 }
 
 // Eval implements the Expression interface.
 func (s *Sqrt) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	child, err := s.Child.Eval(ctx, row)
-
 	if err != nil {
 		return nil, err
 	}
-
 	if child == nil {
 		return nil, nil
 	}
 
-	child, _, err = types.Float64.Convert(child)
+	child, _, err = types.Float64.Convert(ctx, child)
 	if err != nil {
-		return nil, err
+		if !sql.ErrTruncatedIncorrect.Is(err) {
+			return nil, err
+		}
+		ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 	}
 
 	res := math.Sqrt(child.(float64))
@@ -107,7 +110,7 @@ var _ sql.FunctionExpression = (*Power)(nil)
 var _ sql.CollationCoercible = (*Power)(nil)
 
 // NewPower creates a new Power expression.
-func NewPower(e1, e2 sql.Expression) sql.Expression {
+func NewPower(ctx *sql.Context, e1, e2 sql.Expression) sql.Expression {
 	return &Power{
 		expression.BinaryExpressionStub{
 			LeftChild:  e1,
@@ -127,7 +130,7 @@ func (p *Power) Description() string {
 }
 
 // Type implements the Expression interface.
-func (p *Power) Type() sql.Type { return types.Float64 }
+func (p *Power) Type(ctx *sql.Context) sql.Type { return types.Float64 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (*Power) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
@@ -135,18 +138,22 @@ func (*Power) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID
 }
 
 // IsNullable implements the Expression interface.
-func (p *Power) IsNullable() bool { return p.LeftChild.IsNullable() || p.RightChild.IsNullable() }
+func (p *Power) IsNullable(ctx *sql.Context) bool {
+	// This should be correct, even though Power.Eval returns nil if math.Pow(left, right) returns NaN or Inf. However,
+	// it's unlikely this would ever actually happen since NaN and Inf are not valid in MySQL
+	return p.LeftChild.IsNullable(ctx) || p.RightChild.IsNullable(ctx)
+}
 
 func (p *Power) String() string {
 	return fmt.Sprintf("power(%s, %s)", p.LeftChild, p.RightChild)
 }
 
 // WithChildren implements the Expression interface.
-func (p *Power) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (p *Power) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(p, len(children), 2)
 	}
-	return NewPower(children[0], children[1]), nil
+	return NewPower(ctx, children[0], children[1]), nil
 }
 
 // Eval implements the Expression interface.
@@ -155,34 +162,33 @@ func (p *Power) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	if left == nil {
 		return nil, nil
 	}
-
-	left, _, err = types.Float64.Convert(left)
+	left, _, err = types.Float64.Convert(ctx, left)
 	if err != nil {
-		return nil, err
+		if !sql.ErrTruncatedIncorrect.Is(err) {
+			return nil, err
+		}
+		ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 	}
 
 	right, err := p.RightChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err
 	}
-
 	if right == nil {
 		return nil, nil
 	}
-
-	right, _, err = types.Float64.Convert(right)
+	right, _, err = types.Float64.Convert(ctx, right)
 	if err != nil {
-		return nil, err
+		if !sql.ErrTruncatedIncorrect.Is(err) {
+			return nil, err
+		}
+		ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 	}
 
 	res := math.Pow(left.(float64), right.(float64))
-	if math.IsNaN(res) || math.IsInf(res, 0) {
-		return nil, nil
-	}
 
 	return res, nil
 }

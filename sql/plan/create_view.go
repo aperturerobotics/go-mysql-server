@@ -29,26 +29,30 @@ import (
 type CreateView struct {
 	UnaryNode
 	database         sql.Database
-	Name             string
-	IsReplace        bool
 	Definition       *SubqueryAlias
+	Name             string
 	CreateViewString string
 	Algorithm        string
 	Definer          string
 	Security         string
 	CheckOpt         string
+	targetSchema     sql.Schema
+	IfNotExists      bool
+	IsReplace        bool
 }
 
 var _ sql.Node = (*CreateView)(nil)
 var _ sql.CollationCoercible = (*CreateView)(nil)
+var _ sql.SchemaTarget = (*CreateView)(nil)
 
 // NewCreateView creates a CreateView node with the specified parameters,
 // setting its catalog to nil.
-func NewCreateView(database sql.Database, name string, definition *SubqueryAlias, isReplace bool, createViewStr, algorithm, definer, security string) *CreateView {
+func NewCreateView(database sql.Database, name string, definition *SubqueryAlias, ifNotExists, isReplace bool, createViewStr, algorithm, definer, security string) *CreateView {
 	return &CreateView{
 		UnaryNode:        UnaryNode{Child: definition},
 		database:         database,
 		Name:             name,
+		IfNotExists:      ifNotExists,
 		IsReplace:        isReplace,
 		Definition:       definition,
 		CreateViewString: createViewStr,
@@ -81,7 +85,7 @@ func (cv *CreateView) IsReadOnly() bool {
 }
 
 // Schema implements the Node interface. It always returns Query OK result.
-func (cv *CreateView) Schema() sql.Schema {
+func (cv *CreateView) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -95,7 +99,7 @@ func (cv *CreateView) String() string {
 
 // WithChildren implements the Node interface. It only succeeds if the length
 // of the specified children equals 1.
-func (cv *CreateView) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (cv *CreateView) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(cv, len(children), 1)
 	}
@@ -103,14 +107,6 @@ func (cv *CreateView) WithChildren(children ...sql.Node) (sql.Node, error) {
 	newCreate := *cv
 	newCreate.Child = children[0]
 	return &newCreate, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (cv *CreateView) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{Database: cv.database.Name()}
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewPrivilegedOperation(subject, sql.PrivilegeType_CreateView)) &&
-		cv.Child.CheckPrivileges(ctx, opChecker)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -135,9 +131,21 @@ func (cv *CreateView) WithDatabase(database sql.Database) (sql.Node, error) {
 	return &newCreate, nil
 }
 
+// WithTargetSchema implements the SchemaTarget interface.
+func (cv *CreateView) WithTargetSchema(sch sql.Schema) (sql.Node, error) {
+	ncv := *cv
+	ncv.targetSchema = sch
+	return &ncv, nil
+}
+
+// TargetSchema implements the SchemaTarget interface.
+func (cv *CreateView) TargetSchema() sql.Schema {
+	return cv.targetSchema
+}
+
 // GetIsUpdatableFromCreateView returns whether the view is updatable or not.
 // https://dev.mysql.com/doc/refman/8.0/en/view-updatability.html
-func GetIsUpdatableFromCreateView(cv *CreateView) bool {
+func GetIsUpdatableFromCreateView(ctx *sql.Context, cv *CreateView) bool {
 	isUpdatable := true
 	node := cv.Child
 
@@ -145,7 +153,7 @@ func GetIsUpdatableFromCreateView(cv *CreateView) bool {
 		return false
 	}
 
-	transform.InspectExpressionsWithNode(node, func(n sql.Node, e sql.Expression) bool {
+	transform.InspectExpressionsWithNode(ctx, node, func(ctx *sql.Context, n sql.Node, e sql.Expression) bool {
 		switch e.(type) {
 		case sql.Aggregation, sql.WindowAggregation, *Subquery:
 			isUpdatable = false
@@ -159,7 +167,7 @@ func GetIsUpdatableFromCreateView(cv *CreateView) bool {
 		case *Project:
 			// Refers only to literal values (in this case, there is no underlying table to update)
 			allLiteral := true
-			transform.InspectExpressions(nn, func(ne sql.Expression) bool {
+			transform.InspectExpressions(ctx, nn, func(ctx *sql.Context, ne sql.Expression) bool {
 				switch ne.(type) {
 				case *expression.Literal:
 

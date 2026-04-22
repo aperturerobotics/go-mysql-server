@@ -18,12 +18,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dolthub/vitess/go/sqltypes"
 	ast "github.com/dolthub/vitess/go/vt/sqlparser"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
-	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/transform"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
@@ -48,8 +46,8 @@ func (b *Builder) analyzeOrderBy(fromScope, projScope *scope, order ast.OrderBy)
 		case ast.DescScr:
 			descending = true
 		}
-
-		switch e := o.Expr.(type) {
+		expr := unwrapExpression(o.Expr)
+		switch e := expr.(type) {
 		case *ast.ColName:
 			// check for projection alias first
 			dbName := strings.ToLower(e.Qualifier.DbQualifier.String())
@@ -57,6 +55,10 @@ func (b *Builder) analyzeOrderBy(fromScope, projScope *scope, order ast.OrderBy)
 			colName := strings.ToLower(e.Name.String())
 			c, ok := projScope.resolveColumn(dbName, tblName, colName, false, false)
 			if ok {
+				if _, ok := c.scalar.(*expression.Alias); ok {
+					// take ref dependency on expression lower in tree
+					c.scalar = nil
+				}
 				c.descending = descending
 				outScope.addColumn(c)
 				continue
@@ -75,10 +77,9 @@ func (b *Builder) analyzeOrderBy(fromScope, projScope *scope, order ast.OrderBy)
 		case *ast.SQLVal:
 			// integer literal into projScope
 			// else throw away
-			expr := b.normalizeValArg(e)
-			if val, ok := expr.(*ast.SQLVal); ok && val.Type == ast.IntVal {
-				lit := b.convertInt(string(val.Val), 10)
-				idx, _, err := types.Int64.Convert(lit.Value())
+			v, ok := b.normalizeIntVal(e)
+			if ok {
+				idx, _, err := types.Int64.Convert(b.ctx, v)
 				if err != nil {
 					b.handleErr(err)
 				}
@@ -132,7 +133,7 @@ func (b *Builder) analyzeOrderBy(fromScope, projScope *scope, order ast.OrderBy)
 			}
 			// aggregate ref -> expr.String() in
 			// or compound expression
-			expr, _, _ = transform.Expr(expr, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+			expr, _, _ = transform.Expr(b.ctx, expr, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 				//  get fields outside of aggs need to be in extra cols
 				switch e := e.(type) {
 				case *expression.GetField:
@@ -146,10 +147,10 @@ func (b *Builder) analyzeOrderBy(fromScope, projScope *scope, order ast.OrderBy)
 					// has to have been ref'd already
 					id, ok := fromScope.getExpr(e.String(), true)
 					if !ok {
-						err := fmt.Errorf("faild to ref aggregate expression: %s", e.String())
+						err := fmt.Errorf("failed to ref aggregate expression: %s", e.String())
 						b.handleErr(err)
 					}
-					return expression.NewGetField(int(id), e.Type(), e.String(), e.IsNullable()), transform.NewTree, nil
+					return expression.NewGetField(int(id), e.Type(ctx), e.String(), e.IsNullable(ctx)), transform.NewTree, nil
 				default:
 				}
 				return e, transform.SameTree, nil
@@ -157,8 +158,8 @@ func (b *Builder) analyzeOrderBy(fromScope, projScope *scope, order ast.OrderBy)
 			col := scopeColumn{
 				col:        expr.String(),
 				scalar:     expr,
-				typ:        expr.Type(),
-				nullable:   expr.IsNullable(),
+				typ:        expr.Type(b.ctx),
+				nullable:   expr.IsNullable(b.ctx),
 				descending: descending,
 			}
 			outScope.newColumn(col)
@@ -167,9 +168,9 @@ func (b *Builder) analyzeOrderBy(fromScope, projScope *scope, order ast.OrderBy)
 	return
 }
 
-func (b *Builder) normalizeValArg(e *ast.SQLVal) ast.Expr {
+func (b *Builder) normalizeValArg(e *ast.SQLVal) (sql.Expression, bool) {
 	if e.Type != ast.ValArg || b.bindCtx == nil {
-		return e
+		return nil, false
 	}
 	name := strings.TrimPrefix(string(e.Val), ":")
 	if b.bindCtx.Bindings == nil {
@@ -181,22 +182,19 @@ func (b *Builder) normalizeValArg(e *ast.SQLVal) ast.Expr {
 		err := fmt.Errorf("bind variable not provided: '%s'", name)
 		b.handleErr(err)
 	}
+	return bv, true
+}
 
-	val, err := sqltypes.BindVariableToValue(bv)
-	if err != nil {
-		b.handleErr(err)
+func (b *Builder) normalizeIntVal(e *ast.SQLVal) (any, bool) {
+	if e.Type == ast.IntVal {
+		lit := b.convertInt(e.Val, 10)
+		return lit.Value(), true
+	} else if replace, ok := b.normalizeValArg(e); ok {
+		if lit, ok := replace.(*expression.Literal); ok && types.IsNumber(lit.Type(b.ctx)) {
+			return lit.Value(), true
+		}
 	}
-	expr, err := ast.ExprFromValue(val)
-	switch e := expr.(type) {
-	case *ast.SQLVal:
-		return e
-	case *ast.NullVal:
-		return e
-	default:
-		err := fmt.Errorf("unknown ast.Expr: %T", e)
-		b.handleErr(err)
-	}
-	return nil
+	return nil, false
 }
 
 func (b *Builder) buildOrderBy(inScope, orderByScope *scope) {
@@ -204,6 +202,7 @@ func (b *Builder) buildOrderBy(inScope, orderByScope *scope) {
 		return
 	}
 	var sortFields sql.SortFields
+	var deps sql.ColSet
 	for _, c := range orderByScope.cols {
 		so := sql.Ascending
 		if c.descending {
@@ -218,8 +217,22 @@ func (b *Builder) buildOrderBy(inScope, orderByScope *scope) {
 			Order:  so,
 		}
 		sortFields = append(sortFields, sf)
+		deps.Add(sql.ColumnId(c.id))
 	}
-	sort := plan.NewSort(sortFields, inScope.node)
+	sort, err := b.f.buildSort(b.ctx, inScope.node, sortFields, deps, inScope.refsSubquery)
+	if err != nil {
+		b.handleErr(err)
+	}
 	inScope.node = sort
 	return
+}
+
+// unwrapExpression unwraps expressions wrapped in ParenExpr (parenthesis)
+// TODO: consider moving this function to a different file or package since it seems like it could be used in other
+// places
+func unwrapExpression(expr ast.Expr) ast.Expr {
+	if parensExpr, ok := expr.(*ast.ParenExpr); ok {
+		return unwrapExpression(parensExpr.Expr)
+	}
+	return expr
 }

@@ -159,7 +159,7 @@ func (c *Catalog) UnlockTables(ctx *sql.Context, id uint32) error {
 	return nil
 }
 
-func (c *Catalog) TableFunction(ctx *sql.Context, name string) (sql.TableFunction, error) {
+func (c *Catalog) TableFunction(ctx *sql.Context, name string) (sql.TableFunction, bool) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -179,7 +179,7 @@ func (c *Catalog) GetTableStats(ctx *sql.Context, db string, table sql.Table) ([
 	panic("implement me")
 }
 
-func (c *Catalog) RefreshTableStats(ctx *sql.Context, table sql.Table, db string) error {
+func (c *Catalog) AnalyzeTable(ctx *sql.Context, table sql.Table, db string) error {
 	//TODO implement me
 	panic("implement me")
 }
@@ -212,4 +212,12 @@ func (c *Catalog) DataLength(ctx *sql.Context, db string, table sql.Table) (uint
 func (c *Catalog) DropDbStats(ctx *sql.Context, db string, flush bool) error {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (c *Catalog) AuthorizationHandler() sql.AuthorizationHandler {
+	return sql.GetAuthorizationHandlerFactory().CreateHandler(c)
+}
+
+func (*Catalog) Overrides() sql.EngineOverrides {
+	return sql.EngineOverrides{}
 }

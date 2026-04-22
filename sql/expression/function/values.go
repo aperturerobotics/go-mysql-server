@@ -26,7 +26,7 @@ import (
 // INSERT INTO table (pk, v1, v2) VALUES (1, 3, 5), (2, 4, 6) ON DUPLICATE KEY UPDATE v2 = values(v1) * 10;
 // the values inserted into v2 would be 30 and 40.
 type Values struct {
-	expression.UnaryExpression
+	expression.UnaryExpressionStub
 	Value interface{}
 }
 
@@ -34,10 +34,10 @@ var _ sql.FunctionExpression = (*Values)(nil)
 var _ sql.CollationCoercible = (*Values)(nil)
 
 // NewValues creates a new Values function.
-func NewValues(col sql.Expression) sql.Expression {
+func NewValues(ctx *sql.Context, col sql.Expression) sql.Expression {
 	return &Values{
-		UnaryExpression: expression.UnaryExpression{Child: col},
-		Value:           nil,
+		UnaryExpressionStub: expression.UnaryExpressionStub{Child: col},
+		Value:               nil,
 	}
 }
 
@@ -64,8 +64,8 @@ func (v *Values) String() string {
 }
 
 // Type implements sql.FunctionExpression.
-func (v *Values) Type() sql.Type {
-	return v.Child.Type()
+func (v *Values) Type(ctx *sql.Context) sql.Type {
+	return v.Child.Type(ctx)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -74,9 +74,9 @@ func (v *Values) CollationCoercibility(ctx *sql.Context) (collation sql.Collatio
 }
 
 // WithChildren implements sql.FunctionExpression.
-func (v *Values) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (v *Values) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(v, len(children), 1)
 	}
-	return NewValues(children[0]), nil
+	return NewValues(ctx, children[0]), nil
 }

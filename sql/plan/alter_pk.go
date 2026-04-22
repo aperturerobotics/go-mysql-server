@@ -36,12 +36,11 @@ var ErrNotPrimaryKeyAlterable = errors.NewKind("error: table is not primary key 
 
 type AlterPK struct {
 	ddlNode
-
-	Action       PKAction
 	Table        sql.Node
-	Columns      []sql.IndexColumn
 	Catalog      sql.Catalog
+	Columns      []sql.IndexColumn
 	targetSchema sql.Schema
+	Action       PKAction
 }
 
 var _ sql.Node = (*AlterPK)(nil)
@@ -83,7 +82,7 @@ func (a *AlterPK) String() string {
 	return fmt.Sprintf("alter table %s %s primary key", a.Table.String(), action)
 }
 
-func (a *AlterPK) Schema() sql.Schema {
+func (a *AlterPK) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -100,7 +99,7 @@ func (a *AlterPK) Expressions() []sql.Expression {
 	return transform.WrappedColumnDefaults(a.targetSchema)
 }
 
-func (a AlterPK) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (a AlterPK) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != len(a.targetSchema) {
 		return nil, sql.ErrInvalidChildrenNumber.New(a, len(exprs), len(a.targetSchema))
 	}
@@ -114,8 +113,8 @@ func (a AlterPK) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
 	return &a, nil
 }
 
-func HasPrimaryKeys(table sql.Table) bool {
-	for _, c := range table.Schema() {
+func HasPrimaryKeys(ctx *sql.Context, table sql.Table) bool {
+	for _, c := range table.Schema(ctx) {
 		if c.PrimaryKey {
 			return true
 		}
@@ -124,7 +123,7 @@ func HasPrimaryKeys(table sql.Table) bool {
 	return false
 }
 
-func (a AlterPK) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (a AlterPK) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(a, len(children), 1)
 	}
@@ -142,17 +141,6 @@ func (a *AlterPK) Children() []sql.Node {
 func (a AlterPK) WithDatabase(database sql.Database) (sql.Node, error) {
 	a.Db = database
 	return &a, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (a *AlterPK) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: a.Database().Name(),
-		Table:    getTableName(a.Table),
-	}
-
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Alter))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

@@ -20,8 +20,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dolthub/vitess/go/mysql"
-
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/fulltext"
 	"github.com/dolthub/go-mysql-server/sql/plan"
@@ -30,7 +28,7 @@ import (
 )
 
 func (b *BaseBuilder) buildInsertInto(ctx *sql.Context, ii *plan.InsertInto, row sql.Row) (sql.RowIter, error) {
-	dstSchema := ii.Destination.Schema()
+	dstSchema := ii.Destination.Schema(ctx)
 
 	insertable, err := plan.GetInsertable(ii.Destination)
 	if err != nil {
@@ -46,7 +44,7 @@ func (b *BaseBuilder) buildInsertInto(ctx *sql.Context, ii *plan.InsertInto, row
 		replacer = insertable.(sql.ReplaceableTable).Replacer(ctx)
 	} else {
 		inserter = insertable.Inserter(ctx)
-		if len(ii.OnDupExprs) > 0 {
+		if ii.OnDupExprs.HasUpdates() {
 			updater = insertable.(sql.UpdatableTable).Updater(ctx)
 		}
 	}
@@ -57,7 +55,7 @@ func (b *BaseBuilder) buildInsertInto(ctx *sql.Context, ii *plan.InsertInto, row
 	}
 
 	var unlocker func()
-	insertExpressions := getInsertExpressions(ii.Source)
+	insertExpressions := getInsertExpressions(ctx, ii.Source)
 	if ii.FirstGeneratedAutoIncRowIdx >= 0 {
 		_, i, _ := sql.SystemVariables.GetGlobal("innodb_autoinc_lock_mode")
 		lockMode, ok := i.(int64)
@@ -80,18 +78,21 @@ func (b *BaseBuilder) buildInsertInto(ctx *sql.Context, ii *plan.InsertInto, row
 	}
 	insertIter := &insertIter{
 		schema:                      dstSchema,
-		tableNode:                   ii.Destination,
 		inserter:                    inserter,
 		replacer:                    replacer,
 		updater:                     updater,
 		rowSource:                   rowIter,
 		unlocker:                    unlocker,
-		updateExprs:                 ii.OnDupExprs,
+		onDupKeyUpdateExprs:         ii.OnDupExprs,
 		insertExprs:                 insertExpressions,
 		checks:                      ii.Checks(),
 		ctx:                         ctx,
 		ignore:                      ii.Ignore,
 		firstGeneratedAutoIncRowIdx: ii.FirstGeneratedAutoIncRowIdx,
+		returnExprs:                 ii.Returning,
+		returnSchema:                ii.Schema(ctx),
+		deferredDefaults:            ii.DeferredDefaults,
+		hasAfterTrigger:             ii.HasAfterTrigger,
 	}
 
 	var ed sql.EditOpenerCloser
@@ -102,9 +103,15 @@ func (b *BaseBuilder) buildInsertInto(ctx *sql.Context, ii *plan.InsertInto, row
 	}
 
 	if ii.Ignore {
+		// If ignore is set, then we are either replacing or inserting, but not updating on conflicts
 		return plan.NewCheckpointingTableEditorIter(insertIter, ed), nil
 	} else {
-		return plan.NewTableEditorIter(insertIter, ed), nil
+		// Otherwise, we are potentially inserting AND updating if there are conflicts
+		eds := []sql.EditOpenerCloser{ed}
+		if updater != nil {
+			eds = append(eds, updater)
+		}
+		return plan.NewTableEditorIter(insertIter, eds...), nil
 	}
 }
 
@@ -116,7 +123,7 @@ func (b *BaseBuilder) buildDeleteFrom(ctx *sql.Context, n *plan.DeleteFrom, row 
 
 	targets := n.GetDeleteTargets()
 	schemaPositionDeleters := make([]schemaPositionDeleter, len(targets))
-	schema := n.Child.Schema()
+	schema := n.Child.Schema(ctx)
 
 	for i, target := range targets {
 		deletable, err := plan.GetDeletable(target)
@@ -128,7 +135,7 @@ func (b *BaseBuilder) buildDeleteFrom(ctx *sql.Context, n *plan.DeleteFrom, row 
 		// By default the sourceName in the schema is the table name, but if there is a
 		// table alias applied, then use that instead.
 		sourceName := deletable.Name()
-		transform.Inspect(target, func(node sql.Node) bool {
+		transform.InspectWithOpaque(ctx, target, func(ctx *sql.Context, node sql.Node) bool {
 			if tableAlias, ok := node.(*plan.TableAlias); ok {
 				sourceName = tableAlias.Name()
 				return false
@@ -142,7 +149,7 @@ func (b *BaseBuilder) buildDeleteFrom(ctx *sql.Context, n *plan.DeleteFrom, row 
 		}
 		schemaPositionDeleters[i] = schemaPositionDeleter{deleter, int(start), int(end)}
 	}
-	return newDeleteIter(iter, schema, schemaPositionDeleters...), nil
+	return newDeleteIter(iter, schema, schemaPositionDeleters, n.Returning, n.Schema(ctx)), nil
 }
 
 func (b *BaseBuilder) buildForeignKeyHandler(ctx *sql.Context, n *plan.ForeignKeyHandler, row sql.Row) (sql.RowIter, error) {
@@ -161,7 +168,7 @@ func (b *BaseBuilder) buildUpdate(ctx *sql.Context, n *plan.Update, row sql.Row)
 		return nil, err
 	}
 
-	return newUpdateIter(iter, updatable.Schema(), updater, n.Checks(), n.Ignore), nil
+	return newUpdateIter(iter, updatable.Schema(ctx), updater, n.Checks(), n.Ignore, n.Returning, n.Schema(ctx)), nil
 }
 
 func (b *BaseBuilder) buildDropForeignKey(ctx *sql.Context, n *plan.DropForeignKey, row sql.Row) (sql.RowIter, error) {
@@ -180,7 +187,8 @@ func (b *BaseBuilder) buildDropForeignKey(ctx *sql.Context, n *plan.DropForeignK
 	if !ok {
 		return nil, sql.ErrNoForeignKeySupport.New(n.Name)
 	}
-	err = fkTbl.DropForeignKey(ctx, n.Name)
+	// TODO: provide schema name
+	err = fkTbl.DropForeignKey(ctx, n.Name, fkTbl.Name(), "")
 	if err != nil {
 		return nil, err
 	}
@@ -188,11 +196,23 @@ func (b *BaseBuilder) buildDropForeignKey(ctx *sql.Context, n *plan.DropForeignK
 	return rowIterWithOkResultWithZeroRowsAffected(), nil
 }
 
-func (b *BaseBuilder) buildDropTable(ctx *sql.Context, n *plan.DropTable, row sql.Row) (sql.RowIter, error) {
+func (b *BaseBuilder) buildDropTable(ctx *sql.Context, n *plan.DropTable, _ sql.Row) (sql.RowIter, error) {
 	var err error
 	var curdb sql.Database
 
-	for _, table := range n.Tables {
+	if b.EngineOverrides.Hooks.DropTable.PreSQLExecution != nil {
+		nn, err := b.EngineOverrides.Hooks.DropTable.PreSQLExecution(ctx, b.Runner, n)
+		if err != nil {
+			return nil, err
+		}
+		n = nn.(*plan.DropTable)
+	}
+	sortedTables, err := sortTablesByFKDependencies(ctx, n.Tables)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, table := range sortedTables {
 		tbl := table.(*plan.ResolvedTable)
 		curdb = tbl.SqlDatabase
 
@@ -220,7 +240,8 @@ func (b *BaseBuilder) buildDropTable(ctx *sql.Context, n *plan.DropTable, row sq
 				return nil, err
 			}
 			for _, fk := range fks {
-				if err = fkTable.DropForeignKey(ctx, fk.Name); err != nil {
+				// TODO: provide schema name
+				if err = fkTable.DropForeignKey(ctx, fk.Name, fk.Table, ""); err != nil {
 					return nil, err
 				}
 			}
@@ -253,33 +274,60 @@ func (b *BaseBuilder) buildDropTable(ctx *sql.Context, n *plan.DropTable, row sq
 		}
 	}
 
+	if b.EngineOverrides.Hooks.DropTable.PostSQLExecution != nil {
+		if err = b.EngineOverrides.Hooks.DropTable.PostSQLExecution(ctx, b.Runner, n); err != nil {
+			return nil, err
+		}
+	}
+
 	return rowIterWithOkResultWithZeroRowsAffected(), nil
 }
 
-func (b *BaseBuilder) buildTriggerRollback(ctx *sql.Context, n *plan.TriggerRollback, row sql.Row) (sql.RowIter, error) {
-	childIter, err := b.buildNodeExec(ctx, n.Child, row)
-	if err != nil {
-		return nil, err
+// sortTablesByFKDependencies examines the specified |tableNodes| and returns a slice of sql.Table instances, sorted
+// by their foreign key dependencies. Tables that have a foreign key reference to another table in the list will be
+// sorted first in the list, so that foreign key constraints can be dropped in the correct order.
+func sortTablesByFKDependencies(ctx *sql.Context, tableNodes []sql.Node) (sortedTables []sql.Table, err error) {
+	for _, tableNode := range tableNodes {
+		table, ok := tableNode.(sql.Table)
+		if !ok {
+			return nil, fmt.Errorf("encountered unexpected table type `%T` during DROP TABLE", table)
+		}
+
+		if fkTable, err := getForeignKeyTable(table); err == nil {
+			foreignKeys, err := fkTable.GetDeclaredForeignKeys(ctx)
+			if err != nil {
+				return nil, err
+			}
+
+			parentTables := make(map[string]struct{})
+			for _, foreignKey := range foreignKeys {
+				qualifiedTableName := foreignKey.ParentTable
+				parentTables[qualifiedTableName] = struct{}{}
+			}
+
+			inserted := false
+			for i, sortedTable := range sortedTables {
+				qualifiedTableName := sortedTable.Name()
+				if _, ok := parentTables[qualifiedTableName]; ok {
+					if i == 0 {
+						sortedTables = append([]sql.Table{table}, sortedTables[i:]...)
+					} else {
+						sortedTables = append(sortedTables[:i-1], append([]sql.Table{table}, sortedTables[i:]...)...)
+					}
+					inserted = true
+					break
+				}
+			}
+
+			if !inserted {
+				sortedTables = append(sortedTables, table)
+			}
+		} else {
+			sortedTables = append(sortedTables, table)
+		}
 	}
 
-	savePointCounter := b.triggerSavePointCounter + 1
-	savePointName := fmt.Sprintf("%s%v", TriggerSavePointPrefix, savePointCounter)
-	ctx.GetLogger().Tracef("TriggerRollback creating savepoint: %s", savePointName)
-
-	ts, ok := ctx.Session.(sql.TransactionSession)
-	if !ok {
-		return nil, fmt.Errorf("expected a sql.TransactionSession, but got %T", ctx.Session)
-	}
-
-	if err := ts.CreateSavepoint(ctx, ctx.GetTransaction(), savePointName); err != nil {
-		ctx.GetLogger().WithError(err).Errorf("CreateSavepoint failed")
-	}
-	b.triggerSavePointCounter = savePointCounter
-
-	return &triggerRollbackIter{
-		child:         childIter,
-		savePointName: savePointName,
-	}, nil
+	return sortedTables, nil
 }
 
 func (b *BaseBuilder) buildAlterIndex(ctx *sql.Context, n *plan.AlterIndex, row sql.Row) (sql.RowIter, error) {
@@ -311,115 +359,12 @@ func (b *BaseBuilder) buildTriggerExecutor(ctx *sql.Context, n *plan.TriggerExec
 		triggerTime:    n.TriggerTime,
 		triggerEvent:   n.TriggerEvent,
 		executionLogic: n.Right(),
-		ctx:            ctx,
 		b:              b,
 	}, nil
 }
 
 func (b *BaseBuilder) buildInsertDestination(ctx *sql.Context, n *plan.InsertDestination, row sql.Row) (sql.RowIter, error) {
 	return b.buildNodeExec(ctx, n.Child, row)
-}
-
-func (b *BaseBuilder) buildRowUpdateAccumulator(ctx *sql.Context, n *plan.RowUpdateAccumulator, row sql.Row) (sql.RowIter, error) {
-	rowIter, err := b.buildNodeExec(ctx, n.Child(), row)
-	if err != nil {
-		return nil, err
-	}
-
-	clientFoundRowsToggled := (ctx.Client().Capabilities & mysql.CapabilityClientFoundRows) == mysql.CapabilityClientFoundRows
-
-	var rowHandler accumulatorRowHandler
-	switch n.RowUpdateType {
-	case plan.UpdateTypeInsert:
-		rowHandler = &insertRowHandler{}
-	case plan.UpdateTypeReplace:
-		rowHandler = &replaceRowHandler{}
-	case plan.UpdateTypeDuplicateKeyUpdate:
-		rowHandler = &onDuplicateUpdateHandler{schema: n.Child().Schema(), clientFoundRowsCapability: clientFoundRowsToggled}
-	case plan.UpdateTypeUpdate:
-		schema := n.Child().Schema()
-		// the schema of the update node is a self-concatenation of the underlying table's, so split it in half for new /
-		// old row comparison purposes
-		rowHandler = &updateRowHandler{schema: schema[:len(schema)/2], clientFoundRowsCapability: clientFoundRowsToggled}
-	case plan.UpdateTypeDelete:
-		rowHandler = &deleteRowHandler{}
-	case plan.UpdateTypeJoinUpdate:
-		var schema sql.Schema
-		var updaterMap map[string]sql.RowUpdater
-		transform.Inspect(n.Child(), func(node sql.Node) bool {
-			switch node.(type) {
-			case *plan.JoinNode, *plan.Project:
-				schema = node.Schema()
-				return false
-			case *plan.UpdateJoin:
-				updaterMap = node.(*plan.UpdateJoin).Updaters
-				return true
-			}
-
-			return true
-		})
-
-		if schema == nil {
-			return nil, fmt.Errorf("error: No JoinNode found in query plan to go along with an UpdateTypeJoinUpdate")
-		}
-
-		rowHandler = &updateJoinRowHandler{joinSchema: schema, tableMap: plan.RecreateTableSchemaFromJoinSchema(schema), updaterMap: updaterMap}
-		var iter = rowIter
-		var done bool
-		for !done {
-			switch i := iter.(type) {
-			case *plan.TableEditorIter:
-				iter = i.InnerIter()
-			case *updateIter:
-				iter = i.childIter
-			case *updateJoinIter:
-				i.accumulator = rowHandler.(*updateJoinRowHandler)
-				done = true
-			case *projectIter:
-				iter = i.childIter
-			case *plan.CheckpointingTableEditorIter:
-				iter = i.InnerIter()
-			case *triggerIter:
-				iter = i.child
-			default:
-				return nil, fmt.Errorf("failed to apply rowHandler to updateJoin, unknown type: %T", iter)
-			}
-		}
-	default:
-		panic(fmt.Sprintf("Unrecognized RowUpdateType %d", n.RowUpdateType))
-	}
-
-	return &accumulatorIter{
-		iter:             rowIter,
-		updateRowHandler: rowHandler,
-	}, nil
-}
-
-func findInsertIter(rowIter sql.RowIter) (*insertIter, error) {
-	var insertItr *insertIter
-	switch rowIter := rowIter.(type) {
-	case *plan.TableEditorIter:
-		var ok bool
-		insertItr, ok = rowIter.InnerIter().(*insertIter)
-		if !ok {
-			return nil, fmt.Errorf("unexpected iter type %T", rowIter)
-		}
-	case *plan.CheckpointingTableEditorIter:
-		var ok bool
-		insertItr, ok = rowIter.InnerIter().(*insertIter)
-		if !ok {
-			return nil, fmt.Errorf("unexpected iter type %T", rowIter)
-		}
-	case *triggerIter:
-		var err error
-		insertItr, err = findInsertIter(rowIter.child)
-		if err != nil {
-			return nil, err
-		}
-	default:
-		return nil, fmt.Errorf("unexpected iter type %T", rowIter)
-	}
-	return insertItr, nil
 }
 
 func (b *BaseBuilder) buildTruncate(ctx *sql.Context, n *plan.Truncate, row sql.Row) (sql.RowIter, error) {
@@ -434,7 +379,7 @@ func (b *BaseBuilder) buildTruncate(ctx *sql.Context, n *plan.Truncate, row sql.
 	if err != nil {
 		return nil, err
 	}
-	for _, col := range truncatable.Schema() {
+	for _, col := range truncatable.Schema(ctx) {
 		if col.AutoIncrement {
 			aiTable, ok := truncatable.(sql.AutoIncrementTable)
 			if ok {
@@ -466,7 +411,7 @@ func (b *BaseBuilder) buildUpdateSource(ctx *sql.Context, n *plan.UpdateSource, 
 		return nil, err
 	}
 
-	schema, err := n.GetChildSchema()
+	schema, err := n.GetChildSchema(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -485,10 +430,14 @@ func (b *BaseBuilder) buildUpdateJoin(ctx *sql.Context, n *plan.UpdateJoin, row 
 		return nil, err
 	}
 
+	updaters, err := n.GetUpdaters(ctx)
+	if err != nil {
+		return nil, err
+	}
 	return &updateJoinIter{
 		updateSourceIter: ji,
-		joinSchema:       n.Child.(*plan.UpdateSource).Child.Schema(),
-		updaters:         n.Updaters,
+		joinSchema:       n.Child.(*plan.UpdateSource).Child.Schema(ctx),
+		updaters:         updaters,
 		caches:           make(map[string]sql.KeyValueCache),
 		disposals:        make(map[string]sql.DisposeFunc),
 		joinNode:         n.Child.(*plan.UpdateSource).Child,
@@ -524,8 +473,8 @@ func (b *BaseBuilder) buildRenameForeignKey(ctx *sql.Context, n *plan.RenameFore
 			break
 		}
 	}
-
-	err = fkTbl.DropForeignKey(ctx, n.OldName)
+	// TODO: provide schema name
+	err = fkTbl.DropForeignKey(ctx, n.OldName, fkTbl.Name(), "")
 	if err != nil {
 		return nil, err
 	}

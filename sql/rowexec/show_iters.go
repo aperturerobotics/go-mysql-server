@@ -45,14 +45,14 @@ func (i *describeIter) Close(*sql.Context) error {
 }
 
 type process struct {
-	id      int64
 	user    string
 	host    string
 	db      string
 	command string
-	time    int64
 	state   string
 	info    string
+	id      int64
+	time    int64
 }
 
 func (p process) toRow() sql.Row {
@@ -73,34 +73,54 @@ func (p process) toRow() sql.Row {
 }
 
 // cc here: https://dev.mysql.com/doc/refman/8.0/en/show-table-status.html
-func tableToStatusRow(table string, numRows uint64, dataLength uint64, collation sql.CollationID) sql.Row {
+func tableToStatusRow(ctx *sql.Context, table sql.Table) (sql.Row, error) {
+	var numRows uint64
+	var dataLength uint64
+	var err error
+	if st, ok := table.(sql.StatisticsTable); ok {
+		numRows, _, err = st.RowCount(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		dataLength, err = st.DataLength(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var avgLength float64 = 0
 	if numRows > 0 {
 		avgLength = float64(dataLength) / float64(numRows)
 	}
+
+	var comment string
+	if ct, ok := table.(sql.CommentedTable); ok {
+		comment = ct.Comment()
+	}
+
 	return sql.NewRow(
-		table,    // Name
-		"InnoDB", // Engine
+		table.Name(), // Name
+		"InnoDB",     // Engine
 		// This column is unused. With the removal of .frm files in MySQL 8.0, this
 		// column now reports a hardcoded value of 10, which is the last .frm file
 		// version used in MySQL 5.7.
-		"10",               // Version
-		"Fixed",            // Row_format
-		numRows,            // Rows
-		uint64(avgLength),  // Avg_row_length
-		dataLength,         // Data_length
-		uint64(0),          // Max_data_length (Unused for InnoDB)
-		int64(0),           // Index_length
-		int64(0),           // Data_free
-		nil,                // Auto_increment (always null)
-		nil,                // Create_time
-		nil,                // Update_time
-		nil,                // Check_time
-		collation.String(), // Collation
-		nil,                // Checksum
-		nil,                // Create_options
-		nil,                // Comments
-	)
+		"10",                       // Version
+		"Fixed",                    // Row_format
+		numRows,                    // Rows
+		uint64(avgLength),          // Avg_row_length
+		dataLength,                 // Data_length
+		uint64(0),                  // Max_data_length (Unused for InnoDB)
+		int64(0),                   // Index_length
+		int64(0),                   // Data_free
+		nil,                        // Auto_increment (always null)
+		nil,                        // Create_time
+		nil,                        // Update_time
+		nil,                        // Check_time
+		table.Collation().String(), // Collation
+		nil,                        // Checksum
+		nil,                        // Create_options
+		comment,                    // Comment
+	), nil
 }
 
 // generatePrivStrings creates a formatted GRANT <privilege_list> on <global/database/table> to <user@host> string
@@ -222,7 +242,7 @@ func (i *showIndexesIter) Next(ctx *sql.Context) (sql.Row, error) {
 	}
 
 	nullable := ""
-	if col := plan.GetColumnFromIndexExpr(show.expression, tbl); col != nil {
+	if col := plan.GetColumnFromIndexExpr(ctx, show.expression, tbl); col != nil {
 		columnName, expression = col.Name, nil
 		if col.Nullable {
 			nullable = "YES"
@@ -261,7 +281,7 @@ func (i *showIndexesIter) Next(ctx *sql.Context) (sql.Row, error) {
 }
 
 // isPriCol checks if this column is the first column in a unique index
-func isPriCol(s *plan.ShowColumns, col *sql.Column, table sql.Table) bool {
+func isPriCol(ctx *sql.Context, s *plan.ShowColumns, col *sql.Column, table sql.Table) bool {
 	for _, idx := range s.Indexes {
 		if !idx.IsUnique() {
 			continue
@@ -270,12 +290,12 @@ func isPriCol(s *plan.ShowColumns, col *sql.Column, table sql.Table) bool {
 		//   this currently works because the primary key shows up as unique, so the condition below satisfies it
 		//   but I am not confident that this is always true
 		idxExprs := idx.Expressions()
-		firstIndexCol := plan.GetColumnFromIndexExpr(idxExprs[0], table)
+		firstIndexCol := plan.GetColumnFromIndexExpr(ctx, idxExprs[0], table)
 		if firstIndexCol == nil || firstIndexCol.Name != col.Name {
 			return false
 		}
 		for _, expr := range idxExprs {
-			idxCol := plan.GetColumnFromIndexExpr(expr, table)
+			idxCol := plan.GetColumnFromIndexExpr(ctx, expr, table)
 			if idxCol == nil || idxCol.Nullable {
 				return false
 			}
@@ -286,14 +306,14 @@ func isPriCol(s *plan.ShowColumns, col *sql.Column, table sql.Table) bool {
 }
 
 // isUnqCol checks if this the values in this column must be unique
-func isUnqCol(s *plan.ShowColumns, col *sql.Column, table sql.Table) bool {
+func isUnqCol(ctx *sql.Context, s *plan.ShowColumns, col *sql.Column, table sql.Table) bool {
 	for _, idx := range s.Indexes {
 		// Column is in a unique index by itself
 		idxExprs := idx.Expressions()
 		if !idx.IsUnique() || len(idxExprs) > 1 {
 			continue
 		}
-		firstIndexCol := plan.GetColumnFromIndexExpr(idxExprs[0], table)
+		firstIndexCol := plan.GetColumnFromIndexExpr(ctx, idxExprs[0], table)
 		if firstIndexCol != nil && firstIndexCol.Name == col.Name {
 			return true
 		}
@@ -302,10 +322,10 @@ func isUnqCol(s *plan.ShowColumns, col *sql.Column, table sql.Table) bool {
 }
 
 // isMulCol checks if values in this column can be non-unique and that it's the first column in an index
-func isMulCol(s *plan.ShowColumns, col *sql.Column, table sql.Table) bool {
+func isMulCol(ctx *sql.Context, s *plan.ShowColumns, col *sql.Column, table sql.Table) bool {
 	for _, idx := range s.Indexes {
 		idxExprs := idx.Expressions()
-		firstIdxCol := plan.GetColumnFromIndexExpr(idxExprs[0], table)
+		firstIdxCol := plan.GetColumnFromIndexExpr(ctx, idxExprs[0], table)
 		// Not first column in index, ignore
 		if firstIdxCol == nil || firstIdxCol.Name != col.Name {
 			continue
@@ -324,12 +344,13 @@ func (i *showIndexesIter) Close(*sql.Context) error {
 
 type showCreateTablesIter struct {
 	table        sql.Node
+	pkSchema     sql.PrimaryKeySchema
 	schema       sql.Schema
-	didIteration bool
-	isView       bool
 	indexes      []sql.Index
 	checks       sql.CheckConstraints
-	pkSchema     sql.PrimaryKeySchema
+	didIteration bool
+	isView       bool
+	formatter    sql.SchemaFormatter
 }
 
 func (i *showCreateTablesIter) Next(ctx *sql.Context) (sql.Row, error) {
@@ -382,6 +403,25 @@ type NameAndSchema interface {
 	Schema() sql.Schema
 }
 
+func convertColumnDefaultToString(ctx *sql.Context, def *sql.ColumnDefaultValue) (string, error) {
+	// TODO : string literals should have character set introducer
+	colDefaultStr := def.String()
+	defType := def.Type(ctx)
+
+	// These types do not need to be quoted
+	if !def.IsLiteral() || colDefaultStr == "NULL" || types.IsTime(defType) || types.IsText(defType) {
+		return colDefaultStr, nil
+	}
+	v, err := def.Eval(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	if types.IsBit(def.OutType) {
+		return fmt.Sprintf("b'%b'", v), nil
+	}
+	return fmt.Sprintf("'%v'", v), nil
+}
+
 func (i *showCreateTablesIter) produceCreateTableStatement(ctx *sql.Context, table sql.Table, schema sql.Schema, pkSchema sql.PrimaryKeySchema) (string, error) {
 	colStmts := make([]string, len(schema))
 	var primaryKeyCols []string
@@ -393,44 +433,38 @@ func (i *showCreateTablesIter) produceCreateTableStatement(ctx *sql.Context, tab
 
 	// Statement creation parts for each column
 	tableCollation := table.Collation()
-	for i, col := range schema {
+	for idx, col := range schema {
 		var colDefaultStr string
+		var err error
 		if col.Default != nil && col.Generated == nil {
 			// TODO : string literals should have character set introducer
-			colDefaultStr = col.Default.String()
-			if colDefaultStr != "NULL" && col.Default.IsLiteral() && !types.IsTime(col.Default.Type()) && !types.IsText(col.Default.Type()) {
-				v, err := col.Default.Eval(ctx, nil)
-				if err != nil {
-					return "", err
-				}
-				colDefaultStr = fmt.Sprintf("'%v'", v)
+			colDefaultStr, err = convertColumnDefaultToString(ctx, col.Default)
+			if err != nil {
+				return "", err
 			}
 		}
+
 		var onUpdateStr string
 		if col.OnUpdate != nil {
-			onUpdateStr = col.OnUpdate.String()
-			if onUpdateStr != "NULL" && col.OnUpdate.IsLiteral() && !types.IsTime(col.OnUpdate.Type()) && !types.IsText(col.OnUpdate.Type()) {
-				v, err := col.OnUpdate.Eval(ctx, nil)
-				if err != nil {
-					return "", err
-				}
-				onUpdateStr = fmt.Sprintf("'%v'", v)
+			onUpdateStr, err = convertColumnDefaultToString(ctx, col.OnUpdate)
+			if err != nil {
+				return "", err
 			}
 		}
 
 		if col.PrimaryKey && len(pkSchema.Schema) == 0 {
-			pkOrdinals = append(pkOrdinals, i)
+			pkOrdinals = append(pkOrdinals, idx)
 		}
 
-		colStmts[i] = sql.GenerateCreateTableColumnDefinition(col, colDefaultStr, onUpdateStr, tableCollation)
+		colStmts[idx] = i.formatter.GenerateCreateTableColumnDefinition(col, colDefaultStr, onUpdateStr, tableCollation)
 	}
 
-	for _, i := range pkOrdinals {
-		primaryKeyCols = append(primaryKeyCols, schema[i].Name)
+	for _, idx := range pkOrdinals {
+		primaryKeyCols = append(primaryKeyCols, schema[idx].Name)
 	}
 
 	if len(primaryKeyCols) > 0 {
-		colStmts = append(colStmts, sql.GenerateCreateTablePrimaryKeyDefinition(primaryKeyCols))
+		colStmts = append(colStmts, i.formatter.GenerateCreateTablePrimaryKeyDefinition(primaryKeyCols))
 	}
 
 	for _, index := range i.indexes {
@@ -441,19 +475,22 @@ func (i *showCreateTablesIter) produceCreateTableStatement(ctx *sql.Context, tab
 
 		prefixLengths := index.PrefixLengths()
 		var indexCols []string
-		for i, expr := range index.Expressions() {
-			col := plan.GetColumnFromIndexExpr(expr, table)
+		for idx, expr := range index.Expressions() {
+			col := plan.GetColumnFromIndexExpr(ctx, expr, table)
 			if col != nil {
-				indexDef := sql.QuoteIdentifier(col.Name)
-				if len(prefixLengths) > i && prefixLengths[i] != 0 {
-					indexDef += fmt.Sprintf("(%v)", prefixLengths[i])
+				indexDef := i.formatter.QuoteIdentifier(col.Name)
+				if len(prefixLengths) > idx && prefixLengths[idx] != 0 {
+					indexDef += fmt.Sprintf("(%v)", prefixLengths[idx])
 				}
 				indexCols = append(indexCols, indexDef)
 			}
 		}
 
-		colStmts = append(colStmts, sql.GenerateCreateTableIndexDefinition(index.IsUnique(), index.IsSpatial(),
-			index.IsFullText(), index.ID(), indexCols, index.Comment()))
+		indexDefn, shouldInclude := i.formatter.GenerateCreateTableIndexDefinition(index.IsUnique(), index.IsSpatial(),
+			index.IsFullText(), index.IsVector(), index.ID(), indexCols, index.Comment())
+		if shouldInclude {
+			colStmts = append(colStmts, indexDefn)
+		}
 	}
 
 	fkt, err := getForeignKeyTable(table)
@@ -471,13 +508,13 @@ func (i *showCreateTablesIter) produceCreateTableStatement(ctx *sql.Context, tab
 			if len(fk.OnUpdate) > 0 && fk.OnUpdate != sql.ForeignKeyReferentialAction_DefaultAction {
 				onUpdate = string(fk.OnUpdate)
 			}
-			colStmts = append(colStmts, sql.GenerateCreateTableForiegnKeyDefinition(fk.Name, fk.Columns, fk.ParentTable, fk.ParentColumns, onDelete, onUpdate))
+			colStmts = append(colStmts, i.formatter.GenerateCreateTableForiegnKeyDefinition(fk.Name, fk.Columns, fk.ParentTable, fk.ParentColumns, onDelete, onUpdate))
 		}
 	}
 
 	if i.checks != nil {
 		for _, check := range i.checks {
-			colStmts = append(colStmts, sql.GenerateCreateTableCheckConstraintClause(check.Name, check.Expr.String(), check.Enforced))
+			colStmts = append(colStmts, i.formatter.GenerateCreateTableCheckConstraintClause(check.Name, check.Expr.String(), check.Enforced))
 		}
 	}
 
@@ -498,7 +535,12 @@ func (i *showCreateTablesIter) produceCreateTableStatement(ctx *sql.Context, tab
 		}
 	}
 
-	return sql.GenerateCreateTableStatement(table.Name(), colStmts, autoInc, table.Collation().CharacterSet().Name(), table.Collation().Name(), comment), nil
+	temp := ""
+	if tbl := getTempTable(table); tbl != nil && tbl.IsTemporary() {
+		temp = " TEMPORARY"
+	}
+
+	return i.formatter.GenerateCreateTableStatement(table.Name(), colStmts, temp, autoInc, table.Collation().CharacterSet().Name(), table.Collation().Name(), comment), nil
 }
 
 func produceCreateViewStatement(view *plan.SubqueryAlias) string {
@@ -526,14 +568,27 @@ func getForeignKeyTable(t sql.Table) (sql.ForeignKeyTable, error) {
 	}
 }
 
-func getAutoIncrementTable(t sql.Table) sql.AutoIncrementTable {
+func getAutoIncrementTable(t sql.Table) sql.AutoIncrementGetter {
 	switch t := t.(type) {
-	case sql.AutoIncrementTable:
+	case sql.AutoIncrementGetter:
 		return t
 	case sql.TableWrapper:
 		return getAutoIncrementTable(t.Underlying())
 	case *plan.ResolvedTable:
 		return getAutoIncrementTable(t.Table)
+	default:
+		return nil
+	}
+}
+
+func getTempTable(t sql.Table) sql.TemporaryTable {
+	switch t := t.(type) {
+	case sql.TemporaryTable:
+		return t
+	case sql.TableWrapper:
+		return getTempTable(t.Underlying())
+	case *plan.ResolvedTable:
+		return getTempTable(t.Table)
 	default:
 		return nil
 	}

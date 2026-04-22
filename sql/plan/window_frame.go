@@ -15,17 +15,17 @@ import (
 // violate PRECEDING < CURRENT ROW < FOLLOWING ordering,
 // and only a valid subset of fields will be set.
 type windowFrameBase struct {
-	isRows  bool
-	isRange bool
+	startNPreceding sql.Expression
+	startNFollowing sql.Expression
+	endNPreceding   sql.Expression
+	endNFollowing   sql.Expression
 
+	isRows             bool
+	isRange            bool
 	unboundedFollowing bool
 	unboundedPreceding bool
 	startCurrentRow    bool
 	endCurrentRow      bool
-	startNPreceding    sql.Expression
-	startNFollowing    sql.Expression
-	endNPreceding      sql.Expression
-	endNFollowing      sql.Expression
 }
 
 func (f *windowFrameBase) String() string {
@@ -73,7 +73,7 @@ func (f *windowFrameBase) String() string {
 	}
 }
 
-func (f *windowFrameBase) DebugString() string {
+func (f *windowFrameBase) DebugString(ctx *sql.Context) string {
 	if f == nil {
 		return ""
 	}

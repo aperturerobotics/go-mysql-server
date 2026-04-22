@@ -27,8 +27,8 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
-func newCreateView(db memory.MemoryDatabase, isReplace bool) *plan.CreateView {
-	table := memory.NewTable(db.Database(), "mytable", sql.NewPrimaryKeySchema(sql.Schema{
+func newCreateView(db memory.MemoryDatabase, ifNotExists, isReplace bool) *plan.CreateView {
+	table := memory.NewTable(sql.NewEmptyContext(), db.Database(), "mytable", sql.NewPrimaryKeySchema(sql.Schema{
 		{Name: "i", Source: "mytable", Type: types.Int32},
 		{Name: "s", Source: "mytable", Type: types.Text},
 	}), nil)
@@ -44,7 +44,7 @@ func newCreateView(db memory.MemoryDatabase, isReplace bool) *plan.CreateView {
 		),
 	)
 
-	createView := plan.NewCreateView(db, subqueryAlias.Name(), subqueryAlias, isReplace, "CREATE VIEW myview AS SELECT i FROM mytable", "", "", "")
+	createView := plan.NewCreateView(db, subqueryAlias.Name(), subqueryAlias, ifNotExists, isReplace, "CREATE VIEW myview AS SELECT i FROM mytable", "", "", "")
 
 	return createView
 }
@@ -54,9 +54,9 @@ func newCreateView(db memory.MemoryDatabase, isReplace bool) *plan.CreateView {
 func TestCreateViewWithRegistry(t *testing.T) {
 	require := require.New(t)
 
-	createView := newCreateView(memory.NewViewlessDatabase("mydb"), false)
+	createView := newCreateView(memory.NewViewlessDatabase("mydb"), false, false)
 
-	ctx := sql.NewContext(context.Background())
+	ctx := sql.NewEmptyContext()
 	_, err := DefaultBuilder.buildNodeExec(ctx, createView, nil)
 	require.NoError(err)
 
@@ -68,25 +68,30 @@ func TestCreateViewWithRegistry(t *testing.T) {
 
 // Tests that CreateView RowIter returns an error when the view exists
 func TestCreateExistingViewNative(t *testing.T) {
-	createView := newCreateView(memory.NewDatabase("mydb"), false)
+	createView := newCreateView(memory.NewDatabase("mydb"), false, false)
+	createExistingView := newCreateView(memory.NewDatabase("mydb"), true, false)
 
-	ctx := sql.NewContext(context.Background())
+	ctx := sql.NewEmptyContext()
 	_, err := DefaultBuilder.buildNodeExec(ctx, createView, nil)
 	require.NoError(t, err)
 
-	ctx = sql.NewContext(context.Background())
+	ctx = sql.NewEmptyContext()
 	_, err = DefaultBuilder.buildNodeExec(ctx, createView, nil)
 	require.Error(t, err)
 	require.True(t, sql.ErrExistingView.Is(err))
+
+	ctx = sql.NewEmptyContext()
+	_, err = DefaultBuilder.buildNodeExec(ctx, createExistingView, nil)
+	require.NoError(t, err)
 }
 
 // Tests that CreateView RowIter succeeds when the view exists and the
 // IsReplace flag is set to true
 func TestReplaceExistingViewNative(t *testing.T) {
 	db := memory.NewDatabase("mydb")
-	createView := newCreateView(db, false)
+	createView := newCreateView(db, false, false)
 
-	ctx := sql.NewContext(context.Background())
+	ctx := sql.NewEmptyContext()
 	_, err := DefaultBuilder.buildNodeExec(ctx, createView, nil)
 	require.NoError(t, err)
 
@@ -110,7 +115,7 @@ func TestReplaceExistingViewNative(t *testing.T) {
 		),
 	)
 
-	createView = plan.NewCreateView(db, subqueryAlias.Name(), subqueryAlias, true, "CREATE VIEW myview AS SELECT i + 1 FROM mytable", "", "", "")
+	createView = plan.NewCreateView(db, subqueryAlias.Name(), subqueryAlias, false, true, "CREATE VIEW myview AS SELECT i + 1 FROM mytable", "", "", "")
 	_, err = DefaultBuilder.buildNodeExec(ctx, createView, nil)
 	require.NoError(t, err)
 
@@ -124,9 +129,9 @@ func TestReplaceExistingViewNative(t *testing.T) {
 // the catalog when RowIter is called
 func TestCreateViewNative(t *testing.T) {
 	db := memory.NewDatabase("mydb")
-	createView := newCreateView(db, false)
+	createView := newCreateView(db, false, false)
 
-	ctx := sql.NewContext(context.Background())
+	ctx := sql.NewEmptyContext()
 	_, err := DefaultBuilder.buildNodeExec(ctx, createView, nil)
 	require.NoError(t, err)
 
@@ -141,7 +146,7 @@ func TestCreateViewNative(t *testing.T) {
 func TestCreateExistingViewWithRegistry(t *testing.T) {
 	require := require.New(t)
 
-	createView := newCreateView(memory.NewViewlessDatabase("mydb"), false)
+	createView := newCreateView(memory.NewViewlessDatabase("mydb"), false, false)
 
 	view := createView.View()
 	viewReg := sql.NewViewRegistry()
@@ -161,7 +166,7 @@ func TestCreateExistingViewWithRegistry(t *testing.T) {
 func TestReplaceExistingViewWithRegistry(t *testing.T) {
 	require := require.New(t)
 
-	createView := newCreateView(memory.NewViewlessDatabase("mydb"), false)
+	createView := newCreateView(memory.NewViewlessDatabase("mydb"), false, false)
 
 	view := sql.NewView(createView.Name, nil, "", "")
 	viewReg := sql.NewViewRegistry()
@@ -180,4 +185,44 @@ func TestReplaceExistingViewWithRegistry(t *testing.T) {
 	actualView, ok := ctx.GetViewRegistry().View(createView.Database().Name(), createView.Name)
 	require.True(ok)
 	require.Equal(expectedView, actualView)
+}
+
+// Tests that CreateView returns a proper error message when trying to create
+// a view with a name that conflicts with an existing table
+func TestCreateViewWithConflictingTableName(t *testing.T) {
+	require := require.New(t)
+
+	db := memory.NewDatabase("mydb")
+
+	// Create a table named "v"
+	table := memory.NewTable(sql.NewEmptyContext(), db.Database(), "v", sql.NewPrimaryKeySchema(sql.Schema{
+		{Name: "id", Source: "v", Type: types.Int32},
+	}), nil)
+	db.AddTable("v", table)
+
+	// Try to create a view with the same name "v"
+	subqueryAlias := plan.NewSubqueryAlias("v", "select 1 as id",
+		plan.NewProject(
+			[]sql.Expression{
+				expression.NewAlias("id", expression.NewLiteral(1, types.Int8)),
+			},
+			plan.NewUnresolvedTable("dual", ""),
+		),
+	)
+
+	createView := plan.NewCreateView(db, "v", subqueryAlias, false, false, "CREATE VIEW v AS SELECT 1 as id", "", "", "")
+
+	ctx := sql.NewContext(context.Background())
+	_, err := DefaultBuilder.buildNodeExec(ctx, createView, nil)
+
+	// Verify we get an error
+	require.Error(err)
+
+	// Verify it's the correct error type
+	require.True(sql.ErrTableAlreadyExists.Is(err))
+
+	// Verify the error message contains just the view name "v", not "CreateView(v)"
+	errMsg := err.Error()
+	require.Contains(errMsg, "table with name v already exists")
+	require.NotContains(errMsg, "CreateView(v)")
 }

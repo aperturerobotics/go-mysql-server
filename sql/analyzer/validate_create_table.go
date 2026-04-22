@@ -15,6 +15,7 @@
 package analyzer
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -24,6 +25,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
+// MaxBytePrefix is the maximum number of bytes permitted in a prefix index key for InnoDB tables.
 const MaxBytePrefix = 3072
 
 // validateCreateTable validates various constraints about CREATE TABLE statements.
@@ -38,8 +40,30 @@ func validateCreateTable(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.
 		return nil, transform.SameTree, err
 	}
 
+	// For CREATE TABLE AS SELECT, skip validation here because the schema isn't complete yet.
+	// The resolveCreateSelect analyzer rule will merge schemas and create a new CreateTable node,
+	// which will be validated separately after the merge.
+	if ct.Select() != nil {
+		return n, transform.SameTree, nil
+	}
+
 	sch := ct.PkSchema().Schema
 	idxs := ct.Indexes()
+
+	// First validate auto_increment columns before other validations
+	// This ensures proper error precedence matching MySQL behavior
+	keyedColumns := make(map[string]bool)
+	for _, index := range idxs {
+		for _, col := range index.Columns {
+			keyedColumns[col.Name] = true
+		}
+	}
+
+	err = validateAutoIncrementModify(sch, keyedColumns)
+	if err != nil {
+		return nil, transform.SameTree, err
+	}
+
 	strictMySQLCompat, err := isStrictMysqlCompatibilityEnabled(ctx)
 	if err != nil {
 		return nil, transform.SameTree, err
@@ -50,20 +74,6 @@ func validateCreateTable(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.
 	}
 
 	err = validateNoVirtualColumnsInPrimaryKey(sch)
-	if err != nil {
-		return nil, transform.SameTree, err
-	}
-
-	// passed validateIndexes, so they all must be valid indexes
-	// extract map of columns that have indexes defined over them
-	keyedColumns := make(map[string]bool)
-	for _, index := range idxs {
-		for _, col := range index.Columns {
-			keyedColumns[col.Name] = true
-		}
-	}
-
-	err = validateAutoIncrementModify(sch, keyedColumns)
 	if err != nil {
 		return nil, transform.SameTree, err
 	}
@@ -84,24 +94,24 @@ func validateNoVirtualColumnsInPrimaryKey(sch sql.Schema) error {
 // validation rules
 func validateAlterTable(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
 	var err error
-	// Inspect is required here because alter table statements with multiple clauses are represented as a block of
+	// InspectWithOpaque is required here because alter table statements with multiple clauses are represented as a block of
 	// plan nodes
-	transform.Inspect(n, func(sql.Node) bool {
+	transform.InspectWithOpaque(ctx, n, func(*sql.Context, sql.Node) bool {
 		switch n := n.(type) {
 		case *plan.RenameTable:
 			for _, name := range n.NewNames {
-				err = validateIdentifier(name)
+				err = ValidateIdentifier(name)
 				if err != nil {
 					return false
 				}
 			}
 		case *plan.CreateCheck:
-			err = validateIdentifier(n.Check.Name)
+			err = ValidateIdentifier(n.Check.Name)
 			if err != nil {
 				return false
 			}
 		case *plan.CreateForeignKey:
-			err = validateIdentifier(n.FkDef.Name)
+			err = ValidateIdentifier(n.FkDef.Name)
 			if err != nil {
 				return false
 			}
@@ -166,7 +176,7 @@ func resolveAlterColumn(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.S
 	var validator sql.SchemaValidator
 	keyedColumns := make(map[string]bool)
 	var err error
-	transform.Inspect(n, func(n sql.Node) bool {
+	transform.InspectWithOpaque(ctx, n, func(ctx *sql.Context, n sql.Node) bool {
 		if st, ok := n.(sql.SchemaTarget); ok {
 			sch = st.TargetSchema()
 		}
@@ -177,7 +187,7 @@ func resolveAlterColumn(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.S
 					validator = sv
 				}
 			}
-			keyedColumns, err = getTableIndexColumns(ctx, n.Table)
+			keyedColumns, err = GetTableIndexColumns(ctx, n.Table)
 			return false
 		case *plan.RenameColumn:
 			if rt, ok := n.Table.(*plan.ResolvedTable); ok {
@@ -192,7 +202,7 @@ func resolveAlterColumn(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.S
 					validator = sv
 				}
 			}
-			keyedColumns, err = getTableIndexColumns(ctx, n.Table)
+			keyedColumns, err = GetTableIndexColumns(ctx, n.Table)
 			return false
 		case *plan.DropColumn:
 			if rt, ok := n.Table.(*plan.ResolvedTable); ok {
@@ -207,7 +217,7 @@ func resolveAlterColumn(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.S
 					validator = sv
 				}
 			}
-			indexes, err = getTableIndexNames(ctx, a, n.Table)
+			indexes, err = GetTableIndexNames(ctx, a, n.Table)
 		default:
 		}
 		return true
@@ -229,7 +239,7 @@ func resolveAlterColumn(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.S
 
 	// Need a TransformUp here because multiple of these statement types can be nested under a Block node.
 	// It doesn't look it, but this is actually an iterative loop over all the independent clauses in an ALTER statement
-	n, same, err := transform.Node(n, func(n sql.Node) (sql.Node, transform.TreeIdentity, error) {
+	n, same, err := transform.Node(ctx, n, func(ctx *sql.Context, n sql.Node) (sql.Node, transform.TreeIdentity, error) {
 		switch nn := n.(type) {
 		case *plan.ModifyColumn:
 			n, err := nn.WithTargetSchema(sch.Copy())
@@ -237,7 +247,7 @@ func resolveAlterColumn(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.S
 				return nil, transform.SameTree, err
 			}
 
-			sch, err = validateModifyColumn(ctx, initialSch, sch, n.(*plan.ModifyColumn), keyedColumns)
+			sch, err = ValidateModifyColumn(ctx, initialSch, sch, n.(*plan.ModifyColumn), keyedColumns)
 			if err != nil {
 				return nil, transform.SameTree, err
 			}
@@ -247,7 +257,7 @@ func resolveAlterColumn(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.S
 			if err != nil {
 				return nil, transform.SameTree, err
 			}
-			sch, err = validateRenameColumn(initialSch, sch, n.(*plan.RenameColumn))
+			sch, err = ValidateRenameColumn(ctx, initialSch, sch, n.(*plan.RenameColumn))
 			if err != nil {
 				return nil, transform.SameTree, err
 			}
@@ -258,7 +268,7 @@ func resolveAlterColumn(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.S
 				return nil, transform.SameTree, err
 			}
 
-			sch, err = validateAddColumn(initialSch, sch, n.(*plan.AddColumn))
+			sch, err = ValidateAddColumn(ctx, sch, n.(*plan.AddColumn))
 			if err != nil {
 				return nil, transform.SameTree, err
 			}
@@ -270,7 +280,7 @@ func resolveAlterColumn(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.S
 			if err != nil {
 				return nil, transform.SameTree, err
 			}
-			sch, err = validateDropColumn(initialSch, sch, n.(*plan.DropColumn))
+			sch, err = ValidateDropColumn(ctx, initialSch, sch, n.(*plan.DropColumn))
 			if err != nil {
 				return nil, transform.SameTree, err
 			}
@@ -287,7 +297,7 @@ func resolveAlterColumn(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.S
 				return nil, transform.SameTree, err
 			}
 
-			keyedColumns = updateKeyedColumns(keyedColumns, nn)
+			keyedColumns = UpdateKeyedColumns(keyedColumns, nn)
 			return n, transform.NewTree, nil
 		case *plan.AlterPK:
 			n, err := nn.WithTargetSchema(sch.Copy())
@@ -304,7 +314,7 @@ func resolveAlterColumn(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.S
 			if err != nil {
 				return nil, transform.SameTree, err
 			}
-			sch, err = validateAlterDefault(initialSch, sch, n.(*plan.AlterDefaultSet))
+			sch, err = ValidateAlterDefault(ctx, initialSch, sch, n.(*plan.AlterDefaultSet))
 			if err != nil {
 				return nil, transform.SameTree, err
 			}
@@ -314,7 +324,7 @@ func resolveAlterColumn(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.S
 			if err != nil {
 				return nil, transform.SameTree, err
 			}
-			sch, err = validateDropDefault(initialSch, sch, n.(*plan.AlterDefaultDrop))
+			sch, err = ValidateDropDefault(ctx, initialSch, sch, n.(*plan.AlterDefaultDrop))
 			if err != nil {
 				return nil, transform.SameTree, err
 			}
@@ -336,7 +346,7 @@ func resolveAlterColumn(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.S
 	// We can't evaluate auto-increment until the end of the analysis, since we break adding a new auto-increment unique
 	// column into two steps: first add the column, then create the index. If there was no index created, that's an error.
 	if addedColumn {
-		err = validateAutoIncrementAdd(sch, keyedColumns)
+		err = validateAutoIncrementModify(sch, keyedColumns)
 		if err != nil {
 			return nil, false, err
 		}
@@ -345,8 +355,8 @@ func resolveAlterColumn(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.S
 	return n, same, nil
 }
 
-// updateKeyedColumns updates the keyedColumns map based on the action of the AlterIndex node
-func updateKeyedColumns(keyedColumns map[string]bool, n *plan.AlterIndex) map[string]bool {
+// UpdateKeyedColumns updates the keyedColumns map based on the action of the AlterIndex node
+func UpdateKeyedColumns(keyedColumns map[string]bool, n *plan.AlterIndex) map[string]bool {
 	switch n.Action {
 	case plan.IndexAction_Create:
 		for _, col := range n.Columns {
@@ -361,16 +371,16 @@ func updateKeyedColumns(keyedColumns map[string]bool, n *plan.AlterIndex) map[st
 	return keyedColumns
 }
 
-// validateRenameColumn checks that a DDL RenameColumn node can be safely executed (e.g. no collision with other
+// ValidateRenameColumn checks that a DDL RenameColumn node can be safely executed (e.g. no collision with other
 // column names, doesn't invalidate any table check constraints).
 //
 // Note that schema is passed in twice, because one version is the initial version before the alter column expressions
 // are applied, and the second version is the current schema that is being modified as multiple nodes are processed.
-func validateRenameColumn(initialSch, sch sql.Schema, rc *plan.RenameColumn) (sql.Schema, error) {
+func ValidateRenameColumn(ctx *sql.Context, initialSch, sch sql.Schema, rc *plan.RenameColumn) (sql.Schema, error) {
 	table := rc.Table
 	nameable := table.(sql.Nameable)
 
-	err := validateIdentifier(rc.NewColumnName)
+	err := ValidateIdentifier(rc.NewColumnName)
 	if err != nil {
 		return nil, err
 	}
@@ -387,7 +397,7 @@ func validateRenameColumn(initialSch, sch sql.Schema, rc *plan.RenameColumn) (sq
 		return nil, sql.ErrTableColumnNotFound.New(nameable.Name(), rc.ColumnName)
 	}
 
-	err = validateColumnNotUsedInCheckConstraint(rc.ColumnName, rc.Checks())
+	err = ValidateColumnNotUsedInCheckConstraint(ctx, rc.ColumnName, rc.Checks())
 	if err != nil {
 		return nil, err
 	}
@@ -395,11 +405,14 @@ func validateRenameColumn(initialSch, sch sql.Schema, rc *plan.RenameColumn) (sq
 	return renameInSchema(sch, rc.ColumnName, rc.NewColumnName, nameable.Name()), nil
 }
 
-func validateAddColumn(initialSch sql.Schema, schema sql.Schema, ac *plan.AddColumn) (sql.Schema, error) {
+// ValidateAddColumn validates that the column specified in |ac| can be added to the specified
+// |schema|. A new Schema is returned, with the added column, if the column can be added. Otherwise,
+// an error is returned if there are any validation errors.
+func ValidateAddColumn(ctx *sql.Context, schema sql.Schema, ac *plan.AddColumn) (sql.Schema, error) {
 	table := ac.Table
 	nameable := table.(sql.Nameable)
 
-	err := validateIdentifier(ac.Column().Name)
+	err := ValidateIdentifier(ac.Column().Name)
 	if err != nil {
 		return nil, err
 	}
@@ -411,8 +424,8 @@ func validateAddColumn(initialSch sql.Schema, schema sql.Schema, ac *plan.AddCol
 
 	// Make sure columns named in After clause exist
 	idx := -1
-	if ac.Order() != nil && ac.Order().AfterColumn != "" {
-		afterColumn := ac.Order().AfterColumn
+	if ac.Order(ctx) != nil && ac.Order(ctx).AfterColumn != "" {
+		afterColumn := ac.Order(ctx).AfterColumn
 		idx = schema.IndexOf(afterColumn, nameable.Name())
 		if idx < 0 {
 			return nil, sql.ErrTableColumnNotFound.New(nameable.Name(), afterColumn)
@@ -446,7 +459,7 @@ func isStrictMysqlCompatibilityEnabled(ctx *sql.Context) (bool, error) {
 	return i == 1, nil
 }
 
-func validateModifyColumn(ctx *sql.Context, initialSch sql.Schema, schema sql.Schema, mc *plan.ModifyColumn, keyedColumns map[string]bool) (sql.Schema, error) {
+func ValidateModifyColumn(ctx *sql.Context, initialSch sql.Schema, schema sql.Schema, mc *plan.ModifyColumn, keyedColumns map[string]bool) (sql.Schema, error) {
 	table := mc.Table
 	tableName := table.(sql.Nameable).Name()
 
@@ -454,11 +467,11 @@ func validateModifyColumn(ctx *sql.Context, initialSch sql.Schema, schema sql.Sc
 	// It cannot have been renamed in the same statement.
 	oldColName := mc.Column()
 	if !schema.Contains(oldColName, tableName) || !initialSch.Contains(oldColName, tableName) {
-		return nil, sql.ErrTableColumnNotFound.New(table, oldColName)
+		return nil, sql.ErrTableColumnNotFound.New(tableName, oldColName)
 	}
 
 	newCol := mc.NewColumn()
-	if err := validateIdentifier(newCol.Name); err != nil {
+	if err := ValidateIdentifier(newCol.Name); err != nil {
 		return nil, err
 	}
 
@@ -489,8 +502,8 @@ func validateModifyColumn(ctx *sql.Context, initialSch sql.Schema, schema sql.Sc
 
 	// TODO: not sure how this is different than `table` and `tableName`
 	// Get underlying table and table name
-	tbl := getTable(table)
-	tblName := getTableName(table)
+	tbl := getTable(ctx, table)
+	tblName := getTableName(ctx, table)
 	indexes := ia.IndexesByTable(ctx, ctx.GetCurrentDatabase(), tblName)
 	for _, index := range indexes {
 		if index.IsFullText() {
@@ -498,11 +511,11 @@ func validateModifyColumn(ctx *sql.Context, initialSch sql.Schema, schema sql.Sc
 		}
 		prefixLengths := index.PrefixLengths()
 		for i, expr := range index.Expressions() {
-			col := plan.GetColumnFromIndexExpr(expr, tbl)
+			col := plan.GetColumnFromIndexExpr(ctx, expr, tbl)
 			if !strings.EqualFold(col.Name, oldColName) {
 				continue
 			}
-			if types.IsJSON(newCol.Type) {
+			if types.IsJSON(newCol.Type) && !index.IsVector() {
 				return nil, sql.ErrJSONIndex.New(col.Name)
 			}
 			var prefixLen int64
@@ -519,14 +532,14 @@ func validateModifyColumn(ctx *sql.Context, initialSch sql.Schema, schema sql.Sc
 	return newSch, nil
 }
 
-func validateIdentifier(name string) error {
+func ValidateIdentifier(name string) error {
 	if len(name) > sql.MaxIdentifierLength {
 		return sql.ErrInvalidIdentifier.New(name)
 	}
 	return nil
 }
 
-func validateDropColumn(initialSch, sch sql.Schema, dc *plan.DropColumn) (sql.Schema, error) {
+func ValidateDropColumn(ctx *sql.Context, initialSch, sch sql.Schema, dc *plan.DropColumn) (sql.Schema, error) {
 	table := dc.Table
 	nameable := table.(sql.Nameable)
 
@@ -537,7 +550,7 @@ func validateDropColumn(initialSch, sch sql.Schema, dc *plan.DropColumn) (sql.Sc
 		return nil, sql.ErrTableColumnNotFound.New(nameable.Name(), dc.Column)
 	}
 
-	err := validateColumnSafeToDropWithCheckConstraint(dc.Column, dc.Checks())
+	err := validateColumnSafeToDropWithCheckConstraint(ctx, dc.Column, dc.Checks())
 	if err != nil {
 		return nil, err
 	}
@@ -547,12 +560,12 @@ func validateDropColumn(initialSch, sch sql.Schema, dc *plan.DropColumn) (sql.Sc
 	return newSch, nil
 }
 
-// validateColumnNotUsedInCheckConstraint validates that the specified column name is not referenced in any of
+// ValidateColumnNotUsedInCheckConstraint validates that the specified column name is not referenced in any of
 // the specified table check constraints.
-func validateColumnNotUsedInCheckConstraint(columnName string, checks sql.CheckConstraints) error {
+func ValidateColumnNotUsedInCheckConstraint(ctx *sql.Context, columnName string, checks sql.CheckConstraints) error {
 	var err error
 	for _, check := range checks {
-		_ = transform.InspectExpr(check.Expr, func(e sql.Expression) bool {
+		_ = transform.InspectExpr(ctx, check.Expr, func(ctx *sql.Context, e sql.Expression) bool {
 			var name string
 			switch e := e.(type) {
 			case *expression.UnresolvedColumn:
@@ -579,12 +592,12 @@ func validateColumnNotUsedInCheckConstraint(columnName string, checks sql.CheckC
 // validateColumnSafeToDropWithCheckConstraint validates that the specified column name is safe to drop, even if
 // referenced in a check constraint. Columns referenced in check constraints can be dropped if they are the only
 // column referenced in the check constraint.
-func validateColumnSafeToDropWithCheckConstraint(columnName string, checks sql.CheckConstraints) error {
+func validateColumnSafeToDropWithCheckConstraint(ctx *sql.Context, columnName string, checks sql.CheckConstraints) error {
 	var err error
 	for _, check := range checks {
 		hasOtherCol := false
 		hasMatchingCol := false
-		_ = transform.InspectExpr(check.Expr, func(e sql.Expression) bool {
+		_ = transform.InspectExpr(ctx, check.Expr, func(ctx *sql.Context, e sql.Expression) bool {
 			var colName string
 			switch e := e.(type) {
 			case *expression.UnresolvedColumn:
@@ -623,7 +636,7 @@ func validateColumnSafeToDropWithCheckConstraint(columnName string, checks sql.C
 func validateAlterIndex(ctx *sql.Context, initialSch, sch sql.Schema, ai *plan.AlterIndex, indexes []string) ([]string, error) {
 	switch ai.Action {
 	case plan.IndexAction_Create:
-		err := validateIdentifier(ai.IndexName)
+		err := ValidateIdentifier(ai.IndexName)
 		if err != nil {
 			return nil, err
 		}
@@ -654,12 +667,15 @@ func validateAlterIndex(ctx *sql.Context, initialSch, sch sql.Schema, ai *plan.A
 			}
 		}
 		if savedIdx == -1 {
+			if ai.IfExists {
+				return nil, nil
+			}
 			return nil, sql.ErrCantDropFieldOrKey.New(ai.IndexName)
 		}
 		// Remove the index from the list
 		return append(indexes[:savedIdx], indexes[savedIdx+1:]...), nil
 	case plan.IndexAction_Rename:
-		err := validateIdentifier(ai.IndexName)
+		err := ValidateIdentifier(ai.IndexName)
 		if err != nil {
 			return nil, err
 		}
@@ -679,7 +695,11 @@ func validateAlterIndex(ctx *sql.Context, initialSch, sch sql.Schema, ai *plan.A
 	return indexes, nil
 }
 
-// validatePrefixLength handles all errors related to creating indexes with prefix lengths
+// validatePrefixLength validates the prefix length |colLen| for the index column |colName| against |colType|.
+//
+// For character-based types (CHAR, VARCHAR, TEXT), |colLen| is a character count. For byte-based
+// types (BINARY, VARBINARY, BLOB), |colLen| is a byte count. In both cases, the effective prefix
+// must not exceed [MaxBytePrefix] bytes.
 func validatePrefixLength(ctx *sql.Context, colName string, colLen int64, colType sql.Type, strictMySQLCompat, isUnique bool) error {
 	// Throw prefix length error for non-string types with prefixes
 	if !types.IsText(colType) {
@@ -708,8 +728,19 @@ func validatePrefixLength(ctx *sql.Context, colName string, colLen int64, colTyp
 	}
 
 	if types.IsTextOnly(colType) {
-		colLen = 4 * colLen
+		// CHAR, VARCHAR, and TEXT always implement [sql.StringType], so the assertion is safe.
+		// Since |colLen| is in characters, it is compared directly against the column's character length.
+		st := colType.(sql.StringType)
+		if colLen > MaxBytePrefix/st.CharacterSet().MaxLength() {
+			return sql.ErrKeyTooLong.New()
+		}
+		if colLen > st.MaxCharacterLength() {
+			return sql.ErrInvalidIndexPrefix.New(colName)
+		}
+		return nil
 	}
+
+	// For byte-based types (BLOB, BINARY, VARBINARY), the prefix is already in bytes.
 	if colLen > MaxBytePrefix {
 		return sql.ErrKeyTooLong.New()
 	}
@@ -785,6 +816,10 @@ func validateAutoIncrementModify(schema sql.Schema, keyedColumns map[string]bool
 	seen := false
 	for _, col := range schema {
 		if col.AutoIncrement {
+			// Under MySQL 8.4+, AUTO_INCREMENT columns must be integer types.
+			if !types.IsInteger(col.Type) {
+				return sql.ErrInvalidColumnSpecifier.New(col.Name)
+			}
 			// keyedColumns == nil means they are trying to add auto_increment column
 			if !col.PrimaryKey && !keyedColumns[col.Name] {
 				// AUTO_INCREMENT col must be a key
@@ -803,32 +838,6 @@ func validateAutoIncrementModify(schema sql.Schema, keyedColumns map[string]bool
 	}
 	return nil
 }
-
-func validateAutoIncrementAdd(schema sql.Schema, keyColumns map[string]bool) error {
-	seen := false
-	for _, col := range schema {
-		if col.AutoIncrement {
-			{
-				if !col.PrimaryKey && !keyColumns[col.Name] {
-					// AUTO_INCREMENT col must be a key
-					return sql.ErrInvalidAutoIncCols.New()
-				}
-				if col.Default != nil {
-					// AUTO_INCREMENT col cannot have default
-					return sql.ErrInvalidAutoIncCols.New()
-				}
-				if seen {
-					// there can be at most one AUTO_INCREMENT col
-					return sql.ErrInvalidAutoIncCols.New()
-				}
-				seen = true
-			}
-		}
-	}
-	return nil
-}
-
-const textIndexPrefix = 1000
 
 func schToColMap(sch sql.Schema) map[string]*sql.Column {
 	colMap := make(map[string]*sql.Column, len(sch))
@@ -882,7 +891,7 @@ func validateIndex(ctx *sql.Context, colMap map[string]*sql.Column, idxDef *sql.
 			return sql.ErrDuplicateColumn.New(schCol.Name)
 		}
 		seenCols[schCol.Name] = struct{}{}
-		if types.IsJSON(schCol.Type) {
+		if types.IsJSON(schCol.Type) && !idxDef.IsVector() {
 			return sql.ErrJSONIndex.New(schCol.Name)
 		}
 
@@ -893,6 +902,16 @@ func validateIndex(ctx *sql.Context, colMap map[string]*sql.Column, idxDef *sql.
 		err := validatePrefixLength(ctx, idxCol.Name, idxCol.Length, schCol.Type, strictMySQLCompat, idxDef.IsUnique())
 		if err != nil {
 			return err
+		}
+	}
+
+	if idxDef.IsVector() {
+		if len(idxDef.Columns) != 1 {
+			return fmt.Errorf("a vector index must have exactly one column")
+		}
+		schCol, _ := colMap[strings.ToLower(idxDef.Columns[0].Name)]
+		if schCol.Nullable {
+			return sql.ErrNullableVectorIdx.New()
 		}
 	}
 
@@ -916,18 +935,18 @@ func validateIndex(ctx *sql.Context, colMap map[string]*sql.Column, idxDef *sql.
 	return nil
 }
 
-// getTableIndexColumns returns the columns over which indexes are defined
-func getTableIndexColumns(ctx *sql.Context, table sql.Node) (map[string]bool, error) {
+// GetTableIndexColumns returns the columns over which indexes are defined
+func GetTableIndexColumns(ctx *sql.Context, table sql.Node) (map[string]bool, error) {
 	ia, err := newIndexAnalyzerForNode(ctx, table)
 	if err != nil {
 		return nil, err
 	}
 
 	keyedColumns := make(map[string]bool)
-	indexes := ia.IndexesByTable(ctx, ctx.GetCurrentDatabase(), getTableName(table))
+	indexes := ia.IndexesByTable(ctx, ctx.GetCurrentDatabase(), getTableName(ctx, table))
 	for _, index := range indexes {
 		for _, expr := range index.Expressions() {
-			if col := plan.GetColumnFromIndexExpr(expr, getTable(table)); col != nil {
+			if col := plan.GetColumnFromIndexExpr(ctx, expr, getTable(ctx, table)); col != nil {
 				keyedColumns[col.Name] = true
 			}
 		}
@@ -936,21 +955,21 @@ func getTableIndexColumns(ctx *sql.Context, table sql.Node) (map[string]bool, er
 	return keyedColumns, nil
 }
 
-// getTableIndexNames returns the names of indexes associated with a table.
-func getTableIndexNames(ctx *sql.Context, _ *Analyzer, table sql.Node) ([]string, error) {
+// GetTableIndexNames returns the names of indexes associated with a table.
+func GetTableIndexNames(ctx *sql.Context, _ *Analyzer, table sql.Node) ([]string, error) {
 	ia, err := newIndexAnalyzerForNode(ctx, table)
 	if err != nil {
 		return nil, err
 	}
 
-	indexes := ia.IndexesByTable(ctx, ctx.GetCurrentDatabase(), getTableName(table))
+	indexes := ia.IndexesByTable(ctx, ctx.GetCurrentDatabase(), getTableName(ctx, table))
 	names := make([]string, len(indexes))
 
 	for i, index := range indexes {
 		names[i] = index.ID()
 	}
 
-	if hasPrimaryKeys(table.Schema()) {
+	if HasPrimaryKeys(table.Schema(ctx)) {
 		names = append(names, "PRIMARY")
 	}
 
@@ -959,10 +978,10 @@ func getTableIndexNames(ctx *sql.Context, _ *Analyzer, table sql.Node) ([]string
 
 // validatePrimaryKey validates a primary key add or drop operation.
 func validatePrimaryKey(ctx *sql.Context, initialSch, sch sql.Schema, ai *plan.AlterPK) (sql.Schema, error) {
-	tableName := getTableName(ai.Table)
+	tableName := getTableName(ctx, ai.Table)
 	switch ai.Action {
 	case plan.PrimaryKeyAction_Create:
-		if hasPrimaryKeys(sch) {
+		if HasPrimaryKeys(sch) {
 			return nil, sql.ErrMultiplePrimaryKeysDefined.New()
 		}
 
@@ -995,7 +1014,7 @@ func validatePrimaryKey(ctx *sql.Context, initialSch, sch sql.Schema, ai *plan.A
 
 		return sch, nil
 	case plan.PrimaryKeyAction_Drop:
-		if !hasPrimaryKeys(sch) {
+		if !HasPrimaryKeys(sch) {
 			return nil, sql.ErrCantDropFieldOrKey.New("PRIMARY")
 		}
 
@@ -1011,14 +1030,14 @@ func validatePrimaryKey(ctx *sql.Context, initialSch, sch sql.Schema, ai *plan.A
 	}
 }
 
-// validateAlterDefault validates the addition of a default value to a column.
-func validateAlterDefault(initialSch, sch sql.Schema, as *plan.AlterDefaultSet) (sql.Schema, error) {
-	idx := sch.IndexOf(as.ColumnName, getTableName(as.Table))
+// ValidateAlterDefault validates the addition of a default value to a column.
+func ValidateAlterDefault(ctx *sql.Context, initialSch, sch sql.Schema, as *plan.AlterDefaultSet) (sql.Schema, error) {
+	idx := sch.IndexOf(as.ColumnName, getTableName(ctx, as.Table))
 	if idx == -1 {
 		return nil, sql.ErrTableColumnNotFound.New(as.ColumnName)
 	}
 
-	copiedDefault, err := as.Default.WithChildren(as.Default.Children()...)
+	copiedDefault, err := as.Default.WithChildren(ctx, as.Default.Children()...)
 	if err != nil {
 		return nil, err
 	}
@@ -1028,9 +1047,9 @@ func validateAlterDefault(initialSch, sch sql.Schema, as *plan.AlterDefaultSet) 
 	return sch, err
 }
 
-// validateDropDefault validates the dropping of a default value.
-func validateDropDefault(initialSch, sch sql.Schema, ad *plan.AlterDefaultDrop) (sql.Schema, error) {
-	idx := sch.IndexOf(ad.ColumnName, getTableName(ad.Table))
+// ValidateDropDefault validates the dropping of a default value.
+func ValidateDropDefault(ctx *sql.Context, initialSch, sch sql.Schema, ad *plan.AlterDefaultDrop) (sql.Schema, error) {
+	idx := sch.IndexOf(ad.ColumnName, getTableName(ctx, ad.Table))
 	if idx == -1 {
 		return nil, sql.ErrTableColumnNotFound.New(ad.ColumnName)
 	}
@@ -1040,7 +1059,7 @@ func validateDropDefault(initialSch, sch sql.Schema, ad *plan.AlterDefaultDrop) 
 	return sch, nil
 }
 
-func hasPrimaryKeys(sch sql.Schema) bool {
+func HasPrimaryKeys(sch sql.Schema) bool {
 	for _, c := range sch {
 		if c.PrimaryKey {
 			return true

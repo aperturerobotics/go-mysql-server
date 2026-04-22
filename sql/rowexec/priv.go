@@ -88,12 +88,22 @@ func (b *BaseBuilder) buildRevokeRole(ctx *sql.Context, n *plan.RevokeRole, row 
 	for _, targetUser := range n.TargetUsers {
 		user := mysqlDb.GetUser(editor, targetUser.Name, targetUser.Host, false)
 		if user == nil {
-			return nil, sql.ErrGrantRevokeRoleDoesNotExist.New(targetUser.String("`"))
+			err := sql.ErrGrantRevokeRoleDoesNotExist.New(targetUser.String("`"))
+			if n.IgnoreUnknownUser {
+				ctx.Warn(1362, "%s", err.Error())
+				continue
+			}
+			return nil, err
 		}
 		for _, targetRole := range n.Roles {
 			role := mysqlDb.GetUser(editor, targetRole.Name, targetRole.Host, true)
 			if role == nil {
-				return nil, sql.ErrGrantRevokeRoleDoesNotExist.New(targetRole.String("`"))
+				err := sql.ErrGrantRevokeRoleDoesNotExist.New(targetUser.String("`"))
+				if n.IfExists {
+					ctx.Warn(3523, "%s", err.Error())
+					continue
+				}
+				return nil, err
 			}
 			//TODO: if a role is mentioned in the "mandatory_roles" system variable then they cannot be revoked
 			editor.RemoveRoleEdge(mysql_db.RoleEdgesPrimaryKey{
@@ -210,7 +220,12 @@ func (b *BaseBuilder) buildRevoke(ctx *sql.Context, n *plan.Revoke, row sql.Row)
 	for _, revokeUser := range n.Users {
 		user := mysqlDb.GetUser(editor, revokeUser.Name, revokeUser.Host, false)
 		if user == nil {
-			return nil, sql.ErrGrantUserDoesNotExist.New()
+			err := sql.ErrRevokeUserDoesNotExist.New(revokeUser.Name, revokeUser.Host)
+			if n.IgnoreUnknownUser {
+				ctx.Warn(3162, "%s", err.Error())
+				continue
+			}
+			return nil, err
 		}
 		users = append(users, user)
 	}
@@ -274,10 +289,6 @@ func (b *BaseBuilder) buildRevoke(ctx *sql.Context, n *plan.Revoke, row sql.Row)
 		return nil, err
 	}
 	return rowIterWithOkResultWithZeroRowsAffected(), nil
-}
-
-func (b *BaseBuilder) buildRevokeAll(ctx *sql.Context, n *plan.RevokeAll, row sql.Row) (sql.RowIter, error) {
-	return nil, fmt.Errorf("not yet implemented")
 }
 
 func (b *BaseBuilder) buildGrant(ctx *sql.Context, n *plan.Grant, row sql.Row) (sql.RowIter, error) {
@@ -415,7 +426,7 @@ func (b *BaseBuilder) buildCreateRole(ctx *sql.Context, n *plan.CreateRole, row 
 			Host:                userPk.Host,
 			PrivilegeSet:        mysql_db.NewPrivilegeSet(),
 			Plugin:              "mysql_native_password",
-			Password:            "",
+			AuthString:          "",
 			PasswordLastChanged: time.Now().UTC(),
 			Locked:              true,
 			Attributes:          nil,

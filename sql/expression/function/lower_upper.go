@@ -24,15 +24,15 @@ import (
 
 // Lower is a function that returns the lowercase of the text provided.
 type Lower struct {
-	expression.UnaryExpression
+	expression.UnaryExpressionStub
 }
 
 var _ sql.FunctionExpression = (*Lower)(nil)
 var _ sql.CollationCoercible = (*Lower)(nil)
 
 // NewLower creates a new Lower expression.
-func NewLower(e sql.Expression) sql.Expression {
-	return &Lower{expression.UnaryExpression{Child: e}}
+func NewLower(ctx *sql.Context, e sql.Expression) sql.Expression {
+	return &Lower{expression.UnaryExpressionStub{Child: e}}
 }
 
 // FunctionName implements sql.FunctionExpression
@@ -59,7 +59,7 @@ func (l *Lower) Eval(
 		return nil, nil
 	}
 
-	vStr, collation, err := types.ConvertToCollatedString(v, l.Child.Type())
+	vStr, collation, err := types.ConvertToCollatedString(ctx, v, l.Child.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -71,16 +71,16 @@ func (l *Lower) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (l *Lower) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (l *Lower) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(l, len(children), 1)
 	}
-	return NewLower(children[0]), nil
+	return NewLower(ctx, children[0]), nil
 }
 
 // Type implements the Expression interface.
-func (l *Lower) Type() sql.Type {
-	return l.Child.Type()
+func (l *Lower) Type(ctx *sql.Context) sql.Type {
+	return l.Child.Type(ctx)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -90,15 +90,15 @@ func (l *Lower) CollationCoercibility(ctx *sql.Context) (collation sql.Collation
 
 // Upper is a function that returns the UPPERCASE of the text provided.
 type Upper struct {
-	expression.UnaryExpression
+	expression.UnaryExpressionStub
 }
 
 var _ sql.FunctionExpression = (*Upper)(nil)
 var _ sql.CollationCoercible = (*Upper)(nil)
 
 // NewUpper creates a new Lower expression.
-func NewUpper(e sql.Expression) sql.Expression {
-	return &Upper{expression.UnaryExpression{Child: e}}
+func NewUpper(ctx *sql.Context, e sql.Expression) sql.Expression {
+	return &Upper{expression.UnaryExpressionStub{Child: e}}
 }
 
 // FunctionName implements sql.FunctionExpression
@@ -125,7 +125,7 @@ func (u *Upper) Eval(
 		return nil, nil
 	}
 
-	vStr, collation, err := types.ConvertToCollatedString(v, u.Child.Type())
+	vStr, collation, err := types.ConvertToCollatedString(ctx, v, u.Child.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -137,16 +137,16 @@ func (u *Upper) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (u *Upper) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (u *Upper) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(u, len(children), 1)
 	}
-	return NewUpper(children[0]), nil
+	return NewUpper(ctx, children[0]), nil
 }
 
 // Type implements the Expression interface.
-func (u *Upper) Type() sql.Type {
-	return u.Child.Type()
+func (u *Upper) Type(ctx *sql.Context) sql.Type {
+	return u.Child.Type(ctx)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

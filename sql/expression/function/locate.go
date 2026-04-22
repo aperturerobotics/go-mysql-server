@@ -34,7 +34,7 @@ var _ sql.FunctionExpression = (*Locate)(nil)
 var _ sql.CollationCoercible = (*Locate)(nil)
 
 // NewLocate returns a new Locate function.
-func NewLocate(exprs ...sql.Expression) (sql.Expression, error) {
+func NewLocate(ctx *sql.Context, exprs ...sql.Expression) (sql.Expression, error) {
 	if len(exprs) < 2 || len(exprs) > 3 {
 		return nil, sql.ErrInvalidArgumentNumber.New("LOCATE", "2 or 3", len(exprs))
 	}
@@ -53,7 +53,7 @@ func (l *Locate) Description() string {
 }
 
 // WithChildren implements the Expression interface.
-func (l *Locate) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (l *Locate) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) < 2 || len(children) > 3 {
 		return nil, sql.ErrInvalidChildrenNumber.New(l, len(children), 2)
 	}
@@ -62,7 +62,7 @@ func (l *Locate) WithChildren(children ...sql.Expression) (sql.Expression, error
 }
 
 // Type implements the sql.Expression interface.
-func (l *Locate) Type() sql.Type { return types.Int32 }
+func (l *Locate) Type(ctx *sql.Context) sql.Type { return types.Int32 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (*Locate) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
@@ -79,12 +79,12 @@ func (l *Locate) String() string {
 	return ""
 }
 
-func (l *Locate) DebugString() string {
+func (l *Locate) DebugString(ctx *sql.Context) string {
 	switch len(l.ChildExpressions) {
 	case 2:
-		return fmt.Sprintf("%s(%s,%s)", l.FunctionName(), sql.DebugString(l.ChildExpressions[0]), sql.DebugString(l.ChildExpressions[1]))
+		return fmt.Sprintf("%s(%s,%s)", l.FunctionName(), sql.DebugString(ctx, l.ChildExpressions[0]), sql.DebugString(ctx, l.ChildExpressions[1]))
 	case 3:
-		return fmt.Sprintf("%s(%s,%s,%s)", l.FunctionName(), sql.DebugString(l.ChildExpressions[0]), sql.DebugString(l.ChildExpressions[1]), sql.DebugString(l.ChildExpressions[2]))
+		return fmt.Sprintf("%s(%s,%s,%s)", l.FunctionName(), sql.DebugString(ctx, l.ChildExpressions[0]), sql.DebugString(ctx, l.ChildExpressions[1]), sql.DebugString(ctx, l.ChildExpressions[2]))
 	}
 	return ""
 }
@@ -104,6 +104,17 @@ func (l *Locate) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
+	substrVal, _, err = types.LongText.Convert(ctx, substrVal)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle Dolt's TextStorage wrapper that doesn't convert to plain string
+	substrVal, err = sql.UnwrapAny(ctx, substrVal)
+	if err != nil {
+		return nil, err
+	}
+
 	substr, ok := substrVal.(string)
 	if !ok {
 		return nil, sql.ErrInvalidArgumentDetails.New("locate", "substring must be a string")
@@ -116,6 +127,17 @@ func (l *Locate) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 
 	if strVal == nil {
 		return nil, nil
+	}
+
+	strVal, _, err = types.LongText.Convert(ctx, strVal)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle Dolt's TextStorage wrapper that doesn't convert to plain string
+	strVal, err = sql.UnwrapAny(ctx, strVal)
+	if err != nil {
+		return nil, err
 	}
 
 	str, ok := strVal.(string)
@@ -132,7 +154,7 @@ func (l *Locate) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		}
 
 		if posVal != nil {
-			posInt, _, err := types.Int32.Convert(posVal)
+			posInt, _, err := types.Int32.Convert(ctx, posVal)
 			if err != nil {
 				return nil, sql.ErrInvalidArgumentDetails.New("locate", "start must be an integer")
 			}

@@ -24,9 +24,9 @@ var errPrimaryKeyUnknownEntry = errors.NewKind("the primary key for the `%s` tab
 var errPrimaryKeyUnknownSchema = errors.NewKind("the primary key for the `%s` table was given a row belonging to an unknown schema")
 
 type mysqlTable struct {
+	db   *MySQLDb
 	name string
 	sch  sql.Schema
-	db   *MySQLDb
 }
 
 var _ sql.Table = (*mysqlTable)(nil)
@@ -52,7 +52,7 @@ func (t *mysqlTable) String() string {
 }
 
 // Schema implements the interface sql.Table.
-func (t *mysqlTable) Schema() sql.Schema {
+func (t *mysqlTable) Schema(ctx *sql.Context) sql.Schema {
 	return t.sch.Copy()
 }
 

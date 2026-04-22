@@ -19,6 +19,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,7 +30,9 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/analyzer/analyzererrors"
 	"github.com/dolthub/go-mysql-server/sql/expression"
+	"github.com/dolthub/go-mysql-server/sql/expression/function/vector"
 	"github.com/dolthub/go-mysql-server/sql/fulltext"
+	"github.com/dolthub/go-mysql-server/sql/iters"
 	"github.com/dolthub/go-mysql-server/sql/transform"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
@@ -42,23 +45,15 @@ type MemTable interface {
 
 // Table represents an in-memory database table.
 type Table struct {
-	name string
-
-	// Schema and related info
-	data *TableData
-	// ignoreSessionData is used to ignore session data for versioned tables (smoke tests only), unused otherwise
+	data              *TableData
+	db                *BaseDatabase
+	name              string
+	projection        []string
+	projectedSchema   sql.Schema
+	columns           []int
+	filters           []sql.Expression
 	ignoreSessionData bool
-
-	// Projection info and settings
-	pkIndexesEnabled bool
-	projection       []string
-	projectedSchema  sql.Schema
-	columns          []int
-
-	// filters is used for primary index scans with an index lookup
-	filters []sql.Expression
-
-	db *BaseDatabase
+	pkIndexesEnabled  bool
 }
 
 var _ sql.Table = (*Table)(nil)
@@ -72,6 +67,7 @@ var _ sql.TruncateableTable = (*Table)(nil)
 var _ sql.AlterableTable = (*Table)(nil)
 var _ sql.IndexAlterableTable = (*Table)(nil)
 var _ sql.CollationAlterableTable = (*Table)(nil)
+var _ sql.CommentAlterableTable = (*Table)(nil)
 var _ sql.ForeignKeyTable = (*Table)(nil)
 var _ sql.CheckAlterableTable = (*Table)(nil)
 var _ sql.RewritableTable = (*Table)(nil)
@@ -87,52 +83,52 @@ var _ sql.Databaseable = (*Table)(nil)
 
 // NewTable creates a new Table with the given name and schema. Assigns the default collation, therefore if a different
 // collation is desired, please use NewTableWithCollation.
-func NewTable(db MemoryDatabase, name string, schema sql.PrimaryKeySchema, fkColl *ForeignKeyCollection) *Table {
+func NewTable(ctx *sql.Context, db MemoryDatabase, name string, schema sql.PrimaryKeySchema, fkColl *ForeignKeyCollection) *Table {
 	var baseDatabase *BaseDatabase
 	// the dual table has no database
 	if db != nil {
 		baseDatabase = db.Database()
 	}
-	return NewPartitionedTableWithCollation(baseDatabase, name, schema, fkColl, 0, sql.Collation_Default, "")
+	return NewPartitionedTableWithCollation(ctx, baseDatabase, name, schema, fkColl, 0, sql.Collation_Default, "")
 }
 
 // NewLocalTable returns a table suitable to use for transient non-memory applications
-func NewLocalTable(db MemoryDatabase, name string, schema sql.PrimaryKeySchema, fkColl *ForeignKeyCollection) *Table {
+func NewLocalTable(ctx *sql.Context, db MemoryDatabase, name string, schema sql.PrimaryKeySchema, fkColl *ForeignKeyCollection) *Table {
 	var baseDatabase *BaseDatabase
 	// the dual table has no database
 	if db != nil {
 		baseDatabase = db.Database()
 	}
-	tbl := NewPartitionedTableWithCollation(baseDatabase, name, schema, fkColl, 0, sql.Collation_Default, "")
+	tbl := NewPartitionedTableWithCollation(ctx, baseDatabase, name, schema, fkColl, 0, sql.Collation_Default, "")
 	tbl.ignoreSessionData = true
 	return tbl
 }
 
 // NewTableWithCollation creates a new Table with the given name, schema, and collation.
-func NewTableWithCollation(db *BaseDatabase, name string, schema sql.PrimaryKeySchema, fkColl *ForeignKeyCollection, collation sql.CollationID) *Table {
-	return NewPartitionedTableWithCollation(db, name, schema, fkColl, 0, collation, "")
+func NewTableWithCollation(ctx *sql.Context, db *BaseDatabase, name string, schema sql.PrimaryKeySchema, fkColl *ForeignKeyCollection, collation sql.CollationID) *Table {
+	return NewPartitionedTableWithCollation(ctx, db, name, schema, fkColl, 0, collation, "")
 }
 
 // NewPartitionedTable creates a new Table with the given name, schema and number of partitions. Assigns the default
 // collation, therefore if a different collation is desired, please use NewPartitionedTableWithCollation.
-func NewPartitionedTable(db *BaseDatabase, name string, schema sql.PrimaryKeySchema, fkColl *ForeignKeyCollection, numPartitions int) *Table {
-	return NewPartitionedTableWithCollation(db, name, schema, fkColl, numPartitions, sql.Collation_Default, "")
+func NewPartitionedTable(ctx *sql.Context, db *BaseDatabase, name string, schema sql.PrimaryKeySchema, fkColl *ForeignKeyCollection, numPartitions int) *Table {
+	return NewPartitionedTableWithCollation(ctx, db, name, schema, fkColl, numPartitions, sql.Collation_Default, "")
 }
 
-// NewPartitionedTable creates a new Table with the given name, schema and number of partitions. Assigns the default
+// NewPartitionedTableRevision creates a new Table with the given name, schema and number of partitions. Assigns the default
 // collation, therefore if a different collation is desired, please use NewPartitionedTableWithCollation.
-func NewPartitionedTableRevision(db *BaseDatabase, name string, schema sql.PrimaryKeySchema, fkColl *ForeignKeyCollection, numPartitions int) *TableRevision {
-	tbl := NewPartitionedTableWithCollation(db, name, schema, fkColl, numPartitions, sql.Collation_Default, "")
+func NewPartitionedTableRevision(ctx *sql.Context, db *BaseDatabase, name string, schema sql.PrimaryKeySchema, fkColl *ForeignKeyCollection, numPartitions int) *TableRevision {
+	tbl := NewPartitionedTableWithCollation(ctx, db, name, schema, fkColl, numPartitions, sql.Collation_Default, "")
 	tbl.ignoreSessionData = true
 	return &TableRevision{tbl}
 }
 
-func stripTblNames(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+func stripTblNames(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 	switch e := e.(type) {
 	case *expression.GetField:
 		// strip table names
-		ne := expression.NewGetField(e.Index(), e.Type(), e.Name(), e.IsNullable())
-		ne = ne.WithBackTickNames(e.IsBackTickNames())
+		ne := expression.NewGetField(e.Index(), e.Type(ctx), e.Name(), e.IsNullable(ctx))
+		ne = ne.WithQuotedNames(sql.DefaultMySQLSchemaFormatter, e.IsQuotedIdentifier())
 		return ne, transform.NewTree, nil
 	default:
 	}
@@ -141,7 +137,7 @@ func stripTblNames(e sql.Expression) (sql.Expression, transform.TreeIdentity, er
 
 // NewPartitionedTableWithCollation creates a new Table with the given name, schema, number of partitions, collation,
 // and comment.
-func NewPartitionedTableWithCollation(db *BaseDatabase, name string, schema sql.PrimaryKeySchema, fkColl *ForeignKeyCollection, numPartitions int, collation sql.CollationID, comment string) *Table {
+func NewPartitionedTableWithCollation(ctx *sql.Context, db *BaseDatabase, name string, schema sql.PrimaryKeySchema, fkColl *ForeignKeyCollection, numPartitions int, collation sql.CollationID, comment string) *Table {
 	var keys [][]byte
 	var partitions = map[string][]sql.Row{}
 
@@ -169,19 +165,19 @@ func NewPartitionedTableWithCollation(db *BaseDatabase, name string, schema sql.
 	for i, c := range schema.Schema {
 		cCopy := c.Copy()
 		if cCopy.Default != nil {
-			newDef, _, _ := transform.Expr(cCopy.Default, stripTblNames)
+			newDef, _, _ := transform.Expr(ctx, cCopy.Default, stripTblNames)
 			defStr := newDef.String()
 			unrDef := sql.NewUnresolvedColumnDefaultValue(defStr)
 			cCopy.Default = unrDef
 		}
 		if cCopy.Generated != nil {
-			newDef, _, _ := transform.Expr(cCopy.Generated, stripTblNames)
+			newDef, _, _ := transform.Expr(ctx, cCopy.Generated, stripTblNames)
 			defStr := newDef.String()
 			unrDef := sql.NewUnresolvedColumnDefaultValue(defStr)
 			cCopy.Generated = unrDef
 		}
 		if cCopy.OnUpdate != nil {
-			newDef, _, _ := transform.Expr(cCopy.OnUpdate, stripTblNames)
+			newDef, _, _ := transform.Expr(ctx, cCopy.OnUpdate, stripTblNames)
 			defStr := newDef.String()
 			unrDef := sql.NewUnresolvedColumnDefaultValue(defStr)
 			cCopy.OnUpdate = unrDef
@@ -225,7 +221,7 @@ func (t *Table) Database() string {
 }
 
 // Schema implements the sql.Table interface.
-func (t *Table) Schema() sql.Schema {
+func (t *Table) Schema(ctx *sql.Context) sql.Schema {
 	if t.projectedSchema != nil {
 		return t.projectedSchema
 	}
@@ -297,16 +293,16 @@ func (i rangePartitionIter) Next(ctx *sql.Context) (sql.Partition, error) {
 
 // indexScanPartitionIter is a partition iterator that returns a single partition for an index scan
 type indexScanPartitionIter struct {
-	once   sync.Once
 	index  *Index
 	ranges sql.Expression
 	lookup sql.IndexLookup
+	once   sync.Once
 }
 
 type indexScanPartition struct {
 	index  *Index
-	lookup sql.IndexLookup
 	ranges sql.Expression
+	lookup sql.IndexLookup
 }
 
 func (i indexScanPartition) Key() []byte {
@@ -345,6 +341,36 @@ type spatialRangePartitionIter struct {
 	minX, minY, maxX, maxY float64
 }
 
+// vectorPartitionIter is the sql.PartitionIter for vector indexes.
+// Because it only ever has one partition, it also implements sql.Partition
+// and returns itself in calls to Next.
+type vectorPartitionIter struct {
+	Column sql.Expression
+	sql.OrderAndLimit
+	visited bool
+}
+
+var _ sql.PartitionIter = (*vectorPartitionIter)(nil)
+var _ sql.Partition = (*vectorPartitionIter)(nil)
+
+// Key returns the key used to distinguish partitions. Since it only ever has one partition,
+// this value is unused.
+func (v *vectorPartitionIter) Key() []byte {
+	return nil
+}
+
+func (v *vectorPartitionIter) Close(_ *sql.Context) error {
+	return nil
+}
+
+func (v *vectorPartitionIter) Next(_ *sql.Context) (sql.Partition, error) {
+	if v.visited {
+		return nil, io.EOF
+	}
+	v.visited = true
+	return v, nil
+}
+
 var _ sql.PartitionIter = (*spatialRangePartitionIter)(nil)
 
 func (i spatialRangePartitionIter) Close(ctx *sql.Context) error {
@@ -380,17 +406,18 @@ func (t *Table) PartitionCount(ctx *sql.Context) (int64, error) {
 }
 
 type indexScanRowIter struct {
-	i             int
+	index     *Index
+	ranges    sql.Expression
+	lookup    sql.IndexLookup
+	indexRows []sql.Row
+
 	incrementFunc func()
-	index         *Index
-	lookup        sql.IndexLookup
-	ranges        sql.Expression
 	primaryRows   map[string][]sql.Row
-	indexRows     []sql.Row
 
 	columns     []int
-	numColumns  int
 	virtualCols []int
+	i           int
+	numColumns  int
 }
 
 func newIndexScanRowIter(
@@ -515,6 +542,25 @@ func (t *Table) PartitionRows(ctx *sql.Context, partition sql.Partition) (sql.Ro
 		filters = append(t.filters, r.rang)
 	}
 
+	if vectorPartition, ok := partition.(*vectorPartitionIter); ok {
+		// Assume only one partition for now
+		rows := data.partitions[string(data.partitionKeys[0])]
+
+		sf := sql.SortFields{
+			{Column: vectorPartition.OrderBy, Order: sql.Ascending},
+		}
+
+		if vectorPartition.Limit != nil {
+			limit, err := iters.GetInt64Value(ctx, vectorPartition.Limit)
+			if err != nil {
+				return nil, err
+			}
+			return iters.NewTopRowsIter(sf, limit, vectorPartition.CalcFoundRows, sql.RowsToRowIter(rows...), 0), nil
+		}
+
+		return iters.NewSortIter(sf, sql.RowsToRowIter(rows...)), nil
+	}
+
 	rows, ok := data.partitions[string(partition.Key())]
 	if !ok {
 		return nil, sql.ErrPartitionNotFound.New(partition.Key())
@@ -624,13 +670,12 @@ func (p *partitionIter) Next(*sql.Context) (sql.Partition, error) {
 func (p *partitionIter) Close(*sql.Context) error { return nil }
 
 type tableIter struct {
+	indexValues sql.IndexValueIter
+	rows        []sql.Row
+	filters     []sql.Expression
 	columns     []int
 	virtualCols []int
 	numColumns  int
-
-	rows        []sql.Row
-	filters     []sql.Expression
-	indexValues sql.IndexValueIter
 	pos         int
 }
 
@@ -766,8 +811,8 @@ func (i *spatialTableIter) Next(ctx *sql.Context) (sql.Row, error) {
 	// if the range [i.minX, i.maxX] and [gMinX, gMaxX] overlap and
 	// if the range [i.minY, i.maxY] and [gMinY, gMaxY] overlap
 	// then, the bounding boxes intersect
-	g, ok := row[i.ord].(types.GeometryValue)
-	if !ok {
+	g, err := types.UnwrapGeometry(ctx, row[i.ord])
+	if err != nil {
 		return nil, fmt.Errorf("spatial index over non-geometry column")
 	}
 	gMinX, gMinY, gMaxX, gMaxY := g.BBox()
@@ -916,10 +961,10 @@ func (t *Table) getRewriteTableEditor(ctx *sql.Context, oldSchema, newSchema sql
 				panic(err)
 			}
 
-			ts.RowCount.(*Table).data = ts.RowCount.(*Table).data.copy().truncate(sql.NewPrimaryKeySchema(rowCountSch))
-			ts.DocCount.(*Table).data = ts.DocCount.(*Table).data.copy().truncate(sql.NewPrimaryKeySchema(docCountSch))
-			ts.GlobalCount.(*Table).data = ts.GlobalCount.(*Table).data.copy().truncate(sql.NewPrimaryKeySchema(globalCountSch))
-			ts.Position.(*Table).data = ts.Position.(*Table).data.copy().truncate(sql.NewPrimaryKeySchema(positionSch))
+			ts.RowCount.(*Table).data = ts.RowCount.(*Table).data.copy().truncate(ctx, sql.NewPrimaryKeySchema(rowCountSch))
+			ts.DocCount.(*Table).data = ts.DocCount.(*Table).data.copy().truncate(ctx, sql.NewPrimaryKeySchema(docCountSch))
+			ts.GlobalCount.(*Table).data = ts.GlobalCount.(*Table).data.copy().truncate(ctx, sql.NewPrimaryKeySchema(globalCountSch))
+			ts.Position.(*Table).data = ts.Position.(*Table).data.copy().truncate(ctx, sql.NewPrimaryKeySchema(positionSch))
 			newTableSets[i] = ts
 
 			// When we get a rowcount editor below, we are going to use the session data for each of these tables. Since we
@@ -968,7 +1013,7 @@ func (t *Table) tableEditorForRewrite(ctx *sql.Context, oldSchema, newSchema sql
 	// sess := SessionFromContext(ctx)
 	tableUnderEdit := t.copy()
 	// tableUnderEdit.data = sess.tableData(t).copy()
-	tableData := tableUnderEdit.data.truncate(normalizeSchemaForRewrite(newSchema))
+	tableData := tableUnderEdit.data.truncate(ctx, normalizeSchemaForRewrite(newSchema))
 	tableUnderEdit.data = tableData
 
 	// TODO: |editedTableAnd| and |ea| should have the same tableData reference
@@ -1076,7 +1121,7 @@ func (t *Table) Truncate(ctx *sql.Context) (int, error) {
 		count += len(data.partitions[key])
 	}
 
-	data.truncate(data.schema)
+	data.truncate(ctx, data.schema)
 	return count, nil
 }
 
@@ -1093,26 +1138,48 @@ func (t *Table) Insert(ctx *sql.Context, row sql.Row) error {
 func (t *Table) PeekNextAutoIncrementValue(ctx *sql.Context) (uint64, error) {
 	data := t.sessionTableData(ctx)
 
+	// Find the auto increment column to validate the current value
+	autoCol := t.getAutoIncrementColumn(ctx)
+	if autoCol == nil {
+		return data.autoIncVal, nil
+	}
+
+	// If the current auto increment value is out of range for the column type,
+	// return the maximum valid value instead
+	if _, inRange, err := autoCol.Type.Convert(ctx, data.autoIncVal); err == nil && inRange != sql.InRange {
+		return data.autoIncVal - 1, nil
+	}
+
 	return data.autoIncVal, nil
+}
+
+// getAutoIncrementColumn returns the auto increment column for this table, or nil if none exists.
+// Only one auto increment column is allowed per table.
+func (t *Table) getAutoIncrementColumn(ctx *sql.Context) *sql.Column {
+	for _, col := range t.Schema(ctx) {
+		if col.AutoIncrement {
+			return col
+		}
+	}
+	return nil
 }
 
 // GetNextAutoIncrementValue gets the next auto increment value for the memory table the increment.
 func (t *Table) GetNextAutoIncrementValue(ctx *sql.Context, insertVal interface{}) (uint64, error) {
 	data := t.sessionTableData(ctx)
 
-	cmp, err := types.Uint64.Compare(insertVal, data.autoIncVal)
+	cmp, err := types.Uint64.Compare(ctx, insertVal, data.autoIncVal)
 	if err != nil {
 		return 0, err
 	}
 
 	if cmp > 0 && insertVal != nil {
-		v, _, err := types.Uint64.Convert(insertVal)
+		v, _, err := types.Uint64.Convert(ctx, insertVal)
 		if err != nil {
 			return 0, err
 		}
 		data.autoIncVal = v.(uint64)
 	}
-
 	return data.autoIncVal, nil
 }
 
@@ -1167,7 +1234,7 @@ func addColumnToSchema(ctx *sql.Context, data *TableData, newCol *sql.Column, or
 	}
 
 	for _, newSchCol := range newSch {
-		newDefault, _, _ := transform.Expr(newSchCol.Default, func(expr sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+		newDefault, _, _ := transform.Expr(ctx, newSchCol.Default, func(ctx *sql.Context, expr sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 			if expr, ok := expr.(*expression.GetField); ok {
 				return expr.WithIndex(newSch.IndexOf(expr.Name(), data.tableName)), transform.NewTree, nil
 			}
@@ -1187,14 +1254,14 @@ func addColumnToSchema(ctx *sql.Context, data *TableData, newCol *sql.Column, or
 						continue
 					}
 
-					cmp, err := newCol.Type.Compare(row[newColIdx], data.autoIncVal)
+					cmp, err := newCol.Type.Compare(ctx, row[newColIdx], data.autoIncVal)
 					if err != nil {
 						panic(err)
 					}
 
 					if cmp > 0 {
 						var val interface{}
-						val, _, err = types.Uint64.Convert(row[newColIdx])
+						val, _, err = types.Uint64.Convert(ctx, row[newColIdx])
 						if err != nil {
 							panic(err)
 						}
@@ -1206,7 +1273,7 @@ func addColumnToSchema(ctx *sql.Context, data *TableData, newCol *sql.Column, or
 			data.autoIncVal = 0
 		}
 
-		data.autoIncVal++
+		updateAutoIncrementSafe(ctx, newCol, &data.autoIncVal)
 	}
 
 	newPkOrds := data.schema.PkOrdinals
@@ -1362,14 +1429,15 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 			var oldRowWithoutVal sql.Row
 			oldRowWithoutVal = append(oldRowWithoutVal, row[:oldIdx]...)
 			oldRowWithoutVal = append(oldRowWithoutVal, row[oldIdx+1:]...)
-			newVal, inRange, err := column.Type.Convert(row[oldIdx])
+			oldType := data.schema.Schema[oldIdx].Type
+			newVal, inRange, err := types.TypeAwareConversion(ctx, row[oldIdx], oldType, column.Type)
 			if err != nil {
 				if sql.ErrNotMatchingSRID.Is(err) {
 					err = sql.ErrNotMatchingSRIDWithColName.New(columnName, err)
 				}
 				return err
 			}
-			if !inRange {
+			if inRange != sql.InRange {
 				return sql.ErrValueOutOfRange.New(row[oldIdx], column.Type)
 			}
 			var newRow sql.Row
@@ -1421,7 +1489,7 @@ func (t *Table) ModifyColumn(ctx *sql.Context, columnName string, column *sql.Co
 }
 
 // PrimaryKeySchema implements sql.PrimaryKeyAlterableTable
-func (t *Table) PrimaryKeySchema() sql.PrimaryKeySchema {
+func (t *Table) PrimaryKeySchema(ctx *sql.Context) sql.PrimaryKeySchema {
 	return t.data.schema
 }
 
@@ -1432,7 +1500,7 @@ func (t *Table) String() string {
 
 var debugDataPrint = false
 
-func (t *Table) DebugString() string {
+func (t *Table) DebugString(ctx *sql.Context) string {
 	if debugDataPrint {
 		p := t.data.partitions["0"]
 		s := ""
@@ -1461,7 +1529,7 @@ func (t *Table) DebugString() string {
 	if len(t.filters) > 0 {
 		var filters []string
 		for _, filter := range t.filters {
-			filters = append(filters, fmt.Sprintf("%s", sql.DebugString(filter)))
+			filters = append(filters, fmt.Sprintf("%s", sql.DebugString(ctx, filter)))
 		}
 		children = append(children, fmt.Sprintf("filters: %s", filters))
 	}
@@ -1471,11 +1539,11 @@ func (t *Table) DebugString() string {
 }
 
 // HandledFilters implements the sql.FilteredTable interface.
-func (t *Table) HandledFilters(filters []sql.Expression) []sql.Expression {
+func (t *Table) HandledFilters(ctx *sql.Context, filters []sql.Expression) []sql.Expression {
 	var handled []sql.Expression
 	for _, f := range filters {
 		var hasOtherFields bool
-		sql.Inspect(f, func(e sql.Expression) bool {
+		sql.Inspect(ctx, f, func(ctx *sql.Context, e sql.Expression) bool {
 			if e, ok := e.(*expression.GetField); ok {
 				if e.Table() != t.name || !t.data.schema.Contains(e.Name(), t.name) {
 					hasOtherFields = true
@@ -1502,9 +1570,9 @@ type FilteredTable struct {
 
 var _ sql.FilteredTable = (*FilteredTable)(nil)
 
-func NewFilteredTable(db MemoryDatabase, name string, schema sql.PrimaryKeySchema, fkColl *ForeignKeyCollection) *FilteredTable {
+func NewFilteredTable(ctx *sql.Context, db MemoryDatabase, name string, schema sql.PrimaryKeySchema, fkColl *ForeignKeyCollection) *FilteredTable {
 	return &FilteredTable{
-		Table: NewTable(db, name, schema, fkColl),
+		Table: NewTable(ctx, db, name, schema, fkColl),
 	}
 }
 
@@ -1520,12 +1588,15 @@ func (t *FilteredTable) WithFilters(ctx *sql.Context, filters []sql.Expression) 
 }
 
 // WithProjections implements sql.ProjectedTable
-func (t *FilteredTable) WithProjections(schema []string) sql.Table {
-	table := t.Table.WithProjections(schema)
+func (t *FilteredTable) WithProjections(ctx *sql.Context, schema []string) (sql.Table, error) {
+	table, err := t.Table.WithProjections(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
 
 	nt := *t
 	nt.Table = table.(*Table)
-	return &nt
+	return &nt, nil
 }
 
 // Projections implements sql.ProjectedTable
@@ -1544,7 +1615,18 @@ var _ sql.StatisticsTable = (*IndexedTable)(nil)
 
 func (t *IndexedTable) LookupPartitions(ctx *sql.Context, lookup sql.IndexLookup) (sql.PartitionIter, error) {
 	memIdx := lookup.Index.(*Index)
-	filter, err := memIdx.rangeFilterExpr(ctx, lookup.Ranges...)
+
+	if lookup.VectorOrderAndLimit.OrderBy != nil {
+		return &vectorPartitionIter{
+			OrderAndLimit: lookup.VectorOrderAndLimit,
+		}, nil
+	}
+
+	lookupRanges, ok := lookup.Ranges.(sql.MySQLRangeCollection)
+	if !ok {
+		return nil, fmt.Errorf("expected MySQL ranges in memory indexed table")
+	}
+	filter, err := memIdx.rangeFilterExpr(ctx, lookupRanges...)
 	if err != nil {
 		return nil, err
 	}
@@ -1555,8 +1637,8 @@ func (t *IndexedTable) LookupPartitions(ctx *sql.Context, lookup sql.IndexLookup
 			return nil, err
 		}
 
-		lower := sql.GetRangeCutKey(lookup.Ranges[0][0].LowerBound)
-		upper := sql.GetRangeCutKey(lookup.Ranges[0][0].UpperBound)
+		lower := sql.GetMySQLRangeCutKey(lookupRanges[0][0].LowerBound)
+		upper := sql.GetMySQLRangeCutKey(lookupRanges[0][0].UpperBound)
 		minPoint, ok := lower.(types.Point)
 		if !ok {
 			return nil, sql.ErrInvalidGISData.New()
@@ -1589,7 +1671,7 @@ func (t *IndexedTable) LookupPartitions(ctx *sql.Context, lookup sql.IndexLookup
 		}, nil
 	}
 
-	indexFilter := adjustRangeScanFilterForIndexLookup(filter, memIdx)
+	indexFilter := adjustRangeScanFilterForIndexLookup(ctx, filter, memIdx)
 
 	return &indexScanPartitionIter{
 		index:  memIdx,
@@ -1598,7 +1680,7 @@ func (t *IndexedTable) LookupPartitions(ctx *sql.Context, lookup sql.IndexLookup
 	}, nil
 }
 
-func adjustRangeScanFilterForIndexLookup(filter sql.Expression, index *Index) sql.Expression {
+func adjustRangeScanFilterForIndexLookup(ctx *sql.Context, filter sql.Expression, index *Index) sql.Expression {
 	exprs := index.ExtendedExprs()
 
 	indexStorageSchema := make(sql.Schema, len(exprs))
@@ -1608,7 +1690,7 @@ func adjustRangeScanFilterForIndexLookup(filter sql.Expression, index *Index) sq
 		}
 	}
 
-	filter, _, err := transform.Expr(filter, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+	filter, _, err := transform.Expr(ctx, filter, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 		if gf, ok := e.(*expression.GetField); ok {
 			idxIdx := indexStorageSchema.IndexOfColName(gf.Name())
 			return gf.WithIndex(idxIdx), transform.NewTree, nil
@@ -1632,6 +1714,10 @@ func (t *IndexedTable) PartitionRows(ctx *sql.Context, partition sql.Partition) 
 
 	// Sorting code below is only for spatial indexes, which use a different partition iterator
 	if _, ok := partition.(indexScanPartition); ok {
+		return iter, nil
+	}
+
+	if _, ok := partition.(*vectorPartitionIter); ok {
 		return iter, nil
 	}
 
@@ -1668,7 +1754,7 @@ func (t *IndexedTable) PartitionRows(ctx *sql.Context, partition sql.Partition) 
 	return iter, nil
 }
 
-func (t *Table) IndexedAccess(lookup sql.IndexLookup) sql.IndexedTable {
+func (t *Table) IndexedAccess(ctx *sql.Context, lookup sql.IndexLookup) sql.IndexedTable {
 	return &IndexedTable{Table: t, Lookup: lookup}
 }
 
@@ -1677,17 +1763,17 @@ func (t *Table) PreciseMatch() bool {
 }
 
 // WithProjections implements sql.ProjectedTable
-func (t *Table) WithProjections(cols []string) sql.Table {
+func (t *Table) WithProjections(ctx *sql.Context, cols []string) (sql.Table, error) {
 	nt := *t
 	if cols == nil {
 		nt.projectedSchema = nil
 		nt.projection = nil
 		nt.columns = nil
-		return &nt
+		return &nt, nil
 	}
 	columns, err := nt.data.columnIndexes(cols)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	nt.columns = columns
@@ -1699,18 +1785,12 @@ func (t *Table) WithProjections(cols []string) sql.Table {
 	nt.projectedSchema = projectedSchema
 	nt.projection = cols
 
-	return &nt
+	return &nt, nil
 }
 
 // Projections implements sql.ProjectedTable
 func (t *Table) Projections() []string {
 	return t.projection
-}
-
-// EnablePrimaryKeyIndexes enables the use of primary key indexes on this table.
-func (t *Table) EnablePrimaryKeyIndexes() {
-	t.pkIndexesEnabled = true
-	t.data.primaryKeyIndexes = true
 }
 
 func (t *Table) dbName() string {
@@ -1726,24 +1806,22 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 
 	indexes := make([]sql.Index, 0)
 
-	if data.primaryKeyIndexes {
-		if len(data.schema.PkOrdinals) > 0 {
-			exprs := make([]sql.Expression, len(data.schema.PkOrdinals))
-			for i, ord := range data.schema.PkOrdinals {
-				column := data.schema.Schema[ord]
-				idx, field := data.getColumnOrdinal(column.Name)
-				exprs[i] = expression.NewGetFieldWithTable(idx, 0, field.Type, t.dbName(), t.name, field.Name, field.Nullable)
-			}
-			indexes = append(indexes, &Index{
-				DB:         t.dbName(),
-				DriverName: "",
-				Tbl:        t,
-				TableName:  t.name,
-				Exprs:      exprs,
-				Name:       "PRIMARY",
-				Unique:     true,
-			})
+	if len(data.schema.PkOrdinals) > 0 {
+		exprs := make([]sql.Expression, len(data.schema.PkOrdinals))
+		for i, ord := range data.schema.PkOrdinals {
+			column := data.schema.Schema[ord]
+			idx, field := data.getColumnOrdinal(column.Name)
+			exprs[i] = expression.NewGetFieldWithTable(idx, 0, field.Type, t.dbName(), t.name, field.Name, field.Nullable)
 		}
+		indexes = append(indexes, &Index{
+			DB:         t.dbName(),
+			DriverName: "",
+			Tbl:        t,
+			TableName:  t.name,
+			Exprs:      exprs,
+			Name:       "PRIMARY",
+			Unique:     true,
+		})
 	}
 
 	nonPrimaryIndexes := make([]sql.Index, len(data.indexes))
@@ -1763,7 +1841,7 @@ func (t *Table) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 func (t *Table) GetDeclaredForeignKeys(ctx *sql.Context) ([]sql.ForeignKeyConstraint, error) {
 	data := t.sessionTableData(ctx)
 
-	//TODO: may not be the best location, need to handle db as well
+	// TODO: may not be the best location, need to handle db as well
 	var fks []sql.ForeignKeyConstraint
 	lowerName := strings.ToLower(t.name)
 	for _, fk := range data.fkColl.Keys() {
@@ -1809,7 +1887,7 @@ func (t *Table) AddForeignKey(ctx *sql.Context, fk sql.ForeignKeyConstraint) err
 }
 
 // DropForeignKey implements sql.ForeignKeyTable.
-func (t *Table) DropForeignKey(ctx *sql.Context, fkName string) error {
+func (t *Table) DropForeignKey(ctx *sql.Context, fkName string, tableName string, schemaName string) error {
 	sess := SessionFromContext(ctx)
 	data := sess.tableData(t)
 
@@ -1901,11 +1979,11 @@ func (t *Table) DropCheck(ctx *sql.Context, chName string) error {
 			return nil
 		}
 	}
-	//TODO: add SQL error
+	// TODO: add SQL error
 	return fmt.Errorf("check '%s' was not found on the table", chName)
 }
 
-func (t *Table) createIndex(data *TableData, name string, columns []sql.IndexColumn, constraint sql.IndexConstraint, comment string) (sql.Index, error) {
+func (t *Table) createIndex(ctx *sql.Context, data *TableData, name string, columns []sql.IndexColumn, constraint sql.IndexConstraint, comment string) (sql.Index, error) {
 	if name == "" {
 		for _, column := range columns {
 			name += column.Name + "_"
@@ -1939,24 +2017,30 @@ func (t *Table) createIndex(data *TableData, name string, columns []sql.IndexCol
 	}
 
 	if constraint == sql.IndexConstraint_Unique {
-		err := data.errIfDuplicateEntryExist(colNames, name)
+		err := data.errIfDuplicateEntryExist(ctx, colNames, name)
 		if err != nil {
 			return nil, err
 		}
 	}
 
+	var vectorFunction vector.DistanceType
+	if constraint == sql.IndexConstraint_Vector {
+		vectorFunction = vector.DistanceL2Squared{}
+	}
+
 	return &Index{
-		DB:         t.dbName(),
-		DriverName: "",
-		Tbl:        t,
-		TableName:  t.name,
-		Exprs:      exprs,
-		Name:       name,
-		Unique:     constraint == sql.IndexConstraint_Unique,
-		Spatial:    constraint == sql.IndexConstraint_Spatial,
-		Fulltext:   constraint == sql.IndexConstraint_Fulltext,
-		CommentStr: comment,
-		PrefixLens: prefixLengths,
+		DB:                      t.dbName(),
+		DriverName:              "",
+		Tbl:                     t,
+		TableName:               t.name,
+		Exprs:                   exprs,
+		Name:                    name,
+		Unique:                  constraint == sql.IndexConstraint_Unique,
+		Spatial:                 constraint == sql.IndexConstraint_Spatial,
+		Fulltext:                constraint == sql.IndexConstraint_Fulltext,
+		SupportedVectorFunction: vectorFunction,
+		CommentStr:              comment,
+		PrefixLens:              prefixLengths,
 	}, nil
 }
 
@@ -1969,7 +2053,7 @@ func (t *Table) CreateIndex(ctx *sql.Context, idx sql.IndexDef) error {
 		data.indexes = make(map[string]sql.Index)
 	}
 
-	index, err := t.createIndex(data, idx.Name, idx.Columns, idx.Constraint, idx.Comment)
+	index, err := t.createIndex(ctx, data, idx.Name, idx.Columns, idx.Constraint, idx.Comment)
 	if err != nil {
 		return err
 	}
@@ -2035,7 +2119,7 @@ func (t *Table) CreateFulltextIndex(ctx *sql.Context, indexDef sql.IndexDef, key
 		data.indexes = make(map[string]sql.Index)
 	}
 
-	index, err := t.createIndex(data, indexDef.Name, indexDef.Columns, indexDef.Constraint, indexDef.Comment)
+	index, err := t.createIndex(ctx, data, indexDef.Name, indexDef.Columns, indexDef.Constraint, indexDef.Comment)
 	if err != nil {
 		return err
 	}
@@ -2054,6 +2138,31 @@ func (t *Table) CreateFulltextIndex(ctx *sql.Context, indexDef sql.IndexDef, key
 	return nil
 }
 
+func (t *Table) CreateVectorIndex(ctx *sql.Context, idx sql.IndexDef, distanceType vector.DistanceType) error {
+	if len(idx.Columns) > 1 {
+		return fmt.Errorf("vector indexes must have exactly one column")
+	}
+
+	sess := SessionFromContext(ctx)
+	data := sess.tableData(t)
+
+	if data.indexes == nil {
+		data.indexes = make(map[string]sql.Index)
+	}
+
+	index, err := t.createIndex(ctx, data, idx.Name, idx.Columns, idx.Constraint, idx.Comment)
+	if err != nil {
+		return err
+	}
+	index.(*Index).SupportedVectorFunction = distanceType
+
+	// Store the computed index name in the case of an empty index name being passed in
+	data.indexes[strings.ToLower(index.ID())] = index
+	sess.putTable(data)
+
+	return nil
+}
+
 // ModifyStoredCollation implements sql.CollationAlterableTable
 func (t *Table) ModifyStoredCollation(ctx *sql.Context, collation sql.CollationID) error {
 	return fmt.Errorf("converting the collations of columns is not yet supported")
@@ -2064,6 +2173,13 @@ func (t *Table) ModifyDefaultCollation(ctx *sql.Context, collation sql.Collation
 	data := t.sessionTableData(ctx)
 
 	data.collation = collation
+	return nil
+}
+
+// ModifyComment implements sql.CommentAlterableTable
+func (t *Table) ModifyComment(ctx *sql.Context, comment string) error {
+	data := t.sessionTableData(ctx)
+	data.comment = comment
 	return nil
 }
 
@@ -2111,8 +2227,8 @@ func (t *Table) CreatePrimaryKey(ctx *sql.Context, columns []sql.IndexColumn) er
 }
 
 type pkfield struct {
-	i int
 	c *sql.Column
+	i int
 }
 
 type partitionRow struct {
@@ -2121,10 +2237,11 @@ type partitionRow struct {
 }
 
 type partitionssort struct {
-	pk      []pkfield
+	ctx     *sql.Context
 	ps      map[string][]sql.Row
-	allRows []partitionRow
 	indexes map[indexName][]sql.Row
+	pk      []pkfield
+	allRows []partitionRow
 }
 
 func (ps partitionssort) Len() int {
@@ -2141,7 +2258,7 @@ func (ps partitionssort) Less(i, j int) bool {
 
 func (ps partitionssort) pkLess(l, r sql.Row) bool {
 	for _, f := range ps.pk {
-		r, err := f.c.Type.Compare(l[f.i], r[f.i])
+		r, err := f.c.Type.Compare(ps.ctx, l[f.i], r[f.i])
 		if err != nil {
 			panic(err)
 		}
@@ -2220,7 +2337,7 @@ func normalizeSchemaForRewrite(newSch sql.PrimaryKeySchema) sql.PrimaryKeySchema
 func (t *Table) DropPrimaryKey(ctx *sql.Context) error {
 	data := t.sessionTableData(ctx)
 
-	err := sql.ValidatePrimaryKeyDrop(ctx, t, t.PrimaryKeySchema())
+	err := sql.ValidatePrimaryKeyDrop(ctx, t, t.PrimaryKeySchema(ctx))
 	if err != nil {
 		return err
 	}
@@ -2452,4 +2569,22 @@ func (t *TableRevision) AddColumn(ctx *sql.Context, column *sql.Column, order *s
 
 func (t *TableRevision) IgnoreSessionData() bool {
 	return true
+}
+
+// updateAutoIncrementSafe safely increments an auto_increment value, handling overflow
+// by ensuring it doesn't exceed the column type's maximum value or wrap around.
+func updateAutoIncrementSafe(ctx *sql.Context, autoCol *sql.Column, autoIncVal *uint64) {
+	currentVal := *autoIncVal
+
+	// Check for arithmetic overflow before adding 1
+	if currentVal == math.MaxUint64 {
+		// At maximum uint64 value, can't increment further
+		return
+	}
+
+	nextVal := currentVal + 1
+	if _, inRange, err := autoCol.Type.Convert(ctx, nextVal); err == nil && inRange == sql.InRange {
+		*autoIncVal = nextVal
+	}
+	// If next value would be out of range for the column type, stay at current value
 }

@@ -24,8 +24,6 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/expression"
 )
 
-var ErrMergeJoinExpectsComparerFilters = errors.New("merge join expects expression.Comparer filters, found: %T")
-
 // NewMergeJoin returns a node that performs a presorted merge join on
 // two relations. We require 1) the join filter is an equality with disjoint
 // join attributes, 2) the free attributes for a relation are a prefix for
@@ -48,7 +46,7 @@ func newMergeJoinIter(ctx *sql.Context, b sql.NodeExecBuilder, j *plan.JoinNode,
 		return nil, err
 	}
 
-	fullRow := make(sql.Row, len(row)+len(j.Left().Schema())+len(j.Right().Schema()))
+	fullRow := make(sql.Row, len(row)+len(j.Left().Schema(ctx))+len(j.Right().Schema(ctx)))
 	fullRow[0] = row
 	if len(row) > 0 {
 		copy(fullRow[0:], row[:])
@@ -56,10 +54,17 @@ func newMergeJoinIter(ctx *sql.Context, b sql.NodeExecBuilder, j *plan.JoinNode,
 
 	// a merge join's first filter provides direction information
 	// for which iter to update next
-	filters := expression.SplitConjunction(j.Filter)
+	filters := expression.SplitConjunction(ctx, j.Filter)
 	cmp, ok := filters[0].(expression.Comparer)
 	if !ok {
-		return nil, sql.ErrMergeJoinExpectsComparerFilters.New(filters[0])
+		if eq, ok := filters[0].(expression.Equality); ok && eq.RepresentsEquality() {
+			cmp, err = eq.ToComparer(ctx)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, sql.ErrMergeJoinExpectsComparerFilters.New(filters[0])
+		}
 	}
 
 	if len(filters) == 0 {
@@ -75,8 +80,9 @@ func newMergeJoinIter(ctx *sql.Context, b sql.NodeExecBuilder, j *plan.JoinNode,
 		fullRow:     fullRow,
 		scopeLen:    j.ScopeLen,
 		parentLen:   len(row) - j.ScopeLen,
-		leftRowLen:  len(j.Left().Schema()),
-		rightRowLen: len(j.Right().Schema()),
+		leftRowLen:  len(j.Left().Schema(ctx)),
+		rightRowLen: len(j.Right().Schema(ctx)),
+		isReversed:  j.IsReversed,
 	}
 	return iter, nil
 }
@@ -88,38 +94,40 @@ func newMergeJoinIter(ctx *sql.Context, b sql.NodeExecBuilder, j *plan.JoinNode,
 // are evaluated separately.
 type mergeJoinIter struct {
 	// cmp is a directional indicator for row iter increments
-	cmp expression.Comparer
+	cmp   expression.Comparer
+	left  sql.RowIter
+	right sql.RowIter
+
 	// filters is the remaining set of join conditions
 	filters []sql.Expression
-	left    sql.RowIter
-	right   sql.RowIter
-	fullRow sql.Row
 
 	// match lookahead buffers and state tracking (private to match)
 	rightBuf  []sql.Row
-	bufI      int
 	rightPeek sql.Row
 	leftPeek  sql.Row
-	rightDone bool
-	leftDone  bool
+	fullRow   sql.Row
 
-	// matchIncLeft indicates whether the most recent |i.incMatch|
-	// call incremented the left row.
-	matchIncLeft bool
-	// leftMatched indicates whether the current left in |i.fullRow|
-	// has satisfied the join condition.
-	leftMatched bool
+	bufI        int
+	parentLen   int
+	leftRowLen  int
+	rightRowLen int
+	scopeLen    int
+
+	leftDone  bool
+	rightDone bool
 
 	// lifecycle maintenance
 	init           bool
 	leftExhausted  bool
 	rightExhausted bool
+	// leftMatched indicates whether the current left in |i.fullRow| has satisfied the join condition.
+	leftMatched bool
+	// matchIncLeft indicates whether the most recent |i.incMatch| call incremented the left row.
+	matchIncLeft bool
+	// isReversed indicates if this join is over two reversed indexes.
+	isReversed bool
 
-	typ         plan.JoinType
-	scopeLen    int
-	leftRowLen  int
-	rightRowLen int
-	parentLen   int
+	typ plan.JoinType
 }
 
 var _ sql.RowIter = (*mergeJoinIter)(nil)
@@ -175,7 +183,7 @@ func (i *mergeJoinIter) Next(ctx *sql.Context) (sql.Row, error) {
 	// We use two variables to manage the lookahead state management.
 	// |matchedleft| is a forward-looking indicator of whether the current left
 	// row has satisfied a join condition. It is reset to false when we
-	// increment left. |matchincleft| is true when the most recent call to
+	// increment left. |matchingleft| is true when the most recent call to
 	// |incmatch| incremented the left row. The two vars combined let us
 	// lookahead during msSelect to 1) identify proper nullified row matches,
 	// and 2) maintain forward-looking state for the next |i.fullrow|.
@@ -208,6 +216,11 @@ func (i *mergeJoinIter) Next(ctx *sql.Context) (sql.Row, error) {
 			} else if err != nil {
 				return nil, err
 			}
+			// merge join assumes children are sorted in ascending order, so we need to invert the comparison to
+			// iterate over descending order.
+			if i.isReversed {
+				res = -res
+			}
 			switch {
 			case res < 0:
 				if i.typ.IsLeftOuter() {
@@ -239,9 +252,15 @@ func (i *mergeJoinIter) Next(ctx *sql.Context) (sql.Row, error) {
 			}
 		case msIncLeft:
 			err = i.incLeft(ctx)
+			if err != nil {
+				return nil, err
+			}
 			nextState = msExhaustCheck
 		case msIncRight:
 			err = i.incRight(ctx)
+			if err != nil {
+				return nil, err
+			}
 			nextState = msExhaustCheck
 		case msSelect:
 			ret = i.copyReturnRow()
@@ -357,7 +376,7 @@ func (i *mergeJoinIter) incMatch(ctx *sql.Context) error {
 
 	if !i.leftDone {
 		// rightBuf has already been validated, we don't need compare
-		copySubslice(i.fullRow, i.rightBuf[i.bufI], i.scopeLen+i.parentLen+i.leftRowLen)
+		copy(i.fullRow[i.scopeLen+i.parentLen+i.leftRowLen:], i.rightBuf[i.bufI])
 		i.bufI++
 		return nil
 	}
@@ -457,8 +476,11 @@ func (i *mergeJoinIter) peekMatch(ctx *sql.Context, iter sql.RowIter) (bool, sql
 		return false, nil, err
 	}
 
+	// strip outer scope rows from peek
+	peek = peek[i.scopeLen:]
+
 	// check if lookahead valid
-	copySubslice(i.fullRow, peek, off)
+	copy(i.fullRow[off:], peek)
 	res, err := i.cmp.Compare(ctx, i.fullRow)
 	if expression.ErrNilOperand.Is(err) {
 		// revert change to output row if no match
@@ -468,7 +490,7 @@ func (i *mergeJoinIter) peekMatch(ctx *sql.Context, iter sql.RowIter) (bool, sql
 	}
 	if res != 0 {
 		// revert change to output row if no match
-		copySubslice(i.fullRow, restore, off)
+		copy(i.fullRow[off:], restore)
 	}
 	return res == 0, peek, nil
 }
@@ -480,9 +502,7 @@ func (i *mergeJoinIter) exhausted() bool {
 
 // copySubslice copies |src| into |dst| starting at index |off|
 func copySubslice(dst, src sql.Row, off int) {
-	for i, v := range src {
-		dst[off+i] = v
-	}
+	copy(dst[off:], src)
 }
 
 // incLeft updates |i.fullRow|'s left row
@@ -501,12 +521,11 @@ func (i *mergeJoinIter) incLeft(ctx *sql.Context) error {
 		} else if err != nil {
 			return err
 		}
+		// strip outer scope rows from row
+		row = row[i.scopeLen:]
 	}
 
-	off := i.scopeLen + i.parentLen
-	for j, v := range row {
-		i.fullRow[off+j] = v
-	}
+	copy(i.fullRow[i.scopeLen+i.parentLen:], row)
 
 	return nil
 }
@@ -526,12 +545,11 @@ func (i *mergeJoinIter) incRight(ctx *sql.Context) error {
 		} else if err != nil {
 			return err
 		}
+		// strip outer scope rows from row
+		row = row[i.scopeLen:]
 	}
 
-	off := i.scopeLen + i.parentLen + i.leftRowLen
-	for j, v := range row {
-		i.fullRow[off+j] = v
-	}
+	copy(i.fullRow[i.scopeLen+i.parentLen+i.leftRowLen:], row)
 
 	return nil
 }

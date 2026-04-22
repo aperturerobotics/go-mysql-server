@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"math"
 	"reflect"
 
@@ -35,8 +36,8 @@ type MultiPolygonType struct {
 
 // MultiPolygon is the value type returned from MultiPolygonType. Implements GeometryValue.
 type MultiPolygon struct {
-	SRID     uint32
 	Polygons []Polygon
+	SRID     uint32
 }
 
 var (
@@ -51,30 +52,36 @@ var _ sql.CollationCoercible = MultiPolygonType{}
 var _ GeometryValue = MultiPolygon{}
 
 // Compare implements Type interface.
-func (t MultiPolygonType) Compare(a interface{}, b interface{}) (int, error) {
-	return GeometryType{}.Compare(a, b)
+func (t MultiPolygonType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+	return GeometryType{}.Compare(ctx, a, b)
 }
 
 // Convert implements Type interface.
-func (t MultiPolygonType) Convert(v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t MultiPolygonType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
 	switch buf := v.(type) {
 	case nil:
 		return nil, sql.InRange, nil
 	case []byte:
-		mpoly, _, err := GeometryType{}.Convert(buf)
+		mpoly, _, err := GeometryType{}.Convert(ctx, buf)
 		if sql.ErrInvalidGISData.Is(err) {
-			return nil, sql.OutOfRange, sql.ErrInvalidGISData.New("MultiPolygon.Convert")
+			return nil, sql.InRange, sql.ErrInvalidGISData.New("MultiPolygon.Convert")
 		}
-		return mpoly, sql.OutOfRange, err
+		return mpoly, sql.InRange, err
 	case string:
-		return t.Convert([]byte(buf))
+		return t.Convert(ctx, []byte(buf))
 	case MultiPolygon:
 		if err := t.MatchSRID(buf); err != nil {
-			return nil, sql.OutOfRange, err
+			return nil, sql.InRange, err
 		}
 		return buf, sql.InRange, nil
+	case sql.AnyWrapper:
+		unwrapped, err := buf.UnwrapAny(ctx)
+		if err != nil {
+			return nil, sql.InRange, err
+		}
+		return t.Convert(ctx, unwrapped)
 	default:
-		return nil, sql.OutOfRange, sql.ErrSpatialTypeConversion.New()
+		return nil, sql.InRange, sql.ErrSpatialTypeConversion.New()
 	}
 }
 
@@ -100,7 +107,7 @@ func (t MultiPolygonType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sql
 		return sqltypes.NULL, nil
 	}
 
-	v, _, err := t.Convert(v)
+	v, _, err := t.Convert(ctx, v)
 	if err != nil {
 		return sqltypes.Value{}, nil
 	}

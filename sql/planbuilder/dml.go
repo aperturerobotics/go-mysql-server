@@ -34,6 +34,9 @@ func (b *Builder) buildInsert(inScope *scope, i *ast.Insert) (outScope *scope) {
 	sql.IncrementStatusVariable(b.ctx, "Com_insert", 1)
 	b.qFlags.Set(sql.QFlagInsert)
 
+	if err := b.cat.AuthorizationHandler().HandleAuth(b.ctx, b.authQueryState, i.Auth); err != nil && b.authEnabled {
+		b.handleErr(err)
+	}
 	if i.With != nil {
 		inScope = b.buildWith(inScope, i.With)
 	}
@@ -70,20 +73,16 @@ func (b *Builder) buildInsert(inScope *scope, i *ast.Insert) (outScope *scope) {
 		// them all in now that the destination is resolved.
 		// TODO: setting the plan field directly is not great
 		if len(columns) == 0 && len(destScope.cols) > 0 && rt != nil {
-			schema := rt.Schema()
+			schema := rt.Schema(b.ctx)
 			columns = make([]string, len(schema))
 			for i, col := range schema {
-				// Tables with any generated column must always supply a column list, so this is always an error
-				if col.Generated != nil {
-					b.handleErr(sql.ErrGeneratedColumnValue.New(col.Name, rt.Name()))
-				}
 				columns[i] = col.Name
 			}
 		}
 	}
-	sch := destScope.node.Schema()
+	sch := destScope.node.Schema(b.ctx)
 	if rt != nil {
-		sch = b.resolveSchemaDefaults(destScope, rt.Schema())
+		sch = b.resolveSchemaDefaults(destScope, rt.Schema(b.ctx))
 	}
 
 	insertRows := i.Rows
@@ -108,7 +107,7 @@ func (b *Builder) buildInsert(inScope *scope, i *ast.Insert) (outScope *scope) {
 
 	srcScope, srcLiteralOnly := b.insertRowsToNode(inScope, insertRows, columns, i.Table.Name.String(), sch)
 
-	var onDupExprs []sql.Expression
+	var onDupUpdateExprs *plan.UpdateExprs
 	if len(i.OnDup) > 0 {
 		// TODO: on duplicate expressions need to reference both VALUES and
 		//  derived columns equally in ON DUPLICATE UPDATE expressions.
@@ -117,9 +116,8 @@ func (b *Builder) buildInsert(inScope *scope, i *ast.Insert) (outScope *scope) {
 		combinedScope.insertColumnAliases = inScope.insertColumnAliases
 		for i, c := range destScope.cols {
 			combinedScope.newColumn(c)
-			if len(srcScope.cols) == len(destScope.cols) {
-				combinedScope.newColumn(srcScope.cols[i])
-			} else {
+			// if the srcScope is empty, it is a values statement
+			if len(srcScope.cols) == 0 {
 				// The to-be-inserted values can be referenced via the provided alias.
 				c.table = combinedScope.insertTableAlias
 				if len(combinedScope.insertColumnAliases) > 0 {
@@ -128,9 +126,13 @@ func (b *Builder) buildInsert(inScope *scope, i *ast.Insert) (outScope *scope) {
 					c.originalCol = aliasColumnName
 				}
 				combinedScope.newColumn(c)
+				continue
+			}
+			if i < len(srcScope.cols) {
+				combinedScope.newColumn(srcScope.cols[i])
 			}
 		}
-		onDupExprs = b.buildOnDupUpdateExprs(combinedScope, destScope, ast.AssignmentExprs(i.OnDup))
+		onDupUpdateExprs = b.buildOnDupUpdateExprs(combinedScope, destScope, sch, ast.AssignmentExprs(i.OnDup))
 	}
 
 	ignore := false
@@ -141,8 +143,14 @@ func (b *Builder) buildInsert(inScope *scope, i *ast.Insert) (outScope *scope) {
 
 	dest := destScope.node
 
-	ins := plan.NewInsertInto(db, plan.NewInsertDestination(sch, dest), srcScope.node, isReplace, columns, onDupExprs, ignore)
+	ins := plan.NewInsertInto(db, plan.NewInsertDestination(sch, dest), srcScope.node, isReplace, columns, onDupUpdateExprs, ignore)
 	ins.LiteralValueSource = srcLiteralOnly
+
+	if len(i.Returning) > 0 {
+		// TODO: read returning results from outScope instead of ins.Returning so that there is no need to return list
+		// of expressions
+		ins.Returning = b.analyzeSelectList(destScope, destScope, i.Returning)
+	}
 
 	b.validateInsert(ins)
 
@@ -225,7 +233,7 @@ func (b *Builder) buildInsertValues(inScope *scope, v *ast.AliasedValues, column
 				exprs[j] = expression.WrapExpression(columnDefaultValues[j])
 				// explicit DEFAULT values need their column indexes assigned early, since we analyze the insert values in
 				// isolation (no access to the destination schema)
-				exprs[j] = assignColumnIndexes(exprs[j], reorderSchema(columnNames, destSchema))
+				exprs[j] = assignColumnIndexes(b.ctx, exprs[j], reorderSchema(columnNames, destSchema))
 			case *ast.SQLVal:
 				// In the case of an unknown bindvar, give it a target type of the column it's targeting.
 				// We only do this for simple bindvars in tuples, not expressions that contain bindvars.
@@ -262,7 +270,8 @@ func reorderSchema(names []string, schema sql.Schema) sql.Schema {
 	return newSch
 }
 
-func (b *Builder) assignmentExprsToExpressions(inScope *scope, e ast.AssignmentExprs) []sql.Expression {
+// TODO: Consider combining this function with buildOnDupUpdateExprs since there's a lot of similar and repeated code
+func (b *Builder) assignmentExprsToUpdateExprs(inScope *scope, e ast.AssignmentExprs) *plan.UpdateExprs {
 	updateExprs := make([]sql.Expression, len(e))
 	var startAggCnt int
 	if inScope.groupBy != nil {
@@ -273,7 +282,7 @@ func (b *Builder) assignmentExprsToExpressions(inScope *scope, e ast.AssignmentE
 		startWinCnt = len(inScope.windowFuncs)
 	}
 
-	tableSch := b.resolveSchemaDefaults(inScope, inScope.node.Schema())
+	tableSch := b.resolveSchemaDefaults(inScope, inScope.node.Schema(b.ctx))
 
 	for i, updateExpr := range e {
 		colName := b.buildScalar(inScope, updateExpr.Name)
@@ -283,16 +292,25 @@ func (b *Builder) assignmentExprsToExpressions(inScope *scope, e ast.AssignmentE
 			colIdx := tableSch.IndexOfColName(gf.Name())
 			// TODO: during trigger parsing the table in the node is unresolved, so we need this additional bounds check
 			//  This means that trigger execution will be able to update generated columns
-			// Prevent update of generated columns
-			if colIdx >= 0 && tableSch[colIdx].Generated != nil {
+
+			// Check if this is a DEFAULT expression for a generated column
+			_, isDefaultExpr := updateExpr.Expr.(*ast.Default)
+
+			// Prevent update of generated columns, but allow DEFAULT
+			if colIdx >= 0 && tableSch[colIdx].Generated != nil && !isDefaultExpr {
 				err := sql.ErrGeneratedColumnValue.New(tableSch[colIdx].Name, inScope.node.(sql.NameableNode).Name())
 				b.handleErr(err)
 			}
 
 			// Replace default with column default from resolved schema
-			if _, ok := updateExpr.Expr.(*ast.Default); ok {
+			if isDefaultExpr {
 				if colIdx >= 0 {
-					innerExpr = expression.WrapExpression(tableSch[colIdx].Default)
+					// For generated columns, use the generated expression as the default
+					if tableSch[colIdx].Generated != nil {
+						innerExpr = expression.WrapExpression(tableSch[colIdx].Generated)
+					} else {
+						innerExpr = expression.WrapExpression(tableSch[colIdx].Default)
+					}
 				}
 			}
 		}
@@ -300,7 +318,7 @@ func (b *Builder) assignmentExprsToExpressions(inScope *scope, e ast.AssignmentE
 		// In the case of an unknown bindvar, give it a target type of the column it's targeting.
 		// We only do this for simple bindvars in tuples, not expressions that contain bindvars.
 		if innerSqlVal, ok := updateExpr.Expr.(*ast.SQLVal); ok && b.shouldAssignBindvarType(innerSqlVal) {
-			if typ, ok := hasColumnType(colName); ok {
+			if typ, ok := hasColumnType(b.ctx, colName); ok {
 				rightBindVar := innerExpr.(*expression.BindVar)
 				rightBindVar.Typ = typ
 				innerExpr = rightBindVar
@@ -322,27 +340,30 @@ func (b *Builder) assignmentExprsToExpressions(inScope *scope, e ast.AssignmentE
 		}
 	}
 
-	// We need additional update expressions for any generated columns and on update expressions, since they won't be part of the update
-	// expressions, but their value in the row must be updated before being passed to the integrator for storage.
-	if len(tableSch) > 0 {
-		tabId := inScope.tables[strings.ToLower(tableSch[0].Source)]
-		for i, col := range tableSch {
+	return plan.NewUpdateExprs(b.addDependentUpdateExprs(inScope, tableSch, updateExprs), len(e))
+}
+
+// addDependentUpdateExprs adds update expressions for any generated columns and ON UPDATE expressions since their
+// values still need to be updated despite not being part of an explicit update expression
+func (b *Builder) addDependentUpdateExprs(inScope *scope, schema sql.Schema, updateExprs []sql.Expression) []sql.Expression {
+	if len(schema) > 0 {
+		tabId := inScope.tables[strings.ToLower(schema[0].Source)]
+		for i, col := range schema {
 			if col.Generated != nil {
 				colGf := expression.NewGetFieldWithTable(i+1, int(tabId), col.Type, col.DatabaseSource, col.Source, col.Name, col.Nullable)
 				generated := b.resolveColumnDefaultExpression(inScope, col, col.Generated)
-				updateExprs = append(updateExprs, expression.NewSetField(colGf, assignColumnIndexes(generated, tableSch)))
+				updateExprs = append(updateExprs, expression.NewSetField(colGf, assignColumnIndexes(b.ctx, generated, schema)))
 			}
 			if col.OnUpdate != nil {
 				// don't add if column is already being updated
 				if !isColumnUpdated(col, updateExprs) {
 					colGf := expression.NewGetFieldWithTable(i+1, int(tabId), col.Type, col.DatabaseSource, col.Source, col.Name, col.Nullable)
 					onUpdate := b.resolveColumnDefaultExpression(inScope, col, col.OnUpdate)
-					updateExprs = append(updateExprs, expression.NewSetField(colGf, assignColumnIndexes(onUpdate, tableSch)))
+					updateExprs = append(updateExprs, expression.NewSetField(colGf, assignColumnIndexes(b.ctx, onUpdate, schema)))
 				}
 			}
 		}
 	}
-
 	return updateExprs
 }
 
@@ -363,12 +384,13 @@ func isColumnUpdated(col *sql.Column, updateExprs []sql.Expression) bool {
 	return false
 }
 
-func (b *Builder) buildOnDupUpdateExprs(combinedScope, destScope *scope, e ast.AssignmentExprs) []sql.Expression {
+// TODO: consider combining this function with assignmentExprsToUpdateExprs since there's a lot of similar repeated code
+func (b *Builder) buildOnDupUpdateExprs(combinedScope, destScope *scope, schema sql.Schema, e ast.AssignmentExprs) *plan.UpdateExprs {
 	b.insertActive = true
 	defer func() {
 		b.insertActive = false
 	}()
-	res := make([]sql.Expression, len(e))
+	updateExprs := make([]sql.Expression, len(e))
 	// todo(max): prevent aggregations in separate semantic walk step
 	var startAggCnt int
 	if combinedScope.groupBy != nil {
@@ -382,21 +404,22 @@ func (b *Builder) buildOnDupUpdateExprs(combinedScope, destScope *scope, e ast.A
 		colName := b.buildOnDupLeft(destScope, updateExpr.Name)
 		innerExpr := b.buildScalar(combinedScope, updateExpr.Expr)
 
-		res[i] = expression.NewSetField(colName, innerExpr)
+		updateExprs[i] = expression.NewSetField(colName, innerExpr)
 		if combinedScope.groupBy != nil {
 			if len(combinedScope.groupBy.aggs) > startAggCnt {
-				err := sql.ErrAggregationUnsupported.New(res[i])
+				err := sql.ErrAggregationUnsupported.New(updateExprs[i])
 				b.handleErr(err)
 			}
 		}
 		if combinedScope.windowFuncs != nil {
 			if len(combinedScope.windowFuncs) > startWinCnt {
-				err := sql.ErrWindowUnsupported.New(res[i])
+				err := sql.ErrWindowUnsupported.New(updateExprs[i])
 				b.handleErr(err)
 			}
 		}
 	}
-	return res
+
+	return plan.NewUpdateExprs(b.addDependentUpdateExprs(destScope, schema, updateExprs), len(e))
 }
 
 func (b *Builder) buildOnDupLeft(inScope *scope, e ast.Expr) sql.Expression {
@@ -430,6 +453,14 @@ func (b *Builder) buildDelete(inScope *scope, d *ast.Delete) (outScope *scope) {
 	b.qFlags.Set(sql.QFlagDelete)
 
 	outScope = b.buildFrom(inScope, d.TableExprs)
+
+	// Capture the table node for simple DELETEs before buildWhere wraps it
+	var targets []sql.Node
+	var hasExplicitTargets bool
+	if len(d.Targets) == 0 {
+		targets = []sql.Node{outScope.node}
+	}
+
 	b.buildWhere(outScope, d.Where)
 	orderByScope := b.analyzeOrderBy(outScope, outScope, d.OrderBy)
 	b.buildOrderBy(outScope, orderByScope)
@@ -442,14 +473,14 @@ func (b *Builder) buildDelete(inScope *scope, d *ast.Delete) (outScope *scope) {
 		outScope.node = plan.NewLimit(limit, outScope.node)
 	}
 
-	var targets []sql.Node
 	if len(d.Targets) > 0 {
+		hasExplicitTargets = true
 		targets = make([]sql.Node, len(d.Targets))
 		for i, tableName := range d.Targets {
 			tabName := tableName.Name.String()
 			var target sql.Node
 			if _, ok := outScope.tables[tabName]; ok {
-				transform.InspectUp(outScope.node, func(n sql.Node) bool {
+				transform.InspectUp(b.ctx, outScope.node, func(ctx *sql.Context, n sql.Node) bool {
 					switch n := n.(type) {
 					case sql.NameableNode:
 						if strings.EqualFold(n.Name(), tabName) {
@@ -471,13 +502,23 @@ func (b *Builder) buildDelete(inScope *scope, d *ast.Delete) (outScope *scope) {
 		}
 	}
 
-	del := plan.NewDeleteFrom(outScope.node, targets)
+	del := plan.NewDeleteFrom(outScope.node, targets, hasExplicitTargets)
 	del.RefsSingleRel = !outScope.refsSubquery
 	del.IsProcNested = b.ProcCtx().DbName != ""
 	outScope.node = del
+
+	if len(d.Returning) > 0 {
+		del.Returning = b.analyzeSelectList(outScope, outScope, d.Returning)
+	}
+
 	return
 }
 
+// buildUpdate builds a Update node from |u|. If the update joins tables, the returned Update node's
+// children will have a JoinNode, which will later be replaced by an UpdateJoin node during analysis. We
+// don't create the UpdateJoin node here, because some query plans, such as IN SUBQUERY nodes, require
+// analyzer processing that converts the subquery into a join, and then requires the same logic to
+// create an UpdateJoin node under the original Update node.
 func (b *Builder) buildUpdate(inScope *scope, u *ast.Update) (outScope *scope) {
 	// TODO: this shouldn't be called during ComPrepare or `PREPARE ... FROM ...` statements, but currently it is.
 	//   The end result is that the ComDelete counter is incremented during prepare statements, which is incorrect.
@@ -489,7 +530,7 @@ func (b *Builder) buildUpdate(inScope *scope, u *ast.Update) (outScope *scope) {
 	_, foundJoin := outScope.node.(*plan.JoinNode)
 
 	// default expressions only resolve to target table
-	updateExprs := b.assignmentExprsToExpressions(outScope, u.Exprs)
+	updateExprs := b.assignmentExprsToUpdateExprs(outScope, u.Exprs)
 
 	b.buildWhere(outScope, u.Where)
 
@@ -520,46 +561,28 @@ func (b *Builder) buildUpdate(inScope *scope, u *ast.Update) (outScope *scope) {
 	update.IsProcNested = b.ProcCtx().DbName != ""
 
 	var checks []*sql.CheckConstraint
-	if join, ok := outScope.node.(*plan.JoinNode); ok {
-		// TODO this doesn't work, a lot of the time the top node
-		// is a filter. This would have to go before we build the
-		// filter/accessory nodes. But that errors for a lot of queries.
-		source := plan.NewUpdateSource(
-			join,
-			ignore,
-			updateExprs,
-		)
-		updaters, err := rowUpdatersByTable(b.ctx, source, join)
+	if hasJoinNode(b.ctx, outScope.node) {
+		tablesToUpdate, err := getResolvedTablesToUpdate(b.ctx, update.Child, outScope.node)
 		if err != nil {
 			b.handleErr(err)
 		}
-		updateJoin := plan.NewUpdateJoin(updaters, source)
-		update.Child = updateJoin
-		transform.Inspect(update, func(n sql.Node) bool {
-			// todo maybe this should be later stage
-			switch n := n.(type) {
-			case sql.NameableNode:
-				if _, ok := updaters[n.Name()]; ok {
-					rt := getResolvedTable(n)
-					tableScope := inScope.push()
-					for _, c := range rt.Schema() {
-						tableScope.addColumn(scopeColumn{
-							db:       rt.SqlDatabase.Name(),
-							table:    strings.ToLower(n.Name()),
-							tableId:  tableScope.tables[strings.ToLower(n.Name())],
-							col:      strings.ToLower(c.Name),
-							typ:      c.Type,
-							nullable: c.Nullable,
-						})
-					}
-					checks = append(checks, b.loadChecksFromTable(tableScope, rt.Table)...)
-				}
-			default:
+
+		for _, rt := range tablesToUpdate {
+			tableScope := inScope.push()
+			for _, c := range rt.Schema(b.ctx) {
+				tableScope.addColumn(scopeColumn{
+					db:       rt.SqlDatabase.Name(),
+					table:    strings.ToLower(rt.Name()),
+					tableId:  tableScope.tables[strings.ToLower(rt.Name())],
+					col:      strings.ToLower(c.Name),
+					typ:      c.Type,
+					nullable: c.Nullable,
+				})
 			}
-			return true
-		})
+			checks = append(checks, b.loadChecksFromTable(tableScope, rt.Table)...)
+		}
 	} else {
-		transform.Inspect(update, func(n sql.Node) bool {
+		transform.InspectWithOpaque(b.ctx, update, func(ctx *sql.Context, n sql.Node) bool {
 			// todo maybe this should be later stage
 			if rt, ok := n.(*plan.ResolvedTable); ok {
 				checks = append(checks, b.loadChecksFromTable(outScope, rt.Table)...)
@@ -567,46 +590,48 @@ func (b *Builder) buildUpdate(inScope *scope, u *ast.Update) (outScope *scope) {
 			return true
 		})
 	}
+
+	if len(u.Returning) > 0 {
+		update.Returning = b.analyzeSelectList(outScope, outScope, u.Returning)
+	}
+
 	outScope.node = update.WithChecks(checks)
 	return
 }
 
-// rowUpdatersByTable maps a set of tables to their RowUpdater objects.
-func rowUpdatersByTable(ctx *sql.Context, node sql.Node, ij sql.Node) (map[string]sql.RowUpdater, error) {
-	namesOfTableToBeUpdated := getTablesToBeUpdated(node)
-	resolvedTables := getTablesByName(ij)
+// hasJoinNode returns true if |node| or any child is a JoinNode.
+func hasJoinNode(ctx *sql.Context, node sql.Node) bool {
+	updateJoinFound := false
+	transform.InspectWithOpaque(ctx, node, func(ctx *sql.Context, n sql.Node) bool {
+		if _, ok := n.(*plan.JoinNode); ok {
+			updateJoinFound = true
+		}
+		return !updateJoinFound
+	})
+	return updateJoinFound
+}
 
-	rowUpdatersByTable := make(map[string]sql.RowUpdater)
-	for tableToBeUpdated, _ := range namesOfTableToBeUpdated {
-		resolvedTable, ok := resolvedTables[strings.ToLower(tableToBeUpdated)]
+func getResolvedTablesToUpdate(ctx *sql.Context, node sql.Node, ij sql.Node) (resolvedTables []*plan.ResolvedTable, err error) {
+	namesOfTablesToBeUpdated := plan.GetTablesToBeUpdated(ctx, node)
+	resolvedTablesMap := getResolvedTablesByName(ctx, ij)
+
+	for tableToBeUpdated, _ := range namesOfTablesToBeUpdated {
+		resolvedTable, ok := resolvedTablesMap[strings.ToLower(tableToBeUpdated)]
 		if !ok {
 			return nil, plan.ErrUpdateForTableNotSupported.New(tableToBeUpdated)
 		}
 
-		var table = resolvedTable.UnderlyingTable()
-
-		// If there is no UpdatableTable for a table being updated, error out
-		updatable, ok := table.(sql.UpdatableTable)
-		if !ok && updatable == nil {
-			return nil, plan.ErrUpdateForTableNotSupported.New(tableToBeUpdated)
-		}
-
-		keyless := sql.IsKeyless(updatable.Schema())
-		if keyless {
-			return nil, sql.ErrUnsupportedFeature.New("error: keyless tables unsupported for UPDATE JOIN")
-		}
-
-		rowUpdatersByTable[tableToBeUpdated] = updatable.Updater(ctx)
+		resolvedTables = append(resolvedTables, resolvedTable)
 	}
 
-	return rowUpdatersByTable, nil
+	return resolvedTables, nil
 }
 
 // getTablesByName takes a node and returns all found resolved tables in a map.
-func getTablesByName(node sql.Node) map[string]*plan.ResolvedTable {
+func getResolvedTablesByName(ctx *sql.Context, node sql.Node) map[string]*plan.ResolvedTable {
 	ret := make(map[string]*plan.ResolvedTable)
 
-	transform.Inspect(node, func(node sql.Node) bool {
+	transform.InspectWithOpaque(ctx, node, func(ctx *sql.Context, node sql.Node) bool {
 		switch n := node.(type) {
 		case *plan.ResolvedTable:
 			ret[strings.ToLower(n.Table.Name())] = n
@@ -616,7 +641,7 @@ func getTablesByName(node sql.Node) map[string]*plan.ResolvedTable {
 				ret[strings.ToLower(rt.Name())] = rt
 			}
 		case *plan.TableAlias:
-			rt := getResolvedTable(n)
+			rt := getResolvedTable(ctx, n)
 			if rt != nil {
 				ret[strings.ToLower(n.Name())] = rt
 			}
@@ -629,10 +654,10 @@ func getTablesByName(node sql.Node) map[string]*plan.ResolvedTable {
 }
 
 // Finds first TableNode node that is a descendant of the node given
-func getResolvedTable(node sql.Node) *plan.ResolvedTable {
+func getResolvedTable(ctx *sql.Context, node sql.Node) *plan.ResolvedTable {
 	var table *plan.ResolvedTable
-	transform.Inspect(node, func(node sql.Node) bool {
-		// plan.Inspect will get called on all children of a node even if one of the children's calls returns false. We
+	transform.InspectWithOpaque(ctx, node, func(ctx *sql.Context, node sql.Node) bool {
+		// plan.InspectWithOpaque will get called on all children of a node even if one of the children's calls returns false. We
 		// only want the first TableNode match.
 		if table != nil {
 			return false
@@ -654,24 +679,6 @@ func getResolvedTable(node sql.Node) *plan.ResolvedTable {
 		return true
 	})
 	return table
-}
-
-// getTablesToBeUpdated takes a node and looks for the tables to modified by a SetField.
-func getTablesToBeUpdated(node sql.Node) map[string]struct{} {
-	ret := make(map[string]struct{})
-
-	transform.InspectExpressions(node, func(e sql.Expression) bool {
-		switch e := e.(type) {
-		case *expression.SetField:
-			gf := e.LeftChild.(*expression.GetField)
-			ret[gf.Table()] = struct{}{}
-			return false
-		}
-
-		return true
-	})
-
-	return ret
 }
 
 func (b *Builder) buildInto(inScope *scope, into *ast.Into) {
@@ -728,6 +735,10 @@ func (b *Builder) buildInto(inScope *scope, into *ast.Into) {
 		if strings.HasPrefix(val.String(), "@") {
 			vars[i] = expression.NewUserVar(strings.TrimPrefix(val.String(), "@"))
 		} else {
+			if inScope.proc == nil {
+				err := sql.ErrUndeclaredVariable.New(val.String())
+				b.handleErr(err)
+			}
 			col, ok := inScope.proc.GetVar(val.String())
 			if !ok {
 				err := sql.ErrExternalProcedureMissingContextParam.New(val.String())

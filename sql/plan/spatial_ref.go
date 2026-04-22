@@ -25,16 +25,16 @@ type SrsAttribute struct {
 	Name         string
 	Definition   string
 	Organization string
-	OrgID        uint32
 	Description  string
+	OrgID        uint32
 }
 
 // CreateSpatialRefSys represents the statement CREATE SPATIAL REFERENCE SYSTEM ...
 type CreateSpatialRefSys struct {
+	SrsAttr     SrsAttribute
 	SRID        uint32
 	OrReplace   bool
 	IfNotExists bool
-	SrsAttr     SrsAttribute
 }
 
 var _ sql.Node = (*CreateSpatialRefSys)(nil)
@@ -71,7 +71,7 @@ func (n *CreateSpatialRefSys) String() string {
 }
 
 // Schema implements the interface sql.Node
-func (n *CreateSpatialRefSys) Schema() sql.Schema {
+func (n *CreateSpatialRefSys) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -85,20 +85,10 @@ func (n *CreateSpatialRefSys) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node
-func (n *CreateSpatialRefSys) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (n *CreateSpatialRefSys) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(n, len(children), 0)
 	}
 	nn := *n
 	return &nn, nil
-}
-
-// CheckPrivileges implements the interface sql.Node
-func (n *CreateSpatialRefSys) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: "mysql",
-		Table:    "st_spatial_references_systems",
-	}
-
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Insert))
 }

@@ -16,14 +16,13 @@ package plan
 
 import (
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/go-mysql-server/sql/mysql_db"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
 // FlushPrivileges reads privileges from mysql tables and registers any unregistered privileges found.
 type FlushPrivileges struct {
-	writesToBinlog bool
 	MysqlDb        sql.Database
+	writesToBinlog bool
 }
 
 var _ sql.Node = (*FlushPrivileges)(nil)
@@ -38,37 +37,16 @@ func NewFlushPrivileges(ft bool) *FlushPrivileges {
 	}
 }
 
-// RowIter implements the interface sql.Node.
-func (f *FlushPrivileges) RowIter(ctx *sql.Context, _ sql.Row) (sql.RowIter, error) {
-	gts, ok := f.MysqlDb.(*mysql_db.MySQLDb)
-	if !ok {
-		return nil, sql.ErrDatabaseNotFound.New("mysql")
-	}
-	editor := gts.Editor()
-	defer editor.Close()
-	err := gts.Persist(ctx, editor)
-	if err != nil {
-		return nil, err
-	}
-	return sql.RowsToRowIter(sql.Row{types.NewOkResult(0)}), nil
-}
-
 // String implements the interface sql.Node.
 func (*FlushPrivileges) String() string { return "FLUSH PRIVILEGES" }
 
 // WithChildren implements the interface sql.Node.
-func (f *FlushPrivileges) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (f *FlushPrivileges) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(f, len(children), 0)
 	}
 
 	return f, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (f *FlushPrivileges) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{Database: "mysql"}
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Reload))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -91,7 +69,7 @@ func (f *FlushPrivileges) Resolved() bool {
 func (*FlushPrivileges) Children() []sql.Node { return nil }
 
 // Schema implements the sql.Node interface.
-func (*FlushPrivileges) Schema() sql.Schema { return types.OkResultSchema }
+func (*FlushPrivileges) Schema(ctx *sql.Context) sql.Schema { return types.OkResultSchema }
 
 // Database implements the sql.Databaser interface.
 func (f *FlushPrivileges) Database() sql.Database {

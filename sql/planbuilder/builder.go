@@ -17,9 +17,7 @@ package planbuilder
 import (
 	"fmt"
 	"strings"
-	"sync"
 
-	querypb "github.com/dolthub/vitess/go/vt/proto/query"
 	ast "github.com/dolthub/vitess/go/vt/sqlparser"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -29,39 +27,45 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/transform"
 )
 
-var BinderFactory = &sync.Pool{New: func() interface{} {
-	return &Builder{f: &factory{}}
-}}
-
 type Builder struct {
-	ctx             *sql.Context
+	// EventScheduler is used to communicate with the event scheduler
+	// for any EVENT related statements. It can be nil if EventScheduler is not defined.
+	scheduler       sql.EventScheduler
 	cat             sql.Catalog
-	parserOpts      ast.ParserOptions
-	f               *factory
-	currentDatabase sql.Database
-	colId           columnId
-	tabId           sql.TableId
-	multiDDL        bool
-	viewCtx         *ViewContext
-	procCtx         *ProcContext
-	triggerCtx      *TriggerContext
-	bindCtx         *BindvarContext
-	insertActive    bool
-	nesting         int
+	authQueryState  sql.AuthorizationQueryState
 	parser          sql.Parser
-	qFlags          *sql.QueryFlags
+	currentDatabase sql.Database
+
+	f          *factory
+	viewCtx    *ViewContext
+	procCtx    *ProcContext
+	triggerCtx *TriggerContext
+	bindCtx    *BindvarContext
+	ctx        *sql.Context
+	qFlags     *sql.QueryFlags
+
+	nesting int
+
+	tabId sql.TableId
+	colId columnId
+
+	authEnabled  bool
+	multiDDL     bool
+	insertActive bool
+	parserOpts   ast.ParserOptions
+	overrides    sql.BuilderOverrides
 }
 
 // BindvarContext holds bind variable replacement literals.
 type BindvarContext struct {
-	Bindings map[string]*querypb.BindVariable
+	Bindings map[string]sql.Expression
 	used     map[string]struct{}
 	// resolveOnly indicates that we are resolving plan names,
 	// but will not error for missing bindvar replacements.
 	resolveOnly bool
 }
 
-func (bv *BindvarContext) GetSubstitute(s string) (*querypb.BindVariable, bool) {
+func (bv *BindvarContext) GetSubstitute(s string) (sql.Expression, bool) {
 	if bv.Bindings != nil {
 		ret, ok := bv.Bindings[s]
 		bv.used[s] = struct{}{}
@@ -91,10 +95,11 @@ type ViewContext struct {
 }
 
 type TriggerContext struct {
+	ResolveErr       error
+	UnresolvedTables []string
 	Active           bool
 	Call             bool
-	UnresolvedTables []string
-	ResolveErr       error
+	LoadOnly         bool
 }
 
 // ProcContext allows nested CALLs to use the same database for resolving
@@ -104,17 +109,31 @@ type ProcContext struct {
 	DbName string
 }
 
-// New takes ctx, catalog and parser. If the parser is nil, then default parser is mysql parser.
-func New(ctx *sql.Context, cat sql.Catalog, p sql.Parser) *Builder {
-	sqlMode := sql.LoadSqlMode(ctx)
-
+// New takes ctx, catalog, event scheduler, and parser. If the parser is nil, then the default parser is used (which
+// will be the MySQL parser unless modified).
+func New(ctx *sql.Context, cat sql.Catalog, es sql.EventScheduler) *Builder {
+	// TODO: move the event scheduler to the catalog
+	var state sql.AuthorizationQueryState
+	var overrides sql.BuilderOverrides
+	var p = sql.DefaultMySQLParser
+	if cat != nil {
+		state = cat.AuthorizationHandler().NewQueryState(ctx)
+		overrides = cat.Overrides().Builder
+		if overrides.Parser != nil {
+			p = overrides.Parser
+		}
+	}
 	return &Builder{
-		ctx:        ctx,
-		cat:        cat,
-		parserOpts: sqlMode.ParserOptions(),
-		f:          &factory{},
-		parser:     p,
-		qFlags:     &sql.QueryFlags{},
+		ctx:            ctx,
+		cat:            cat,
+		scheduler:      es,
+		parserOpts:     sql.LoadSqlMode(ctx).ParserOptions(),
+		f:              &factory{},
+		parser:         p,
+		qFlags:         &sql.QueryFlags{},
+		authEnabled:    true,
+		authQueryState: state,
+		overrides:      overrides,
 	}
 }
 
@@ -122,7 +141,18 @@ func (b *Builder) SetDebug(val bool) {
 	b.f.debug = val
 }
 
-func (b *Builder) SetBindings(bindings map[string]*querypb.BindVariable) {
+func (b *Builder) SetBindings(bindings map[string]ast.Expr) {
+	bindingExprs := make(map[string]sql.Expression)
+	for i, bv := range bindings {
+		bindingExprs[i] = b.buildScalar(&scope{}, bv)
+	}
+	b.bindCtx = &BindvarContext{
+		Bindings: bindingExprs,
+		used:     make(map[string]struct{}),
+	}
+}
+
+func (b *Builder) SetBindingsWithExpr(bindings map[string]sql.Expression) {
 	b.bindCtx = &BindvarContext{
 		Bindings: bindings,
 		used:     make(map[string]struct{}),
@@ -174,10 +204,15 @@ func (b *Builder) Reset() {
 	b.viewCtx = nil
 	b.nesting = 0
 	b.qFlags = &sql.QueryFlags{}
+	b.authQueryState = b.cat.AuthorizationHandler().NewQueryState(b.ctx)
 }
 
 type parseErr struct {
 	err error
+}
+
+func (p parseErr) Error() string {
+	return p.err.Error()
 }
 
 func (b *Builder) handleErr(err error) {
@@ -213,6 +248,7 @@ func (b *Builder) buildSubquery(inScope *scope, stmt ast.Statement, subQuery str
 		b.qFlags.Set(sql.QFlagAlterTable)
 		return b.buildAlterTable(inScope, subQuery, n)
 	case *ast.DBDDL:
+		b.qFlags.Set(sql.QFlagDBDDL)
 		return b.buildDBDDL(inScope, n)
 	case *ast.Explain:
 		return b.buildExplain(inScope, n)
@@ -268,23 +304,32 @@ func (b *Builder) buildSubquery(inScope *scope, stmt ast.Statement, subQuery str
 	case *ast.ChangeReplicationFilter:
 		return b.buildChangeReplicationFilter(inScope, n)
 	case *ast.StartReplica:
+		if err := b.cat.AuthorizationHandler().HandleAuth(b.ctx, b.authQueryState, n.Auth); err != nil && b.authEnabled {
+			b.handleErr(err)
+		}
 		outScope = inScope.push()
 		startRep := plan.NewStartReplica()
-		if binCat, ok := b.cat.(binlogreplication.BinlogReplicaCatalog); ok && binCat.HasBinlogReplicaController() {
+		if binCat, ok := b.cat.(binlogreplication.BinlogReplicaProvider); ok && binCat.HasBinlogReplicaController() {
 			startRep.ReplicaController = binCat.GetBinlogReplicaController()
 		}
 		outScope.node = startRep
 	case *ast.StopReplica:
+		if err := b.cat.AuthorizationHandler().HandleAuth(b.ctx, b.authQueryState, n.Auth); err != nil && b.authEnabled {
+			b.handleErr(err)
+		}
 		outScope = inScope.push()
 		stopRep := plan.NewStopReplica()
-		if binCat, ok := b.cat.(binlogreplication.BinlogReplicaCatalog); ok && binCat.HasBinlogReplicaController() {
+		if binCat, ok := b.cat.(binlogreplication.BinlogReplicaProvider); ok && binCat.HasBinlogReplicaController() {
 			stopRep.ReplicaController = binCat.GetBinlogReplicaController()
 		}
 		outScope.node = stopRep
 	case *ast.ResetReplica:
+		if err := b.cat.AuthorizationHandler().HandleAuth(b.ctx, b.authQueryState, n.Auth); err != nil && b.authEnabled {
+			b.handleErr(err)
+		}
 		outScope = inScope.push()
 		resetRep := plan.NewResetReplica(n.All)
-		if binCat, ok := b.cat.(binlogreplication.BinlogReplicaCatalog); ok && binCat.HasBinlogReplicaController() {
+		if binCat, ok := b.cat.(binlogreplication.BinlogReplicaProvider); ok && binCat.HasBinlogReplicaController() {
 			resetRep.ReplicaController = binCat.GetBinlogReplicaController()
 		}
 		outScope.node = resetRep
@@ -340,8 +385,6 @@ func (b *Builder) buildSubquery(inScope *scope, stmt ast.Statement, subQuery str
 		return b.buildGrantProxy(inScope, n)
 	case *ast.RevokePrivilege:
 		return b.buildRevokePrivilege(inScope, n)
-	case *ast.RevokeAllPrivileges:
-		return b.buildRevokeAllPrivileges(inScope, n)
 	case *ast.RevokeRole:
 		return b.buildRevokeRole(inScope, n)
 	case *ast.RevokeProxy:
@@ -360,6 +403,16 @@ func (b *Builder) buildSubquery(inScope *scope, stmt ast.Statement, subQuery str
 		return b.buildDeallocate(inScope, n)
 	case ast.InjectedStatement:
 		return b.buildInjectedStatement(inScope, n)
+	case *ast.Binlog:
+		if err := b.cat.AuthorizationHandler().HandleAuth(b.ctx, b.authQueryState, n.Auth); err != nil && b.authEnabled {
+			b.handleErr(err)
+		}
+		outScope = inScope.push()
+		binlogNode := plan.NewBinlog(n.Base64Str)
+		if binCat, ok := b.cat.(binlogreplication.BinlogConsumerProvider); ok && binCat.HasBinlogConsumer() {
+			binlogNode = binlogNode.WithBinlogConsumer(binCat.GetBinlogConsumer()).(*plan.Binlog)
+		}
+		outScope.node = binlogNode
 	}
 	return
 }
@@ -367,7 +420,7 @@ func (b *Builder) buildSubquery(inScope *scope, stmt ast.Statement, subQuery str
 // buildVirtualTableScan returns a VirtualColumnTable for a table with virtual columns.
 func (b *Builder) buildVirtualTableScan(db string, tab sql.Table) *plan.VirtualColumnTable {
 	tableScope := b.newScope()
-	schema := tab.Schema()
+	schema := tab.Schema(b.ctx)
 	for _, c := range schema {
 		tableScope.newColumn(scopeColumn{
 			table:       strings.ToLower(tab.Name()),
@@ -392,7 +445,7 @@ func (b *Builder) buildVirtualTableScan(db string, tab sql.Table) *plan.VirtualC
 	// Unlike other kinds of nodes, the projection on this table wrapper is invisible to the analyzer, so we need to
 	// get the column indexes correct here, they won't be fixed later like other kinds of expressions.
 	for i, p := range projections {
-		projections[i] = assignColumnIndexes(p, schema)
+		projections[i] = assignColumnIndexes(b.ctx, p, schema)
 	}
 
 	return plan.NewVirtualColumnTable(tab, projections)
@@ -400,11 +453,14 @@ func (b *Builder) buildVirtualTableScan(db string, tab sql.Table) *plan.VirtualC
 
 // buildInjectedStatement returns the sql.Node encapsulated by the injected statement.
 func (b *Builder) buildInjectedStatement(inScope *scope, n ast.InjectedStatement) (outScope *scope) {
+	if err := b.cat.AuthorizationHandler().HandleAuth(b.ctx, b.authQueryState, n.Auth); err != nil && b.authEnabled {
+		b.handleErr(err)
+	}
 	resolvedChildren := make([]any, len(n.Children))
 	for i, child := range n.Children {
 		resolvedChildren[i] = b.buildScalar(inScope, child)
 	}
-	stmt, err := n.Statement.WithResolvedChildren(resolvedChildren)
+	stmt, err := n.Statement.WithResolvedChildren(b.ctx, resolvedChildren)
 	if err != nil {
 		b.handleErr(err)
 		return nil
@@ -419,8 +475,8 @@ func (b *Builder) buildInjectedStatement(inScope *scope, n ast.InjectedStatement
 }
 
 // assignColumnIndexes fixes the column indexes in the expression to match the schema given
-func assignColumnIndexes(e sql.Expression, schema sql.Schema) sql.Expression {
-	e, _, _ = transform.Expr(e, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+func assignColumnIndexes(ctx *sql.Context, e sql.Expression, schema sql.Schema) sql.Expression {
+	e, _, _ = transform.Expr(ctx, e, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 		if gf, ok := e.(*expression.GetField); ok {
 			idx := schema.IndexOfColName(gf.Name())
 			return gf.WithIndex(idx), transform.NewTree, nil
@@ -428,4 +484,33 @@ func assignColumnIndexes(e sql.Expression, schema sql.Schema) sql.Expression {
 		return e, transform.SameTree, nil
 	})
 	return e
+}
+
+// Below methods are used in Doltgres. TODO: maybe find way to not expose these methods
+
+func (b *Builder) BuildScalarWithTable(expr ast.Expr, tableExpr ast.TableExpr) sql.Expression {
+	outscope := b.newScope()
+	if tableExpr != nil {
+		outscope = b.buildDataSource(outscope, tableExpr)
+	}
+	return b.buildScalar(outscope, expr)
+}
+
+func (b *Builder) BuildColumnDefaultValueWithTable(defExpr ast.Expr, tableExpr ast.TableExpr, typ sql.Type, nullable bool) *sql.ColumnDefaultValue {
+	outscope := b.newScope()
+	if tableExpr != nil {
+		outscope = b.buildDataSource(outscope, tableExpr)
+	}
+	return b.convertDefaultExpression(outscope, defExpr, typ, nullable)
+}
+
+// DisableAuth disables all authorization checks.
+func (b *Builder) DisableAuth() {
+	b.authEnabled = false
+}
+
+// EnableAuth enables all authorization checks. Auth is enabled by default, so this only needs to be called when it was
+// previously disabled using DisableAuth.
+func (b *Builder) EnableAuth() {
+	b.authEnabled = true
 }

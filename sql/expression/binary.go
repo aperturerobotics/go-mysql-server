@@ -28,21 +28,21 @@ import (
 //
 // cc: https://dev.mysql.com/doc/refman/8.0/en/cast-functions.html#operator_binary
 type Binary struct {
-	UnaryExpression
+	UnaryExpressionStub
 }
 
 var _ sql.Expression = (*Binary)(nil)
 var _ sql.CollationCoercible = (*Binary)(nil)
 
 func NewBinary(e sql.Expression) sql.Expression {
-	return &Binary{UnaryExpression{Child: e}}
+	return &Binary{UnaryExpressionStub{Child: e}}
 }
 
 func (b *Binary) String() string {
 	return fmt.Sprintf("BINARY(%s)", b.Child.String())
 }
 
-func (b *Binary) Type() sql.Type {
+func (b *Binary) Type(ctx *sql.Context) sql.Type {
 	return types.LongBlob
 }
 
@@ -57,10 +57,10 @@ func (b *Binary) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	return convertValue(val, ConvertToBinary, b.Child.Type(), 0, 0)
+	return convertValue(ctx, val, ConvertToBinary, b.Child.Type(ctx), 0, 0)
 }
 
-func (b *Binary) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (b *Binary) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidArgumentNumber.New("BINARY", "1", len(children))
 	}

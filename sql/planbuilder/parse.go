@@ -32,20 +32,7 @@ const maxAnalysisIterations = 8
 // ErrMaxAnalysisIters is thrown when the analysis iterations are exceeded
 var ErrMaxAnalysisIters = errors.NewKind("exceeded max analysis iterations (%d)")
 
-// Parse parses the given SQL |query| using the default parsing settings and returns the corresponding node.
-func Parse(ctx *sql.Context, cat sql.Catalog, query string) (sql.Node, *sql.QueryFlags, error) {
-	return ParseWithOptions(ctx, cat, query, sql.LoadSqlMode(ctx).ParserOptions())
-}
-
-func ParseWithOptions(ctx *sql.Context, cat sql.Catalog, query string, options ast.ParserOptions) (sql.Node, *sql.QueryFlags, error) {
-	// TODO: need correct parser
-	b := New(ctx, cat, sql.NewMysqlParser())
-	b.SetParserOptions(options)
-	node, _, _, qFlags, err := b.Parse(query, false)
-	return node, qFlags, err
-}
-
-func (b *Builder) Parse(query string, multi bool) (ret sql.Node, parsed, remainder string, qProps *sql.QueryFlags, err error) {
+func (b *Builder) Parse(query string, qFlags *sql.QueryFlags, multi bool) (ret sql.Node, parsed, remainder string, qProps *sql.QueryFlags, err error) {
 	defer trace.StartRegion(b.ctx, "ParseOnly").End()
 	b.nesting++
 	if b.nesting > maxAnalysisIterations {
@@ -65,13 +52,35 @@ func (b *Builder) Parse(query string, multi bool) (ret sql.Node, parsed, remaind
 	span, ctx := b.ctx.Span("parse", otel.WithAttributes(attribute.String("query", query)))
 	defer span.End()
 
-	stmt, parsed, remainder, err := b.parser.ParseWithOptions(ctx, query, ';', multi, b.parserOpts)
-	if err != nil {
-		if goerrors.Is(err, ast.ErrEmpty) {
-			ctx.Warn(0, "query was empty after trimming comments, so it will be ignored")
-			return plan.NothingImpl, parsed, remainder, nil, nil
+	if b.authQueryState != nil {
+		if err = b.authQueryState.Error(); err != nil {
+			b.handleErr(err)
 		}
-		return nil, parsed, remainder, nil, sql.ErrSyntaxError.New(err.Error())
+	}
+
+	var stmt ast.Statement
+	var stmtCached bool
+	isTrigger := b.triggerCtx != nil && (b.triggerCtx.Call || b.triggerCtx.LoadOnly)
+	if isTrigger && !b.parserOpts.AnsiQuotes && !b.parserOpts.PipesAsConcat {
+		parsed = sql.RemoveSpaceAndDelimiter(query, ';')
+		stmt, stmtCached = ctx.Session.GetCachedQuery(parsed)
+	}
+	if !stmtCached {
+		stmt, parsed, remainder, err = b.parser.ParseWithOptions(ctx, query, ';', multi, b.parserOpts)
+		if err != nil {
+			if goerrors.Is(err, ast.ErrEmpty) {
+				ctx.Warn(0, "query was empty after trimming comments, so it will be ignored")
+				return plan.NothingImpl, parsed, remainder, nil, nil
+			}
+			return nil, parsed, remainder, nil, sql.ErrSyntaxError.New(err.Error())
+		}
+		if isTrigger && !b.parserOpts.AnsiQuotes && !b.parserOpts.PipesAsConcat {
+			ctx.Session.CacheQuery(parsed, stmt)
+		}
+	}
+
+	if qFlags != nil {
+		b.qFlags = qFlags
 	}
 
 	outScope := b.build(nil, stmt, parsed)
@@ -79,7 +88,15 @@ func (b *Builder) Parse(query string, multi bool) (ret sql.Node, parsed, remaind
 	return outScope.node, parsed, remainder, b.qFlags, err
 }
 
-func (b *Builder) BindOnly(stmt ast.Statement, s string) (_ sql.Node, _ *sql.QueryFlags, err error) {
+func (b *Builder) BindOnly(stmt ast.Statement, s string, queryFlags *sql.QueryFlags) (sql.Node, *sql.QueryFlags, error) {
+	outScope, err := b.bindOnly(stmt, s, queryFlags)
+	if err != nil {
+		return nil, b.qFlags, err
+	}
+	return outScope.node, b.qFlags, err
+}
+
+func (b *Builder) bindOnly(stmt ast.Statement, s string, queryFlags *sql.QueryFlags) (_ *scope, err error) {
 	defer trace.StartRegion(b.ctx, "BindOnly").End()
 	defer func() {
 		if r := recover(); r != nil {
@@ -91,7 +108,14 @@ func (b *Builder) BindOnly(stmt ast.Statement, s string) (_ sql.Node, _ *sql.Que
 			}
 		}
 	}()
-
+	if b.authQueryState != nil {
+		if err = b.authQueryState.Error(); err != nil {
+			b.handleErr(err)
+		}
+	}
+	if queryFlags != nil {
+		b.qFlags = queryFlags
+	}
 	outScope := b.build(nil, stmt, s)
-	return outScope.node, b.qFlags, err
+	return outScope, err
 }

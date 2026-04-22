@@ -15,8 +15,10 @@
 package memory_test
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -34,7 +36,7 @@ func TestTablePartitionsCount(t *testing.T) {
 	pro := memory.NewDBProvider(db)
 	ctx := newContext(pro)
 
-	table := memory.NewPartitionedTable(db.BaseDatabase, "foo", sql.PrimaryKeySchema{}, nil, 5)
+	table := memory.NewPartitionedTable(ctx, db.BaseDatabase, "foo", sql.PrimaryKeySchema{}, nil, 5)
 	count, err := table.PartitionCount(ctx)
 	require.NoError(err)
 	require.Equal(int64(5), count)
@@ -47,19 +49,114 @@ func TestTableName(t *testing.T) {
 	})
 
 	db := memory.NewDatabase("db")
-	table := memory.NewTable(db.BaseDatabase, "test", s, nil)
+	pro := memory.NewDBProvider(db)
+	ctx := newContext(pro)
+	table := memory.NewTable(ctx, db.BaseDatabase, "test", s, nil)
 	require.Equal("test", table.Name())
 }
 
 func TestTableString(t *testing.T) {
 	require := require.New(t)
 	db := memory.NewDatabase("db")
+	pro := memory.NewDBProvider(db)
+	ctx := newContext(pro)
 
-	table := memory.NewTable(db.BaseDatabase, "foo", sql.NewPrimaryKeySchema(sql.Schema{
+	table := memory.NewTable(ctx, db.BaseDatabase, "foo", sql.NewPrimaryKeySchema(sql.Schema{
 		{Name: "col1", Type: types.Text, Nullable: true},
 		{Name: "col2", Type: types.Int64, Nullable: false},
 	}), nil)
 	require.Equal("foo", table.String())
+}
+
+func TestTableInsert(t *testing.T) {
+	testCases := []struct {
+		name    string
+		colType sql.Type
+		value   interface{}
+		err     bool
+	}{
+		{
+			// This diverges from MySQL because NaN values are okay in Postgres
+			name:    "inserting NaN into float results is okay",
+			colType: types.Float64,
+			value:   math.NaN(),
+		},
+		{
+			name:    "inserting NaN into int results in error",
+			colType: types.Int64,
+			value:   math.NaN(),
+			err:     true,
+		},
+		{
+			// TODO: Postgres possibly allows NaN values for decimals (documentation unclear) but shopspring/decimal
+			//  does not
+			name:    "inserting NaN into Decimal results in error",
+			colType: types.MustCreateDecimalType(types.DecimalTypeMaxPrecision, types.DecimalTypeMaxScale),
+			value:   math.NaN(),
+			err:     true,
+		},
+		{
+			// This diverges from MySQL because Infinity values are okay in Postgres
+			name:    "inserting Infinity into float results is okay",
+			colType: types.Float64,
+			value:   math.Inf(1),
+		},
+		{
+			name:    "inserting Infinity into int results in error",
+			colType: types.Int64,
+			value:   math.Inf(1),
+			err:     true,
+		},
+		{
+			// TODO: Postgres possibly allows Inf values for decimals (documentation unclear) but shopspring/decimal
+			//  does not
+			name:    "inserting Infinity into Decimal results in error",
+			colType: types.MustCreateDecimalType(types.DecimalTypeMaxPrecision, types.DecimalTypeMaxScale),
+			value:   math.Inf(1),
+			err:     true,
+		},
+		{
+			// This diverges from MySQL because Infinity values are okay in Postgres
+			name:    "inserting negative Infinity into float results is okay",
+			colType: types.Float64,
+			value:   math.Inf(-1),
+		},
+		{
+			name:    "inserting negative Infinity into int results in error",
+			colType: types.Int64,
+			value:   math.Inf(-1),
+			err:     true,
+		},
+		{
+			// TODO: Postgres possibly allows Inf values for decimals (documentation unclear) but shopspring/decimal
+			//  does not
+			name:    "inserting negative Infinity into Decimal results in error",
+			colType: types.MustCreateDecimalType(types.DecimalTypeMaxPrecision, types.DecimalTypeMaxScale),
+			value:   math.Inf(-1),
+			err:     true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := memory.NewDatabase("db")
+
+			provider := memory.NewDBProvider(db)
+			session := memory.NewSession(sql.NewBaseSession(), provider)
+			ctx := sql.NewContext(context.Background(), sql.WithSession(session))
+
+			table := memory.NewTable(ctx, db, "test", sql.NewPrimaryKeySchema(sql.Schema{
+				{Name: "col1", Type: tc.colType, Nullable: false},
+			}), nil)
+
+			err := table.Insert(ctx, sql.NewRow(tc.value))
+			if tc.err {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 type indexKeyValue struct {
@@ -214,7 +311,7 @@ func TestTable(t *testing.T) {
 			pro := memory.NewDBProvider(db)
 			ctx := newContext(pro)
 
-			table := memory.NewPartitionedTable(db.BaseDatabase, test.name, test.schema, nil, test.numPartitions)
+			table := memory.NewPartitionedTable(ctx, db.BaseDatabase, test.name, test.schema, nil, test.numPartitions)
 			for _, row := range test.rows {
 				require.NoError(table.Insert(ctx, row))
 			}
@@ -258,7 +355,7 @@ func TestFiltered(t *testing.T) {
 			pro := memory.NewDBProvider(db)
 			ctx := newContext(pro)
 
-			table := memory.NewFilteredTable(db.BaseDatabase, test.name, test.schema, nil)
+			table := memory.NewFilteredTable(ctx, db.BaseDatabase, test.name, test.schema, nil)
 			for _, row := range test.rows {
 				require.NoError(table.Insert(ctx, row))
 			}
@@ -283,12 +380,13 @@ func TestProjected(t *testing.T) {
 			pro := memory.NewDBProvider(db)
 			ctx := newContext(pro)
 
-			table := memory.NewPartitionedTable(db.BaseDatabase, test.name, test.schema, nil, test.numPartitions)
+			table := memory.NewPartitionedTable(ctx, db.BaseDatabase, test.name, test.schema, nil, test.numPartitions)
 			for _, row := range test.rows {
 				require.NoError(table.Insert(ctx, row))
 			}
 
-			projected := table.WithProjections(test.columns)
+			projected, err := table.WithProjections(ctx, test.columns)
+			require.NoError(err)
 
 			projectedRows := getAllRows(t, ctx, projected)
 			require.Len(projectedRows, len(test.expectedProjected))
@@ -307,13 +405,14 @@ func TestFilterAndProject(t *testing.T) {
 			pro := memory.NewDBProvider(db)
 			ctx := newContext(pro)
 
-			table := memory.NewFilteredTable(db.BaseDatabase, test.name, test.schema, nil)
+			table := memory.NewFilteredTable(ctx, db.BaseDatabase, test.name, test.schema, nil)
 			for _, row := range test.rows {
 				require.NoError(table.Insert(ctx, row))
 			}
 
 			filtered := table.WithFilters(ctx, test.filters)
-			projected := filtered.(*memory.FilteredTable).WithProjections(test.columns)
+			projected, err := filtered.(*memory.FilteredTable).WithProjections(ctx, test.columns)
+			require.NoError(err)
 
 			rows := getAllRows(t, ctx, projected)
 			require.Len(rows, len(test.expectedFiltersAndProjections))
@@ -323,33 +422,6 @@ func TestFilterAndProject(t *testing.T) {
 		})
 	}
 }
-
-// func TestIndexed(t *testing.T) {
-// 	for _, test := range tests {
-// 		t.Run(test.name, func(t *testing.T) {
-// 			var require = require.New(t)
-// 			db := memory.NewDatabase("db")
-// 			pro := memory.NewDBProvider(db)
-// 			ctx := newContext(pro)
-//
-// 			table := memory.NewPartitionedTable(db.BaseDatabase, test.name, test.schema, nil, test.numPartitions)
-// 			for _, row := range test.rows {
-// 				require.NoError(table.Insert(ctx, row))
-// 			}
-//
-// 			projected := table.WithProjections(test.columns)
-// 			indexed := projected.(*memory.Table).IndexedAccess(test.lookup)
-//
-// 			iter, err := indexed.PartitionRows(ctx, test.partition)
-// 			require.NoError(err)
-//
-// 			rows, err := sql.RowIterToRows(ctx, indexed.Schema(), iter)
-// 			require.NoError(err)
-//
-// 			require.Equal(test.expectedIndexed, rows)
-// 		})
-// 	}
-// }
 
 func getAllRows(t *testing.T, ctx *sql.Context, table sql.Table) []sql.Row {
 	var require = require.New(t)

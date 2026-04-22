@@ -26,13 +26,13 @@ import (
 // don't overlap, the amortized complexity is O(1) for each result row.
 type RangeHeap struct {
 	UnaryNode
-	ValueColumnIndex   int
-	MinColumnIndex     int
-	MaxColumnIndex     int
 	ValueColumnGf      sql.Expression
 	MinColumnGf        sql.Expression
 	MaxColumnGf        sql.Expression
 	ComparisonType     sql.Type
+	ValueColumnIndex   int
+	MinColumnIndex     int
+	MaxColumnIndex     int
 	RangeIsClosedBelow bool
 	RangeIsClosedAbove bool
 }
@@ -55,15 +55,15 @@ func (s *RangeHeap) String() string {
 	return s.Child.String()
 }
 
-func (s *RangeHeap) DebugString() string {
-	return sql.DebugString(s.Child)
+func (s *RangeHeap) DebugString(ctx *sql.Context) string {
+	return sql.DebugString(ctx, s.Child)
 }
 
 func (s *RangeHeap) IsReadOnly() bool {
 	return s.Child.IsReadOnly()
 }
 
-func (s *RangeHeap) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (s *RangeHeap) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, fmt.Errorf("ds")
 	}
@@ -71,10 +71,6 @@ func (s *RangeHeap) WithChildren(children ...sql.Node) (sql.Node, error) {
 	s2 := *s
 	s2.UnaryNode = UnaryNode{Child: children[0]}
 	return &s2, nil
-}
-
-func (s *RangeHeap) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return s.Child.CheckPrivileges(ctx, opChecker)
 }
 
 var _ sql.Node = (*RangeHeap)(nil)

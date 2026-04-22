@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"math"
 	"reflect"
 
@@ -34,8 +35,8 @@ type LineStringType struct {
 
 // LineString is the value type returned from LineStringType. Implements GeometryValue.
 type LineString struct {
-	SRID   uint32
 	Points []Point
+	SRID   uint32
 }
 
 var _ sql.Type = LineStringType{}
@@ -48,30 +49,36 @@ var (
 )
 
 // Compare implements Type interface.
-func (t LineStringType) Compare(a interface{}, b interface{}) (int, error) {
-	return GeometryType{}.Compare(a, b)
+func (t LineStringType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+	return GeometryType{}.Compare(ctx, a, b)
 }
 
 // Convert implements Type interface.
-func (t LineStringType) Convert(v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t LineStringType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
 	switch buf := v.(type) {
 	case nil:
 		return nil, sql.InRange, nil
 	case []byte:
-		line, _, err := GeometryType{}.Convert(buf)
+		line, _, err := GeometryType{}.Convert(ctx, buf)
 		if sql.ErrInvalidGISData.Is(err) {
-			return nil, sql.OutOfRange, sql.ErrInvalidGISData.New("LineStringType.Convert")
+			return nil, sql.InRange, sql.ErrInvalidGISData.New("LineStringType.Convert")
 		}
 		return line, sql.InRange, err
 	case string:
-		return t.Convert([]byte(buf))
+		return t.Convert(ctx, []byte(buf))
 	case LineString:
 		if err := t.MatchSRID(buf); err != nil {
-			return nil, sql.OutOfRange, err
+			return nil, sql.InRange, err
 		}
 		return buf, sql.InRange, nil
+	case sql.AnyWrapper:
+		unwrapped, err := buf.UnwrapAny(ctx)
+		if err != nil {
+			return nil, sql.InRange, err
+		}
+		return t.Convert(ctx, unwrapped)
 	default:
-		return nil, sql.OutOfRange, sql.ErrSpatialTypeConversion.New()
+		return nil, sql.InRange, sql.ErrSpatialTypeConversion.New()
 	}
 }
 
@@ -97,7 +104,7 @@ func (t LineStringType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqlty
 		return sqltypes.NULL, nil
 	}
 
-	v, _, err := t.Convert(v)
+	v, _, err := t.Convert(ctx, v)
 	if err != nil {
 		return sqltypes.Value{}, nil
 	}

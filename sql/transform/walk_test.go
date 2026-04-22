@@ -39,7 +39,7 @@ func TestWalk(t *testing.T) {
 	Walk(f, a3)
 
 	require.Equal(t,
-		[]sql.Node{a3, a2, c1, a1, nil, b1, nil, nil, nil, nil},
+		[]sql.Node{a3, a2, c1, a1, b1},
 		visited,
 	)
 
@@ -55,7 +55,7 @@ func TestWalk(t *testing.T) {
 	Walk(f, a3)
 
 	require.Equal(t,
-		[]sql.Node{a3, a2, c1, nil, nil},
+		[]sql.Node{a3, a2, c1},
 		visited,
 	)
 }
@@ -73,22 +73,23 @@ func TestInspect(t *testing.T) {
 	a2 := a(c1)
 	a3 := a(a2)
 
-	var f func(sql.Node) bool
+	var f func(*sql.Context, sql.Node) bool
 	var visited []sql.Node
-	f = func(node sql.Node) bool {
+	f = func(ctx *sql.Context, node sql.Node) bool {
 		visited = append(visited, node)
 		return true
 	}
 
-	Inspect(a3, f)
+	ctx := sql.NewEmptyContext()
+	InspectWithOpaque(ctx, a3, f)
 
 	require.Equal(t,
-		[]sql.Node{a3, a2, c1, a1, nil, b1, nil, nil, nil, nil},
+		[]sql.Node{a3, a2, c1, a1, b1},
 		visited,
 	)
 
 	visited = nil
-	f = func(node sql.Node) bool {
+	f = func(ctx *sql.Context, node sql.Node) bool {
 		visited = append(visited, node)
 		if _, ok := node.(*nodeC); ok {
 			return false
@@ -96,10 +97,10 @@ func TestInspect(t *testing.T) {
 		return true
 	}
 
-	Inspect(a3, f)
+	InspectWithOpaque(ctx, a3, f)
 
 	require.Equal(t,
-		[]sql.Node{a3, a2, c1, nil, nil},
+		[]sql.Node{a3, a2, c1},
 		visited,
 	)
 }

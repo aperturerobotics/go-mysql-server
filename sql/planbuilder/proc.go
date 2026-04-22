@@ -24,6 +24,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/plan"
+	"github.com/dolthub/go-mysql-server/sql/procedures"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
@@ -40,11 +41,11 @@ const (
 
 type procCtx struct {
 	s          *scope
-	handlers   []*plan.DeclareHandler
 	conditions map[string]*plan.DeclareCondition
 	vars       map[string]scopeColumn
 	cursors    map[string]struct{}
 	labels     map[string]bool
+	handlers   []*plan.DeclareHandler
 	lastState  declareState
 }
 
@@ -70,18 +71,19 @@ func (p *procCtx) NewState(state declareState) {
 			err := sql.ErrDeclareCursorOrderInvalid.New()
 			p.s.b.handleErr(err)
 		}
+	default:
 	}
 	p.lastState = state
 }
 
-func (p *procCtx) AddVar(param *expression.ProcedureParam) {
+func (p *procCtx) AddVar(ctx *sql.Context, param *expression.ProcedureParam) {
 	p.NewState(dsVariable)
 	lowerName := strings.ToLower(param.Name())
 	if _, ok := p.vars[lowerName]; ok {
 		err := sql.ErrDeclareVariableDuplicate.New(lowerName)
 		p.s.b.handleErr(err)
 	}
-	col := scopeColumn{col: lowerName, typ: param.Type(), scalar: param}
+	col := scopeColumn{col: lowerName, typ: param.Type(ctx), scalar: param}
 	p.vars[lowerName] = col
 }
 
@@ -224,12 +226,63 @@ func (b *Builder) buildIfConditional(inScope *scope, n ast.IfStatementCondition,
 	return outScope
 }
 
+func BuildProcedureHelper(ctx *sql.Context, cat sql.Catalog, isCreateProc bool, inScope *scope, db sql.Database, asOf sql.Expression, procDetails sql.StoredProcedureDetails) (proc *plan.Procedure, qFlags *sql.QueryFlags, err error) {
+	// TODO: new builder necessary?
+	defer func() {
+		if r := recover(); r != nil {
+			switch r := r.(type) {
+			case parseErr:
+				err = r.err
+			default:
+				panic(r)
+			}
+		}
+	}()
+	b := New(ctx, cat, nil)
+	b.DisableAuth()
+	b.SetParserOptions(sql.NewSqlModeFromString(procDetails.SqlMode).ParserOptions())
+	if asOf != nil {
+		asOf, err := asOf.Eval(b.ctx, nil)
+		if err != nil {
+			b.handleErr(err)
+		}
+		b.ProcCtx().AsOf = asOf
+	}
+	b.ProcCtx().DbName = db.Name()
+	if isCreateProc {
+		// TODO: we want to skip certain validations for CREATE PROCEDURE
+		b.qFlags.Set(sql.QFlagCreateProcedure)
+	}
+	stmt, _, _, _ := b.parser.ParseWithOptions(b.ctx, procDetails.CreateStatement, ';', false, b.parserOpts)
+	procStmt := stmt.(*ast.DDL)
+
+	ops, err := procedures.Parse(procStmt.ProcedureSpec.Body)
+	if err != nil {
+		b.handleErr(err)
+	}
+
+	procParams := b.buildProcedureParams(procStmt.ProcedureSpec.Params)
+	characteristics, securityType, comment := b.buildProcedureCharacteristics(procStmt.ProcedureSpec.Characteristics)
+
+	proc = plan.NewProcedure(
+		procDetails.Name,
+		procStmt.ProcedureSpec.Definer,
+		procParams,
+		securityType,
+		comment,
+		characteristics,
+		procDetails.CreateStatement,
+		procDetails.CreatedAt,
+		procDetails.ModifiedAt,
+		ops,
+	)
+
+	return proc, qFlags, nil
+}
+
 func (b *Builder) buildCall(inScope *scope, c *ast.Call) (outScope *scope) {
-	outScope = inScope.push()
-	params := make([]sql.Expression, len(c.Params))
-	for i, param := range c.Params {
-		expr := b.buildScalar(inScope, param)
-		params[i] = expr
+	if err := b.cat.AuthorizationHandler().HandleAuth(b.ctx, b.authQueryState, c.Auth); err != nil && b.authEnabled {
+		b.handleErr(err)
 	}
 
 	var asOf sql.Expression = nil
@@ -252,12 +305,71 @@ func (b *Builder) buildCall(inScope *scope, c *ast.Call) (outScope *scope) {
 		db = b.currentDb()
 	}
 
-	outScope.node = plan.NewCall(
-		db,
-		c.ProcName.Name.String(),
-		params,
-		asOf,
-		b.cat)
+	var proc *plan.Procedure
+	var innerQFlags *sql.QueryFlags
+	procName := c.ProcName.Name.String()
+	esp, err := b.cat.ExternalStoredProcedure(b.ctx, procName, len(c.Params))
+	if err != nil {
+		b.handleErr(err)
+	}
+	if esp != nil {
+		proc, err = resolveExternalStoredProcedure(*esp)
+	} else if spdb, ok := db.(sql.StoredProcedureDatabase); ok {
+		var procDetails sql.StoredProcedureDetails
+		procDetails, ok, err = spdb.GetStoredProcedure(b.ctx, procName)
+		if err == nil {
+			if ok {
+				proc, innerQFlags, err = BuildProcedureHelper(b.ctx, b.cat, false, inScope, db, asOf, procDetails)
+				// This is necessary so that the resolveSubqueries analyzer rule
+				// will apply NodeExecBuilder to Subqueries in procedure body
+				if innerQFlags.IsSet(sql.QFlagScalarSubquery) {
+					b.qFlags.Set(sql.QFlagScalarSubquery)
+				}
+			} else {
+				err = sql.ErrStoredProcedureDoesNotExist.New(procName)
+				if b.qFlags.IsSet(sql.QFlagCreateTrigger) {
+					proc = &plan.Procedure{
+						Name:            procName,
+						ValidationError: err,
+					}
+					err = nil
+				}
+			}
+		}
+	} else {
+		err = sql.ErrStoredProceduresNotSupported.New(db.Name())
+	}
+	if err != nil {
+		b.handleErr(err)
+	}
+
+	params := make([]sql.Expression, len(c.Params))
+	for i, param := range c.Params {
+		// While it is possible to detect a parameter count mismatch here and throw an error,
+		// there's some weirdness involving external procedures. The analyzer rule applyProceduresCall will
+		// catch this discrepancy.
+		if len(proc.Params) == len(c.Params) {
+			procParam := proc.Params[i]
+			rSpp := &sql.StoredProcParam{Type: procParam.Type}
+			rSpp = b.ctx.Session.NewStoredProcParam(procParam.Name, rSpp)
+			if col, isCol := param.(*ast.ColName); isCol {
+				colName := col.Name.String()
+				if spp := b.ctx.Session.GetStoredProcParam(colName); spp != nil {
+					iv := &procedures.InterpreterVariable{
+						Type:  spp.Type,
+						Value: spp.Value,
+					}
+					param = iv.ToAST()
+					rSpp.Reference = spp
+				}
+			}
+		}
+		expr := b.buildScalar(inScope, param)
+		params[i] = expr
+	}
+
+	outScope = inScope.push()
+	outScope.node = plan.NewCall(db, procName, params, proc, asOf, b.cat, nil)
 	return outScope
 }
 
@@ -321,7 +433,7 @@ func (b *Builder) buildDeclareVariables(inScope *scope, d *ast.Declare) (outScop
 		varName := strings.ToLower(variable.String())
 		names[i] = varName
 		param := expression.NewProcedureParam(varName, typ)
-		inScope.proc.AddVar(param)
+		inScope.proc.AddVar(b.ctx, param)
 		inScope.newColumn(scopeColumn{col: varName, typ: typ, scalar: param})
 	}
 	defaultVal := b.buildDefaultExpression(inScope, dVars.VarType.Default)
@@ -370,12 +482,9 @@ func (b *Builder) buildDeclareHandler(inScope *scope, d *ast.Declare, query stri
 		action = expression.DeclareHandlerAction_Exit
 	case ast.DeclareHandlerAction_Undo:
 		action = expression.DeclareHandlerAction_Undo
+		b.handleErr(sql.ErrDeclareHandlerUndo.New())
 	default:
 		err := fmt.Errorf("unknown DECLARE ... HANDLER action: %v", dHandler.Action)
-		b.handleErr(err)
-	}
-	if action == expression.DeclareHandlerAction_Undo {
-		err := sql.ErrDeclareHandlerUndo.New()
 		b.handleErr(err)
 	}
 
@@ -403,6 +512,7 @@ func (b *Builder) buildBlock(inScope *scope, parserStatements ast.Statements, fu
 		stmtScope := b.buildSubquery(inScope, s, ast.String(s), fullQuery)
 		statements = append(statements, stmtScope.node)
 	}
+
 	return plan.NewBlock(statements)
 }
 
@@ -570,6 +680,10 @@ func (b *Builder) buildSignal(inScope *scope, s *ast.Signal) (outScope *scope) {
 	sqlStateValue := s.SqlStateValue
 	if s.ConditionName != "" {
 		signalName := strings.ToLower(s.ConditionName)
+		if inScope.proc == nil {
+			err := sql.ErrDeclareConditionNotFound.New(signalName)
+			b.handleErr(err)
+		}
 		condition := inScope.proc.GetCondition(signalName)
 		if condition == nil {
 			err := sql.ErrDeclareConditionNotFound.New(signalName)

@@ -38,7 +38,7 @@ var _ sql.Node = (*ShowIndexes)(nil)
 var _ sql.CollationCoercible = (*ShowIndexes)(nil)
 
 // WithChildren implements the Node interface.
-func (n *ShowIndexes) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (n *ShowIndexes) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(n, len(children), 1)
 	}
@@ -47,12 +47,6 @@ func (n *ShowIndexes) WithChildren(children ...sql.Node) (sql.Node, error) {
 		UnaryNode:     UnaryNode{children[0]},
 		IndexesToShow: n.IndexesToShow,
 	}, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (n *ShowIndexes) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	//TODO: figure out what privileges are required
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -70,7 +64,7 @@ func (n *ShowIndexes) IsReadOnly() bool {
 }
 
 // Schema implements the Node interface.
-func (n *ShowIndexes) Schema() sql.Schema {
+func (n *ShowIndexes) Schema(ctx *sql.Context) sql.Schema {
 	return sql.Schema{
 		&sql.Column{Name: "Table", Type: types.LongText},
 		&sql.Column{Name: "Non_unique", Type: types.Int32},

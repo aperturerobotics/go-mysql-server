@@ -31,8 +31,9 @@ import (
 func TestGroupBySchema(t *testing.T) {
 	require := require.New(t)
 
+	ctx := sql.NewEmptyContext()
 	db := memory.NewDatabase("test")
-	child := memory.NewTable(db.BaseDatabase, "test", sql.PrimaryKeySchema{}, nil)
+	child := memory.NewTable(ctx, db.BaseDatabase, "test", sql.PrimaryKeySchema{}, nil)
 	agg := []sql.Expression{
 		expression.NewAlias("c1", expression.NewLiteral("s", types.LongText)),
 		expression.NewAlias("c2", aggregation.NewCount(expression.NewStar())),
@@ -41,14 +42,15 @@ func TestGroupBySchema(t *testing.T) {
 	require.Equal(sql.Schema{
 		{Name: "c1", Type: types.LongText},
 		{Name: "c2", Type: types.Int64},
-	}, gb.Schema())
+	}, gb.Schema(ctx))
 }
 
 func TestGroupByResolved(t *testing.T) {
 	require := require.New(t)
+	ctx := sql.NewEmptyContext()
 
 	db := memory.NewDatabase("test")
-	child := memory.NewTable(db.BaseDatabase, "test", sql.PrimaryKeySchema{}, nil)
+	child := memory.NewTable(ctx, db.BaseDatabase, "test", sql.PrimaryKeySchema{}, nil)
 	agg := []sql.Expression{
 		expression.NewAlias("c2", aggregation.NewCount(expression.NewStar())),
 	}
@@ -73,7 +75,7 @@ func TestGroupByRowIter(t *testing.T) {
 		{Name: "col1", Type: types.LongText},
 		{Name: "col2", Type: types.Int64},
 	}
-	child := memory.NewTable(db.BaseDatabase, "test", sql.NewPrimaryKeySchema(childSchema), nil)
+	child := memory.NewTable(ctx, db.BaseDatabase, "test", sql.NewPrimaryKeySchema(childSchema), nil)
 
 	rows := []sql.Row{
 		sql.NewRow("col1_1", int64(1111)),
@@ -131,7 +133,7 @@ func TestGroupByAggregationGrouping(t *testing.T) {
 		{Name: "col2", Type: types.Int64},
 	}
 
-	child := memory.NewTable(db.BaseDatabase, "test", sql.NewPrimaryKeySchema(childSchema), nil)
+	child := memory.NewTable(ctx, db.BaseDatabase, "test", sql.NewPrimaryKeySchema(childSchema), nil)
 
 	rows := []sql.Row{
 		sql.NewRow("col1_1", int64(1111)),
@@ -169,6 +171,7 @@ func TestGroupByAggregationGrouping(t *testing.T) {
 }
 
 func TestGroupByCollations(t *testing.T) {
+	ctx := sql.NewEmptyContext()
 	tString := types.MustCreateString(query.Type_VARCHAR, 255, sql.Collation_utf8mb4_0900_ai_ci)
 	tEnum := types.MustCreateEnumType([]string{"col1_1", "col1_2"}, sql.Collation_utf8mb4_0900_ai_ci)
 	tSet := types.MustCreateSetType([]string{"col1_1", "col1_2"}, sql.Collation_utf8mb4_0900_ai_ci)
@@ -184,7 +187,7 @@ func TestGroupByCollations(t *testing.T) {
 		{
 			Type: tEnum,
 			Value: func(t *testing.T, v string) any {
-				conv, _, err := tEnum.Convert(v)
+				conv, _, err := tEnum.Convert(ctx, v)
 				require.NoError(t, err)
 				return conv
 			},
@@ -192,7 +195,7 @@ func TestGroupByCollations(t *testing.T) {
 		{
 			Type: tSet,
 			Value: func(t *testing.T, v string) any {
-				conv, _, err := tSet.Convert(v)
+				conv, _, err := tSet.Convert(ctx, v)
 				require.NoError(t, err)
 				return conv
 			},
@@ -212,7 +215,7 @@ func TestGroupByCollations(t *testing.T) {
 			pro := memory.NewDBProvider(db)
 			ctx := newContext(pro)
 
-			child := memory.NewTable(db.BaseDatabase, "test", sql.NewPrimaryKeySchema(childSchema), nil)
+			child := memory.NewTable(ctx, db.BaseDatabase, "test", sql.NewPrimaryKeySchema(childSchema), nil)
 
 			rows := []sql.Row{
 				sql.NewRow(tc.Value(t, "col1_1"), int64(1111)),
@@ -310,7 +313,7 @@ func benchmarkTable(t testing.TB) sql.Table {
 	require := require.New(t)
 
 	db := memory.NewDatabase("test")
-	table := memory.NewTable(db.BaseDatabase, "test", sql.NewPrimaryKeySchema(sql.Schema{
+	table := memory.NewTable(sql.NewEmptyContext(), db.BaseDatabase, "test", sql.NewPrimaryKeySchema(sql.Schema{
 		{Name: "a", Type: types.Int64},
 		{Name: "b", Type: types.Int64},
 	}), nil)

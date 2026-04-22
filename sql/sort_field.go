@@ -24,8 +24,8 @@ import (
 type SortField struct {
 	// Column to order by.
 	Column Expression
-	// Column Expression2 to order by. This is always the same value as Column, but avoids a type cast
-	Column2 Expression2
+	// Column ValueExpression to order by. This is always the same value as Column, but avoids a type cast
+	ValueExprColumn ValueExpression
 	// Order type.
 	Order SortOrder
 	// NullOrdering defining how nulls will be ordered.
@@ -42,7 +42,7 @@ func (sf SortFields) ToExpressions() []Expression {
 	return es
 }
 
-func (sf SortFields) FromExpressions(exprs ...Expression) SortFields {
+func (sf SortFields) FromExpressions(ctx *Context, exprs ...Expression) SortFields {
 	var fields = make(SortFields, len(sf))
 
 	if len(exprs) != len(fields) {
@@ -50,12 +50,12 @@ func (sf SortFields) FromExpressions(exprs ...Expression) SortFields {
 	}
 
 	for i, expr := range exprs {
-		expr2, _ := expr.(Expression2)
+		valueExpr, _ := expr.(ValueExpression)
 		fields[i] = SortField{
-			Column:       expr,
-			Column2:      expr2,
-			NullOrdering: sf[i].NullOrdering,
-			Order:        sf[i].Order,
+			Column:          expr,
+			ValueExprColumn: valueExpr,
+			NullOrdering:    sf[i].NullOrdering,
+			Order:           sf[i].Order,
 		}
 	}
 	return fields
@@ -65,12 +65,12 @@ func (s SortField) String() string {
 	return fmt.Sprintf("%s %s", s.Column, s.Order)
 }
 
-func (s SortField) DebugString() string {
+func (s SortField) DebugString(ctx *Context) string {
 	nullOrdering := "nullsFirst"
 	if s.NullOrdering == NullsLast {
 		nullOrdering = "nullsLast"
 	}
-	return fmt.Sprintf("%s %s %s", DebugString(s.Column), DebugString(s.Order), nullOrdering)
+	return fmt.Sprintf("%s %s %s", DebugString(ctx, s.Column), DebugString(ctx, s.Order), nullOrdering)
 }
 
 // ErrUnableSort is thrown when something happens on sorting

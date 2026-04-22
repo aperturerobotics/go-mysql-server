@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -14,12 +15,12 @@ func NewUpdateHistogram(db, table, index string, cols []string, stats sql.Statis
 }
 
 type UpdateHistogram struct {
+	stats sql.Statistic
+	prov  sql.StatsProvider
 	db    string
 	table string
 	index string
 	cols  []string
-	stats sql.Statistic
-	prov  sql.StatsProvider
 }
 
 var _ sql.Node = (*UpdateHistogram)(nil)
@@ -59,11 +60,11 @@ func (u *UpdateHistogram) Resolved() bool {
 }
 
 func (u *UpdateHistogram) String() string {
-	statBytes, _ := types.MarshallJson(u.stats)
+	statBytes, _ := types.MarshallJson(context.TODO(), u.stats)
 	return fmt.Sprintf("update histogram  %s.(%s) using %s", u.table, strings.Join(u.cols, ","), statBytes)
 }
 
-func (u *UpdateHistogram) Schema() sql.Schema {
+func (u *UpdateHistogram) Schema(ctx *sql.Context) sql.Schema {
 	return analyzeSchema
 }
 
@@ -71,27 +72,24 @@ func (u *UpdateHistogram) Children() []sql.Node {
 	return nil
 }
 
-func (u *UpdateHistogram) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (u *UpdateHistogram) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return u, nil
-}
-
-func (u *UpdateHistogram) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 func (u *UpdateHistogram) IsReadOnly() bool {
 	return false
 }
 
-func NewDropHistogram(db, table string, cols []string) *DropHistogram {
-	return &DropHistogram{db: db, cols: cols, table: table}
+func NewDropHistogram(db, schema, table string, cols []string) *DropHistogram {
+	return &DropHistogram{db: db, schema: schema, cols: cols, table: table}
 }
 
 type DropHistogram struct {
-	db    string
-	table string
-	cols  []string
-	prov  sql.StatsProvider
+	prov   sql.StatsProvider
+	db     string
+	schema string
+	table  string
+	cols   []string
 }
 
 var _ sql.Node = (*DropHistogram)(nil)
@@ -110,6 +108,10 @@ func (d *DropHistogram) Db() string {
 	return d.db
 }
 
+func (d *DropHistogram) SchemaName() string {
+	return d.schema
+}
+
 func (d *DropHistogram) Table() string {
 	return d.table
 }
@@ -126,7 +128,7 @@ func (d *DropHistogram) String() string {
 	return fmt.Sprintf("drop histogram %s.(%s)", d.table, strings.Join(d.cols, ","))
 }
 
-func (d *DropHistogram) Schema() sql.Schema {
+func (d *DropHistogram) Schema(ctx *sql.Context) sql.Schema {
 	return analyzeSchema
 }
 
@@ -134,12 +136,8 @@ func (d *DropHistogram) Children() []sql.Node {
 	return nil
 }
 
-func (d *DropHistogram) WithChildren(_ ...sql.Node) (sql.Node, error) {
+func (d *DropHistogram) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return d, nil
-}
-
-func (d *DropHistogram) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 func (d *DropHistogram) IsReadOnly() bool {

@@ -26,22 +26,23 @@ import (
 
 // Grant represents the statement GRANT [privilege...] ON [item] TO [user...].
 type Grant struct {
-	Privileges      []Privilege
-	ObjectType      ObjectType
-	PrivilegeLevel  PrivilegeLevel
-	Users           []UserName
-	WithGrantOption bool
-	As              *GrantUserAssumption
 	MySQLDb         sql.Database
 	Catalog         sql.Catalog
+	As              *GrantUserAssumption
+	PrivilegeLevel  PrivilegeLevel
+	Privileges      []Privilege
+	Users           []UserName
+	ObjectType      ObjectType
+	WithGrantOption bool
 }
 
 var _ sql.Node = (*Grant)(nil)
 var _ sql.Databaser = (*Grant)(nil)
 var _ sql.CollationCoercible = (*Grant)(nil)
+var _ sql.AuthorizationCheckerNode = (*Grant)(nil)
 
 // Schema implements the interface sql.Node.
-func (n *Grant) Schema() sql.Schema {
+func (n *Grant) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -82,15 +83,15 @@ func (n *Grant) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (n *Grant) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (n *Grant) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(n, len(children), 0)
 	}
 	return n, nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (n *Grant) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
+// CheckAuth implements the interface sql.AuthorizationCheckerNode.
+func (n *Grant) CheckAuth(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
 	subject := sql.PrivilegeCheckSubject{Database: "mysql"}
 	if opChecker.UserHasPrivileges(ctx,
 		sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Update)) {
@@ -539,15 +540,16 @@ func (n *Grant) HandleRoutinePrivileges(user *mysql_db.User, dbName string, rout
 
 // GrantRole represents the statement GRANT [role...] TO [user...].
 type GrantRole struct {
+	MySQLDb         sql.Database
 	Roles           []UserName
 	TargetUsers     []UserName
 	WithAdminOption bool
-	MySQLDb         sql.Database
 }
 
 var _ sql.Node = (*GrantRole)(nil)
 var _ sql.Databaser = (*GrantRole)(nil)
 var _ sql.CollationCoercible = (*GrantRole)(nil)
+var _ sql.AuthorizationCheckerNode = (*GrantRole)(nil)
 
 // NewGrantRole returns a new GrantRole node.
 func NewGrantRole(roles []UserName, users []UserName, withAdmin bool) *GrantRole {
@@ -560,7 +562,7 @@ func NewGrantRole(roles []UserName, users []UserName, withAdmin bool) *GrantRole
 }
 
 // Schema implements the interface sql.Node.
-func (n *GrantRole) Schema() sql.Schema {
+func (n *GrantRole) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -605,15 +607,15 @@ func (n *GrantRole) IsReadOnly() bool {
 }
 
 // WithChildren implements the interface sql.Node.
-func (n *GrantRole) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (n *GrantRole) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(n, len(children), 0)
 	}
 	return n, nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (n *GrantRole) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
+// CheckAuth implements the interface sql.AuthorizationCheckerNode.
+func (n *GrantRole) CheckAuth(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
 	if opChecker.UserHasPrivileges(ctx,
 		sql.NewPrivilegedOperation(sql.PrivilegeCheckSubject{}, sql.PrivilegeType_Super)) {
 		return true
@@ -662,6 +664,7 @@ type GrantProxy struct {
 
 var _ sql.Node = (*GrantProxy)(nil)
 var _ sql.CollationCoercible = (*GrantProxy)(nil)
+var _ sql.AuthorizationCheckerNode = (*GrantProxy)(nil)
 
 // NewGrantProxy returns a new GrantProxy node.
 func NewGrantProxy(on UserName, to []UserName, withGrant bool) *GrantProxy {
@@ -673,7 +676,7 @@ func NewGrantProxy(on UserName, to []UserName, withGrant bool) *GrantProxy {
 }
 
 // Schema implements the interface sql.Node.
-func (n *GrantProxy) Schema() sql.Schema {
+func (n *GrantProxy) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -701,15 +704,15 @@ func (n *GrantProxy) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (n *GrantProxy) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (n *GrantProxy) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(n, len(children), 0)
 	}
 	return n, nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (n *GrantProxy) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
+// CheckAuth implements the interface sql.AuthorizationCheckerNode.
+func (n *GrantProxy) CheckAuth(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
 	//TODO: add this when proxy support is added
 	return true
 }

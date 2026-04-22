@@ -40,7 +40,7 @@ func NewRenameUser(oldNames []UserName, newNames []UserName) *RenameUser {
 }
 
 // Schema implements the interface sql.Node.
-func (n *RenameUser) Schema() sql.Schema {
+func (n *RenameUser) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -69,24 +69,14 @@ func (n *RenameUser) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (n *RenameUser) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (n *RenameUser) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(n, len(children), 0)
 	}
 	return n, nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (n *RenameUser) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(sql.PrivilegeCheckSubject{}, sql.PrivilegeType_CreateUser))
-}
-
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (*RenameUser) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.Collation_binary, 7
-}
-
-// RowIter implements the interface sql.Node.
-func (n *RenameUser) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error) {
-	return nil, fmt.Errorf("not yet implemented")
 }

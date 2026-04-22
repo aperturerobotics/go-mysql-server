@@ -18,39 +18,14 @@ import (
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/transform"
 )
 
-// Returns the underlying table name for the node given
-func getTableName(node sql.Node) string {
+// Returns the underlying table name, unaliased, for the node given
+func getTableName(ctx *sql.Context, node sql.Node) string {
 	var tableName string
-	transform.Inspect(node, func(node sql.Node) bool {
-		switch node := node.(type) {
-		case *plan.TableAlias:
-			tableName = node.Name()
-			return false
-		case *plan.ResolvedTable:
-			tableName = node.Name()
-			return false
-		case *plan.UnresolvedTable:
-			tableName = node.Name()
-			return false
-		case *plan.IndexedTableAccess:
-			tableName = node.Name()
-			return false
-		}
-		return true
-	})
-
-	return tableName
-}
-
-// Returns the underlying table name for the node given, ignoring table aliases
-func getUnaliasedTableName(node sql.Node) string {
-	var tableName string
-	transform.Inspect(node, func(node sql.Node) bool {
+	transform.InspectWithOpaque(ctx, node, func(ctx *sql.Context, node sql.Node) bool {
 		switch node := node.(type) {
 		case *plan.ResolvedTable:
 			tableName = node.Name()
@@ -69,50 +44,50 @@ func getUnaliasedTableName(node sql.Node) string {
 }
 
 // Finds first table node that is a descendant of the node given
-func getTable(node sql.Node) sql.Table {
+func getTable(ctx *sql.Context, node sql.Node) sql.Table {
 	var table sql.Table
-	transform.Inspect(node, func(node sql.Node) bool {
+	transform.InspectWithOpaque(ctx, node, func(ctx *sql.Context, n sql.Node) bool {
+		// InspectWithOpaque is called on all children of a node even if an earlier child's call returns false.
+		// We only want the first TableNode match.
 		if table != nil {
 			return false
 		}
-
-		switch n := node.(type) {
+		switch nn := n.(type) {
 		case sql.TableNode:
-			table = n.UnderlyingTable()
-			// TODO unwinding a table wrapper here causes infinite analyzer recursion
+			// TODO: unwinding a table wrapper here causes infinite analyzer recursion
+			table = nn.UnderlyingTable()
 			return false
 		case *plan.IndexedTableAccess:
-			table = n.TableNode.UnderlyingTable()
+			table = nn.TableNode.UnderlyingTable()
 			return false
+		default:
+			return true
 		}
-		return true
 	})
 	return table
 }
 
 // Finds first ResolvedTable node that is a descendant of the node given
 // This function will not look inside SubqueryAliases
-func getResolvedTable(node sql.Node) *plan.ResolvedTable {
+func getResolvedTable(ctx *sql.Context, node sql.Node) *plan.ResolvedTable {
 	var table *plan.ResolvedTable
-	transform.Inspect(node, func(node sql.Node) bool {
-		// plan.Inspect will get called on all children of a node even if one of the children's calls returns false. We
-		// only want the first TableNode match.
+	transform.InspectWithOpaque(ctx, node, func(ctx *sql.Context, n sql.Node) bool {
+		// InspectWithOpaque is called on all children of a node even if an earlier child's call returns false.
+		// We only want the first TableNode match.
 		if table != nil {
 			return false
 		}
-
-		switch n := node.(type) {
+		switch nn := n.(type) {
 		case *plan.SubqueryAlias:
 			// We should not be matching with ResolvedTables inside SubqueryAliases
 			return false
 		case *plan.ResolvedTable:
-			if !plan.IsDualTable(n) {
-				table = n
+			if !plan.IsDualTable(nn) {
+				table = nn
 				return false
 			}
 		case *plan.IndexedTableAccess:
-			rt, ok := n.TableNode.(*plan.ResolvedTable)
-			if ok {
+			if rt, ok := nn.TableNode.(*plan.ResolvedTable); ok {
 				table = rt
 				return false
 			}
@@ -122,52 +97,35 @@ func getResolvedTable(node sql.Node) *plan.ResolvedTable {
 	return table
 }
 
-// getTablesByName takes a node and returns all found resolved tables in a map.
-func getTablesByName(node sql.Node) map[string]*plan.ResolvedTable {
+// getResolvedTablesByName takes a node and returns all found resolved tables in a map.
+// This function will not look inside sql.OpaqueNodes (like plan.SubqueryAlias).
+func getResolvedTablesByName(ctx *sql.Context, node sql.Node) map[string]*plan.ResolvedTable {
 	ret := make(map[string]*plan.ResolvedTable)
-
-	transform.Inspect(node, func(node sql.Node) bool {
-		switch n := node.(type) {
+	transform.Inspect(node, func(n sql.Node) bool {
+		switch n := n.(type) {
 		case *plan.ResolvedTable:
 			ret[strings.ToLower(n.Table.Name())] = n
 		case *plan.IndexedTableAccess:
-			rt, ok := n.TableNode.(*plan.ResolvedTable)
-			if ok {
+			if rt, ok := n.TableNode.(*plan.ResolvedTable); ok {
 				ret[strings.ToLower(rt.Name())] = rt
-				return false
 			}
 		case *plan.TableAlias:
-			rt := getResolvedTable(n)
-			if rt != nil {
+			if rt := getResolvedTable(ctx, n); rt != nil {
 				ret[n.Name()] = rt
 			}
-		default:
 		}
 		return true
 	})
-
 	return ret
 }
 
-// Returns the tables used in the expressions given
-func findTables(exprs ...sql.Expression) []string {
-	tables := make(map[string]bool)
-	for _, e := range exprs {
-		sql.Inspect(e, func(e sql.Expression) bool {
-			switch e := e.(type) {
-			case *expression.GetField:
-				tables[e.Table()] = true
-				return false
-			default:
-				return true
-			}
-		})
-	}
-
-	var names []string
-	for table := range tables {
-		names = append(names, table)
-	}
-
-	return names
+func getNamedChildren(node sql.Node) map[string]sql.NameableNode {
+	ret := make(map[string]sql.NameableNode)
+	transform.Inspect(node, func(n sql.Node) bool {
+		if nameable, ok := n.(sql.NameableNode); ok {
+			ret[strings.ToLower(nameable.Name())] = nameable
+		}
+		return true
+	})
+	return ret
 }

@@ -22,10 +22,10 @@ import (
 // SystemVar is an expression that returns the value of a system variable. It's also used as the expression on the left
 // hand side of a SET statement for a system variable.
 type SystemVar struct {
-	Name           string
-	Collation      sql.CollationID
 	Scope          sql.SystemVariableScope
+	Name           string
 	SpecifiedScope string
+	Collation      sql.CollationID
 }
 
 var _ sql.Expression = (*SystemVar)(nil)
@@ -37,7 +37,7 @@ var _ sql.CollationCoercible = (*SystemVar)(nil)
 // system variable was originally referenced. If the |specifiedScope| parameter is empty, then the scope was not
 // originally specified and any scope has been inferred.
 func NewSystemVar(name string, scope sql.SystemVariableScope, specifiedScope string) *SystemVar {
-	return &SystemVar{name, sql.CollationID(0), scope, specifiedScope}
+	return &SystemVar{Scope: scope, Name: name, SpecifiedScope: specifiedScope}
 }
 
 // Children implements the sql.Expression interface.
@@ -50,7 +50,7 @@ func (v *SystemVar) Eval(ctx *sql.Context, _ sql.Row) (interface{}, error) {
 }
 
 // Type implements the sql.Expression interface.
-func (v *SystemVar) Type() sql.Type {
+func (v *SystemVar) Type(ctx *sql.Context) sql.Type {
 	if sysVar, _, ok := sql.SystemVariables.GetGlobal(v.Name); ok {
 		return sysVar.GetType()
 	}
@@ -59,7 +59,7 @@ func (v *SystemVar) Type() sql.Type {
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (v *SystemVar) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
-	typ := v.Type()
+	typ := v.Type(ctx)
 	if types.IsText(typ) {
 		collation, _ = typ.CollationCoercibility(ctx)
 		return collation, 3
@@ -68,7 +68,9 @@ func (v *SystemVar) CollationCoercibility(ctx *sql.Context) (collation sql.Colla
 }
 
 // IsNullable implements the sql.Expression interface.
-func (v *SystemVar) IsNullable() bool { return false }
+func (v *SystemVar) IsNullable(ctx *sql.Context) bool {
+	return true
+}
 
 // Resolved implements the sql.Expression interface.
 func (v *SystemVar) Resolved() bool { return true }
@@ -82,7 +84,7 @@ func (v *SystemVar) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (v *SystemVar) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (v *SystemVar) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(v, len(children), 0)
 	}
@@ -92,8 +94,8 @@ func (v *SystemVar) WithChildren(children ...sql.Expression) (sql.Expression, er
 // UserVar is an expression that returns the value of a user variable. It's also used as the expression on the left hand
 // side of a SET statement for a user var.
 type UserVar struct {
-	Name     string
 	exprType sql.Type
+	Name     string
 }
 
 var _ sql.Expression = (*UserVar)(nil)
@@ -126,7 +128,7 @@ func (v *UserVar) Eval(ctx *sql.Context, _ sql.Row) (interface{}, error) {
 }
 
 // Type implements the sql.Expression interface.
-func (v *UserVar) Type() sql.Type {
+func (v *UserVar) Type(ctx *sql.Context) sql.Type {
 	return v.exprType
 }
 
@@ -137,7 +139,7 @@ func (v *UserVar) CollationCoercibility(ctx *sql.Context) (collation sql.Collati
 }
 
 // IsNullable implements the sql.Expression interface.
-func (v *UserVar) IsNullable() bool { return true }
+func (v *UserVar) IsNullable(ctx *sql.Context) bool { return true }
 
 // Resolved implements the sql.Expression interface.
 func (v *UserVar) Resolved() bool { return true }
@@ -146,7 +148,7 @@ func (v *UserVar) Resolved() bool { return true }
 func (v *UserVar) String() string { return "@" + v.Name }
 
 // WithChildren implements the Expression interface.
-func (v *UserVar) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (v *UserVar) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(v, len(children), 0)
 	}

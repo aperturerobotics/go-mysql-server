@@ -21,19 +21,26 @@ import (
 
 // IsNull is an expression that checks if an expression is null.
 type IsNull struct {
-	UnaryExpression
+	UnaryExpressionStub
 }
 
 var _ sql.Expression = (*IsNull)(nil)
 var _ sql.CollationCoercible = (*IsNull)(nil)
+var _ sql.IsNullExpression = (*IsNull)(nil)
 
 // NewIsNull creates a new IsNull expression.
 func NewIsNull(child sql.Expression) *IsNull {
-	return &IsNull{UnaryExpression{child}}
+	return &IsNull{UnaryExpressionStub{child}}
+}
+
+// IsNullExpression implements the sql.IsNullExpression interface. This function exists primarily
+// to ensure the IsNullExpression interface has a unique signature.
+func (e *IsNull) IsNullExpression() bool {
+	return true
 }
 
 // Type implements the Expression interface.
-func (e *IsNull) Type() sql.Type {
+func (e *IsNull) Type(ctx *sql.Context) sql.Type {
 	return types.Boolean
 }
 
@@ -43,7 +50,7 @@ func (*IsNull) CollationCoercibility(ctx *sql.Context) (collation sql.CollationI
 }
 
 // IsNullable implements the Expression interface.
-func (e *IsNull) IsNullable() bool {
+func (e *IsNull) IsNullable(ctx *sql.Context) bool {
 	return false
 }
 
@@ -53,7 +60,6 @@ func (e *IsNull) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	return v == nil, nil
 }
 
@@ -61,12 +67,12 @@ func (e IsNull) String() string {
 	return e.Child.String() + " IS NULL"
 }
 
-func (e IsNull) DebugString() string {
-	return sql.DebugString(e.Child) + " IS NULL"
+func (e IsNull) DebugString(ctx *sql.Context) string {
+	return sql.DebugString(ctx, e.Child) + " IS NULL"
 }
 
 // WithChildren implements the Expression interface.
-func (e *IsNull) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (e *IsNull) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(e, len(children), 1)
 	}

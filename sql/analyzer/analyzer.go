@@ -16,6 +16,7 @@ package analyzer
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"runtime/trace"
@@ -35,6 +36,7 @@ import (
 
 const debugAnalyzerKey = "DEBUG_ANALYZER"
 const verboseAnalyzerKey = "VERBOSE_ANALYZER"
+const traceAnalyzerKey = "TRACE_ANALYZER"
 
 const maxAnalysisIterations = 8
 
@@ -63,6 +65,7 @@ func SetPreparedStmts(v bool) {
 
 // Builder provides an easy way to generate Analyzer with custom rules and options.
 type Builder struct {
+	provider            sql.DatabaseProvider
 	preAnalyzeRules     []Rule
 	postAnalyzeRules    []Rule
 	preValidationRules  []Rule
@@ -72,13 +75,12 @@ type Builder struct {
 	onceAfterRules      []Rule
 	validationRules     []Rule
 	afterAllRules       []Rule
-	provider            sql.DatabaseProvider
 	debug               bool
-	parallelism         int
+	overrides           sql.EngineOverrides
 }
 
 // NewBuilder creates a new Builder from a specific catalog.
-// This builder allow us add custom Rules and modify some internal properties.
+// This builder allow us to add custom Rules and modify some internal properties.
 func NewBuilder(pro sql.DatabaseProvider) *Builder {
 	allBeforeDefault := make([]Rule, len(OnceBeforeDefault)+len(AlwaysBeforeDefault))
 	copy(allBeforeDefault, OnceBeforeDefault)
@@ -100,37 +102,37 @@ func (ab *Builder) WithDebug() *Builder {
 	return ab
 }
 
-// WithParallelism sets the parallelism level on the analyzer.
-func (ab *Builder) WithParallelism(parallelism int) *Builder {
-	ab.parallelism = parallelism
-	return ab
-}
-
 // AddPreAnalyzeRule adds a new rule to the analyze before the standard analyzer rules.
 func (ab *Builder) AddPreAnalyzeRule(id RuleId, fn RuleFunc) *Builder {
-	ab.preAnalyzeRules = append(ab.preAnalyzeRules, Rule{id, fn})
+	ab.preAnalyzeRules = append(ab.preAnalyzeRules, Rule{Id: id, Apply: fn})
 
 	return ab
 }
 
 // AddPostAnalyzeRule adds a new rule to the analyzer after standard analyzer rules.
 func (ab *Builder) AddPostAnalyzeRule(id RuleId, fn RuleFunc) *Builder {
-	ab.postAnalyzeRules = append(ab.postAnalyzeRules, Rule{id, fn})
+	ab.postAnalyzeRules = append(ab.postAnalyzeRules, Rule{Id: id, Apply: fn})
 
 	return ab
 }
 
 // AddPreValidationRule adds a new rule to the analyzer before standard validation rules.
 func (ab *Builder) AddPreValidationRule(id RuleId, fn RuleFunc) *Builder {
-	ab.preValidationRules = append(ab.preValidationRules, Rule{id, fn})
+	ab.preValidationRules = append(ab.preValidationRules, Rule{Id: id, Apply: fn})
 
 	return ab
 }
 
 // AddPostValidationRule adds a new rule to the analyzer after standard validation rules.
 func (ab *Builder) AddPostValidationRule(id RuleId, fn RuleFunc) *Builder {
-	ab.postValidationRules = append(ab.postValidationRules, Rule{id, fn})
+	ab.postValidationRules = append(ab.postValidationRules, Rule{Id: id, Apply: fn})
 
+	return ab
+}
+
+// AddOverrides adds the given overrides to the builder.
+func (ab *Builder) AddOverrides(overrides sql.EngineOverrides) *Builder {
+	ab.overrides = overrides
 	return ab
 }
 
@@ -183,6 +185,10 @@ func (ab *Builder) RemoveAfterAllRule(id RuleId) *Builder {
 
 var log = logrus.New()
 
+func SetOutput(w io.Writer) {
+	log.SetOutput(w)
+}
+
 func init() {
 	// TODO: give the option for debug analyzer logging format to match the global one
 	log.SetFormatter(simpleLogFormatter{})
@@ -217,6 +223,7 @@ func (s simpleLogFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 func (ab *Builder) Build() *Analyzer {
 	_, debug := os.LookupEnv(debugAnalyzerKey)
 	_, verbose := os.LookupEnv(verboseAnalyzerKey)
+	_, trace := os.LookupEnv(traceAnalyzerKey)
 	var batches = []*Batch{
 		{
 			Desc:       "pre-analyzer",
@@ -264,52 +271,56 @@ func (ab *Builder) Build() *Analyzer {
 			Rules:      ab.afterAllRules,
 		},
 	}
-
 	return &Analyzer{
-		Debug:        debug || ab.debug,
-		Verbose:      verbose,
-		contextStack: make([]string, 0),
-		Batches:      batches,
-		Catalog:      NewCatalog(ab.provider),
-		Parallelism:  ab.parallelism,
-		Coster:       memo.NewDefaultCoster(),
-		ExecBuilder:  rowexec.DefaultBuilder,
+		Debug:                debug || ab.debug,
+		Verbose:              verbose,
+		Trace:                trace,
+		contextStack:         make([]string, 0),
+		Batches:              batches,
+		Catalog:              NewCatalog(ab.provider, ab.overrides),
+		Overrides:            ab.overrides,
+		Coster:               memo.NewDefaultCoster(),
+		ExecBuilder:          rowexec.NewBuilder(nil, ab.overrides),
+		Parser:               sql.GetParser(ab.overrides),
+		SchemaFormatter:      sql.GetSchemaFormatter(ab.overrides),
+		CachedResultsManager: plan.NewCachedResultsManager(),
 	}
 }
 
 // Analyzer analyzes nodes of the execution plan and applies rules and validations
 // to them.
 type Analyzer struct {
-	// Whether to log various debugging messages
-	Debug bool
-	// Whether to output the query plan at each step of the analyzer
-	Verbose bool
-	// A stack of debugger context. See PushDebugContext, PopDebugContext
-	contextStack []string
-	Parallelism  int
-	// Batches of Rules to apply.
-	Batches []*Batch
-	// Catalog of databases and registered functions.
-	Catalog *Catalog
 	// Coster estimates the incremental CPU+memory cost for execution operators.
 	Coster memo.Coster
+	// Parser is the parser used to parse SQL statements.
+	Parser sql.Parser
 	// ExecBuilder converts a sql.Node tree into an executable iterator.
-	ExecBuilder sql.NodeExecBuilder
-	// EventScheduler is used to communiate with the event scheduler
-	// for any EVENT related statements. It can be nil if EventScheduler is not defined.
-	EventScheduler sql.EventScheduler
+	ExecBuilder *rowexec.BaseBuilder
+	// Runner represents the engine, which is represented as a separate interface to work around circular dependencies
+	Runner sql.StatementRunner
+	// SchemaFormatter is used to format the schema of a node to a string.
+	SchemaFormatter sql.SchemaFormatter
+	// Catalog of databases and registered functions.
+	Catalog *Catalog
+	// Overrides contains the overrides for the engine.
+	Overrides sql.EngineOverrides
+	// CachedResultsManager manages the caches created by CachedResults nodes.
+	CachedResultsManager *plan.CachedResultsManager
+	// A stack of debugger context. See PushDebugContext, PopDebugContext
+	contextStack []string
+	// Batches of Rules to apply.
+	Batches []*Batch
+	// Whether to log various debugging messages
+	Debug bool
+	// Whether to output detailed trace logging for join planning
+	Trace bool
+	// Whether to output the query plan at each step of the analyzer
+	Verbose bool
 }
 
 // NewDefault creates a default Analyzer instance with all default Rules and configuration.
 // To add custom rules, the easiest way is use the Builder.
 func NewDefault(provider sql.DatabaseProvider) *Analyzer {
-	return NewBuilder(provider).Build()
-
-}
-
-// NewDefaultWithVersion creates a default Analyzer instance either
-// experimental or
-func NewDefaultWithVersion(provider sql.DatabaseProvider) *Analyzer {
 	return NewBuilder(provider).Build()
 }
 
@@ -340,25 +351,25 @@ func (a *Analyzer) LogFn() func(string, ...any) {
 }
 
 // LogNode prints the node given if Verbose logging is enabled.
-func (a *Analyzer) LogNode(n sql.Node) {
+func (a *Analyzer) LogNode(ctx *sql.Context, n sql.Node) {
 	if a != nil && n != nil && a.Verbose {
 		if len(a.contextStack) > 0 {
-			ctx := strings.Join(a.contextStack, "/")
-			log.Infof("%s:\n%s", ctx, sql.DebugString(n))
+			ctxStr := strings.Join(a.contextStack, "/")
+			log.Infof("%s:\n%s", ctxStr, sql.DebugString(ctx, n))
 		} else {
-			log.Infof("%s", sql.DebugString(n))
+			log.Infof("%s", sql.DebugString(ctx, n))
 		}
 	}
 }
 
 // LogDiff logs the diff between the query plans after a transformation rules has been applied.
 // Only can print a diff when the string representations of the nodes differ, which isn't always the case.
-func (a *Analyzer) LogDiff(prev, next sql.Node) {
+func (a *Analyzer) LogDiff(ctx *sql.Context, prev, next sql.Node) {
 	if a.Debug && a.Verbose {
 		if !reflect.DeepEqual(next, prev) {
 			diff, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
-				A:        difflib.SplitLines(sql.DebugString(prev)),
-				B:        difflib.SplitLines(sql.DebugString(next)),
+				A:        difflib.SplitLines(sql.DebugString(ctx, prev)),
+				B:        difflib.SplitLines(sql.DebugString(ctx, next)),
 				FromFile: "Prev",
 				FromDate: "",
 				ToFile:   "Next",
@@ -369,7 +380,7 @@ func (a *Analyzer) LogDiff(prev, next sql.Node) {
 				panic(err)
 			}
 			if len(diff) > 0 {
-				a.Log(diff)
+				a.Log("%s", diff)
 			} else {
 				a.Log("nodes are different, but no textual diff found (implement better DebugString?)")
 			}
@@ -394,12 +405,6 @@ func (a *Analyzer) PopDebugContext() {
 func SelectAllBatches(string) bool { return true }
 
 func DefaultRuleSelector(id RuleId) bool {
-	switch id {
-	// prepared statement rules are incompatible with default rules
-	case reresolveTablesId,
-		resolvePreparedInsertId:
-		return false
-	}
 	return true
 }
 
@@ -408,12 +413,8 @@ func NewProcRuleSelector(sel RuleSelector) RuleSelector {
 		switch id {
 		case pruneTablesId,
 			unnestInSubqueriesId,
-
 			// once after default rules should only be run once
-			AutocommitId,
-			TrackProcessId,
-			parallelizeId,
-			clearWarningsId:
+			TrackProcessId:
 			return false
 		}
 		return sel(id)
@@ -441,13 +442,11 @@ func NewFinalizeSubquerySel(sel RuleSelector) RuleSelector {
 		switch id {
 		case
 			// skip recursive resolve rules
-			resolveSubqueryExprsId,
 			resolveSubqueriesId,
 			resolveUnionsId,
 			// skip redundant finalize rules
 			finalizeSubqueriesId,
 			hoistOutOfScopeFiltersId,
-			cacheSubqueryResultsId,
 			TrackProcessId,
 			assignExecIndexesId:
 			return false
@@ -461,10 +460,10 @@ func NewFinalizeUnionSel(sel RuleSelector) RuleSelector {
 		switch id {
 		case
 			// skip recursive resolve rules
-			resolveSubqueryExprsId,
 			resolveSubqueriesId,
 			resolveUnionsId,
-			parallelizeId:
+			// skip redundant finalize rules
+			assignExecIndexesId:
 			return false
 		case finalizeSubqueriesId,
 			hoistOutOfScopeFiltersId:
@@ -474,12 +473,16 @@ func NewFinalizeUnionSel(sel RuleSelector) RuleSelector {
 	}
 }
 
-func newInsertSourceSelector(sel RuleSelector) RuleSelector {
+func newInsertSourceSelector(sel RuleSelector, inTrigger bool) RuleSelector {
 	return func(id RuleId) bool {
 		switch id {
 		case unnestInSubqueriesId,
 			pushdownSubqueryAliasFiltersId:
 			return false
+		case eraseProjectionId:
+			if inTrigger {
+				return false
+			}
 		}
 		return sel(id)
 	}
@@ -487,9 +490,15 @@ func newInsertSourceSelector(sel RuleSelector) RuleSelector {
 
 // Analyze applies the transformation rules to the node given. In the case of an error, the last successfully
 // transformed node is returned along with the error.
-func (a *Analyzer) Analyze(ctx *sql.Context, n sql.Node, scope *plan.Scope, qFlags *sql.QueryFlags) (sql.Node, error) {
-	n, _, err := a.analyzeWithSelector(ctx, n, scope, SelectAllBatches, DefaultRuleSelector, qFlags)
-	return n, err
+func (a *Analyzer) Analyze(ctx *sql.Context, node sql.Node, scope *plan.Scope, qFlags *sql.QueryFlags) (sql.Node, error) {
+	switch n := node.(type) {
+	case *plan.DescribeQuery:
+		child, _, err := a.analyzeWithSelector(ctx, n.Query(), scope, SelectAllBatches, DefaultRuleSelector, qFlags)
+		qFlags.Unset(sql.QFlagMax1Row) // the rule replaceCountStar can set this incorrectly for queries containing count(*).
+		return n.WithQuery(child), err
+	}
+	node, _, err := a.analyzeWithSelector(ctx, node, scope, SelectAllBatches, DefaultRuleSelector, qFlags)
+	return node, err
 }
 
 func (a *Analyzer) analyzeThroughBatch(ctx *sql.Context, n sql.Node, scope *plan.Scope, until string, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
@@ -525,10 +534,10 @@ func (a *Analyzer) analyzeWithSelector(ctx *sql.Context, n sql.Node, scope *plan
 		err     error
 	)
 	a.Log("starting analysis of node of type: %T", n)
-	a.LogNode(n)
+	a.LogNode(ctx, n)
 
 	batches := a.Batches
-	if b, ok := getBatchesForNode(n, batches); ok {
+	if b, ok := getBatchesForNode(scope, n, qFlags); ok {
 		batches = b
 	}
 
@@ -569,9 +578,9 @@ func (a *Analyzer) analyzeStartingAtBatch(ctx *sql.Context, n sql.Node, scope *p
 	}, sel, qFlags)
 }
 
-func DeepCopyNode(node sql.Node) (sql.Node, error) {
-	n, _, err := transform.NodeExprs(node, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
-		e, err := transform.Clone(e)
+func DeepCopyNode(ctx *sql.Context, node sql.Node) (sql.Node, error) {
+	n, _, err := transform.NodeExprs(ctx, node, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+		e, err := transform.Clone(ctx, e)
 		return e, transform.NewTree, err
 	})
 	return n, err

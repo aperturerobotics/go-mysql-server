@@ -1,6 +1,6 @@
 <img height="240" src="./mascot.png"/>
 
-# A MySQL compatible database engine written in pure Go
+# A MySQL compatible database engine written in Go
 
 **go-mysql-server** is a data-source agnostic SQL engine and server
 which runs queries on data sources you provide, using the MySQL
@@ -56,6 +56,20 @@ directory with the `go.mod` file, run:
 go get github.com/dolthub/go-mysql-server@latest
 ```
 
+To implement ICU-compatible regexes, `go-mysql-server` has a dependency on
+[go-icu-regex](github.com/dolthub/go-icu-regex), which has a Cgo dependency on
+[ICU4C](https://unicode-org.github.io/icu/userguide/icu4c/). To build a project
+which depends on `go-mysql-server`, you should have a C/C++ toolchain, you
+should build with Cgo enabled, and you should have libicu-dev, or the
+equivalent for your environment, installed and available to your C++ toolchain.
+
+For convenience, `go-mysql-server` also includes a non-compatible regex
+implementation based on the Go standard library `regex.Regex`. To build against
+that, instead of the `go-icu-regex` implementation, you must compile with
+`-tags=gms_pure_go`.  Please note that some of go-mysql-server's tests do not
+pass with `-tags=gms_pure_go` and in general `gms_pure_go` is not recommended
+for users seeking MySQL compatibility.
+
 ## Using the in-memory test server
 
 The in-memory test server can replace a real MySQL server in
@@ -107,7 +121,7 @@ func main() {
 
 	session := memory.NewSession(sql.NewBaseSession(), pro)
 	ctx := sql.NewContext(context.Background(), sql.WithSession(session))
-	ctx.SetCurrentDatabase("test")
+	ctx.SetCurrentDatabase(dbName)
 
 	// This variable may be found in the "users_example.go" file. Please refer to that file for a walkthrough on how to
 	// set up the "mysql" database to allow user creation and user checking when establishing connections. This is set
@@ -122,7 +136,7 @@ func main() {
 		Protocol: "tcp",
 		Address:  fmt.Sprintf("%s:%d", address, port),
 	}
-	s, err := server.NewServer(config, engine, memory.NewSessionBuilder(pro), nil)
+	s, err := server.NewServer(config, engine, sql.NewContext, memory.NewSessionBuilder(pro), nil)
 	if err != nil {
 		panic(err)
 	}
@@ -133,13 +147,12 @@ func main() {
 
 func createTestDatabase() *memory.DbProvider {
 	db := memory.NewDatabase(dbName)
-	db.BaseDatabase.EnablePrimaryKeyIndexes()
 
 	pro := memory.NewDBProvider(db)
 	session := memory.NewSession(sql.NewBaseSession(), pro)
 	ctx := sql.NewContext(context.Background(), sql.WithSession(session))
 
-	table := memory.NewTable(db, tableName, sql.NewPrimaryKeySchema(sql.Schema{
+	table := memory.NewTable(ctx, db, tableName, sql.NewPrimaryKeySchema(sql.Schema{
 		{Name: "name", Type: types.Text, Nullable: false, Source: tableName, PrimaryKey: true},
 		{Name: "email", Type: types.Text, Nullable: false, Source: tableName, PrimaryKey: true},
 		{Name: "phone_numbers", Type: types.JSON, Nullable: false, Source: tableName},
@@ -210,6 +223,7 @@ implementing some interfaces. For detailed instructions, see the
 ## Powered by go-mysql-server
 
 * [dolt](https://github.com/dolthub/dolt)
+* [Grafana](https://www.dolthub.com/blog/2025-09-25-grafana-with-go-mysql-server/)
 * [gitbase](https://github.com/src-d/gitbase) (defunct)
 
 Are you building a database backend using **go-mysql-server**? We
@@ -235,3 +249,6 @@ Martinez (@juanjux).
 ## License
 
 Apache License 2.0, see [LICENSE](/LICENSE)
+
+The Go gopher was designed by [Renee French](https://reneefrench.blogspot.com/), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+The mascot image is based on work by [Takuya Ueda](https://twitter.com/tenntenn), licensed under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/), with modifications.

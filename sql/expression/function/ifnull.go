@@ -31,7 +31,7 @@ var _ sql.FunctionExpression = (*IfNull)(nil)
 var _ sql.CollationCoercible = (*IfNull)(nil)
 
 // NewIfNull returns a new IFNULL UDF
-func NewIfNull(ex, value sql.Expression) sql.Expression {
+func NewIfNull(ctx *sql.Context, ex, value sql.Expression) sql.Expression {
 	return &IfNull{
 		expression.BinaryExpressionStub{
 			LeftChild:  ex,
@@ -52,36 +52,38 @@ func (f *IfNull) Description() string {
 
 // Eval implements the Expression interface.
 func (f *IfNull) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+	t := f.Type(ctx)
+
 	left, err := f.LeftChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err
 	}
 	if left != nil {
-		return left, nil
+		if ret, _, err := t.Convert(ctx, left); err == nil {
+			return ret, nil
+		}
+		return left, err
 	}
 
 	right, err := f.RightChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err
 	}
-	return right, nil
+	if ret, _, err := t.Convert(ctx, right); err == nil {
+		return ret, nil
+	}
+	return right, err
 }
 
 // Type implements the Expression interface.
-func (f *IfNull) Type() sql.Type {
-	if types.IsNull(f.LeftChild) {
-		if types.IsNull(f.RightChild) {
-			return types.Null
-		}
-		return f.RightChild.Type()
-	}
-	return f.LeftChild.Type()
+func (f *IfNull) Type(ctx *sql.Context) sql.Type {
+	return types.GeneralizeTypes(f.LeftChild.Type(ctx), f.RightChild.Type(ctx))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (f *IfNull) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
-	if types.IsNull(f.LeftChild) {
-		if types.IsNull(f.RightChild) {
+	if types.IsNull(ctx, f.LeftChild) {
+		if types.IsNull(ctx, f.RightChild) {
 			return sql.Collation_binary, 6
 		}
 		return sql.GetCoercibility(ctx, f.RightChild)
@@ -90,14 +92,11 @@ func (f *IfNull) CollationCoercibility(ctx *sql.Context) (collation sql.Collatio
 }
 
 // IsNullable implements the Expression interface.
-func (f *IfNull) IsNullable() bool {
-	if types.IsNull(f.LeftChild) {
-		if types.IsNull(f.RightChild) {
-			return true
-		}
-		return f.RightChild.IsNullable()
+func (f *IfNull) IsNullable(ctx *sql.Context) bool {
+	if !f.LeftChild.IsNullable(ctx) {
+		return false
 	}
-	return f.LeftChild.IsNullable()
+	return f.RightChild.IsNullable(ctx)
 }
 
 func (f *IfNull) String() string {
@@ -105,9 +104,9 @@ func (f *IfNull) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (f *IfNull) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (f *IfNull) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(f, len(children), 2)
 	}
-	return NewIfNull(children[0], children[1]), nil
+	return NewIfNull(ctx, children[0], children[1]), nil
 }

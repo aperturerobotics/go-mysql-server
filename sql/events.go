@@ -22,20 +22,9 @@ import (
 	"time"
 
 	"gopkg.in/src-d/go-errors.v1"
-
-	gmstime "github.com/dolthub/go-mysql-server/internal/time"
 )
 
 const EventDateSpaceTimeFormat = "2006-01-02 15:04:05"
-
-// EventSchedulerStatement represents a SQL statement that requires a EventScheduler
-// (e.g. CREATE / ALTER / DROP EVENT and DROP DATABASE).
-type EventSchedulerStatement interface {
-	Node
-	// WithEventScheduler returns a new instance of this EventSchedulerStatement,
-	// with the event scheduler notifier configured.
-	WithEventScheduler(controller EventScheduler) Node
-}
 
 // EventScheduler is an interface used for notifying the EventSchedulerStatus
 // for querying any events related statements. This allows plan Nodes to communicate
@@ -55,6 +44,16 @@ type EventScheduler interface {
 
 // EventDefinition describes a scheduled event.
 type EventDefinition struct {
+	// The time at which the event was created.
+	CreatedAt time.Time
+	// The time at which the event was last altered.
+	LastAltered time.Time
+	// The time at which the event was last executed.
+	LastExecuted time.Time
+	ExecuteAt    time.Time
+	Starts       time.Time // STARTS is always defined when EVERY is defined.
+	Ends         time.Time
+
 	// The name of this event. Event names in a database are unique.
 	Name string
 	// The SQL statements to be executed when this event is executed.
@@ -67,22 +66,13 @@ type EventDefinition struct {
 	Definer string
 	// The SQL_MODE in effect when this event was created.
 	SqlMode string
-	// The time at which the event was created.
-	CreatedAt time.Time
-	// The time at which the event was last altered.
-	LastAltered time.Time
-	// The time at which the event was last executed.
-	LastExecuted time.Time
 
 	/* Fields parsed from the CREATE EVENT statement */
 	Comment              string
+	ExecuteEvery         string
 	OnCompletionPreserve bool
 	HasExecuteAt         bool
-	ExecuteAt            time.Time
-	ExecuteEvery         string
-	Starts               time.Time // STARTS is always defined when EVERY is defined.
 	HasEnds              bool
-	Ends                 time.Time
 }
 
 // ConvertTimesFromUTCToTz returns a new EventDefinition with all its time values converted
@@ -92,32 +82,32 @@ type EventDefinition struct {
 func (e *EventDefinition) ConvertTimesFromUTCToTz(tz string) *EventDefinition {
 	ne := *e
 	if ne.HasExecuteAt {
-		t, ok := gmstime.ConvertTimeZone(e.ExecuteAt, "+00:00", tz)
+		t, ok := ConvertTimeZone(e.ExecuteAt, "+00:00", tz)
 		if ok {
 			ne.ExecuteAt = t
 		}
 	} else {
-		t, ok := gmstime.ConvertTimeZone(e.Starts, "+00:00", tz)
+		t, ok := ConvertTimeZone(e.Starts, "+00:00", tz)
 		if ok {
 			ne.Starts = t
 		}
 		if ne.HasEnds {
-			t, ok = gmstime.ConvertTimeZone(e.Ends, "+00:00", tz)
+			t, ok = ConvertTimeZone(e.Ends, "+00:00", tz)
 			if ok {
 				ne.Ends = t
 			}
 		}
 	}
 
-	t, ok := gmstime.ConvertTimeZone(e.CreatedAt, "+00:00", tz)
+	t, ok := ConvertTimeZone(e.CreatedAt, "+00:00", tz)
 	if ok {
 		ne.CreatedAt = t
 	}
-	t, ok = gmstime.ConvertTimeZone(e.LastAltered, "+00:00", tz)
+	t, ok = ConvertTimeZone(e.LastAltered, "+00:00", tz)
 	if ok {
 		ne.LastAltered = t
 	}
-	t, ok = gmstime.ConvertTimeZone(e.LastExecuted, "+00:00", tz)
+	t, ok = ConvertTimeZone(e.LastExecuted, "+00:00", tz)
 	if ok {
 		ne.LastExecuted = t
 	}
@@ -372,7 +362,7 @@ var tzRegex = regexp.MustCompile(`(?m)^([+\-])(\d{2}):(\d{2})$`)
 // evaluating valid MySQL datetime and timestamp formats.
 func GetTimeValueFromStringInput(field, t string) (time.Time, error) {
 	// TODO: the time value should be in session timezone rather than system timezone.
-	sessTz := gmstime.SystemTimezoneOffset()
+	sessTz := SystemTimezoneOffset()
 
 	// For MySQL datetime format, it accepts any valid date format
 	// and tries parsing time part first and timezone part if time part is valid.
@@ -412,13 +402,13 @@ func GetTimeValueFromStringInput(field, t string) (time.Time, error) {
 		datetimeVal := fmt.Sprintf("%4d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second)
 		tVal, err := time.Parse(EventDateSpaceTimeFormat, datetimeVal)
 		if err != nil {
-			return time.Time{}, fmt.Errorf("invalid time zone: %s", sessTz)
+			return time.Time{}, ErrInvalidTimeZone.New(sessTz)
 		}
 
 		// convert the time value to the session timezone for display and storage
-		tVal, ok = gmstime.ConvertTimeZone(tVal, inputTz, sessTz)
+		tVal, ok = ConvertTimeZone(tVal, inputTz, sessTz)
 		if !ok {
-			return time.Time{}, fmt.Errorf("invalid time zone: %s", sessTz)
+			return time.Time{}, ErrInvalidTimeZone.New(sessTz)
 		}
 		return tVal, nil
 	} else {

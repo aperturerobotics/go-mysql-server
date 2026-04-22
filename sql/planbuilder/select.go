@@ -107,7 +107,9 @@ func (b *Builder) buildSelect(inScope *scope, s *ast.Select) (outScope *scope) {
 	b.buildProjection(outScope, projScope)
 	outScope = projScope
 
-	b.buildDistinct(outScope, s.QueryOpts.Distinct)
+	if err := b.buildDistinct(outScope, s.QueryOpts.Distinct, s.QueryOpts.DistinctOn); err != nil {
+		b.handleErr(err)
+	}
 
 	// OFFSET and LIMIT are last
 	offset := b.buildOffset(outScope, s.Limit)
@@ -121,11 +123,13 @@ func (b *Builder) buildSelect(inScope *scope, s *ast.Select) (outScope *scope) {
 		outScope.node = l
 	}
 
+	b.buildForUpdateOf(s.Lock, fromScope)
+
 	return
 }
 
 func (b *Builder) buildLimit(inScope *scope, limit *ast.Limit) sql.Expression {
-	if limit != nil {
+	if limit != nil && limit.Rowcount != nil {
 		return b.buildLimitVal(inScope, limit.Rowcount)
 	}
 	return nil
@@ -149,23 +153,26 @@ func (b *Builder) buildOffset(inScope *scope, limit *ast.Limit) sql.Expression {
 }
 
 // buildLimitVal resolves a literal numeric type or a numeric
-// prodecure parameter
+// procedure parameter
 func (b *Builder) buildLimitVal(inScope *scope, e ast.Expr) sql.Expression {
 	switch e := e.(type) {
 	case *ast.ColName:
+		if e.StoredProcVal != nil {
+			return b.buildLimitVal(inScope, e.StoredProcVal)
+		}
 		if inScope.procActive() {
 			if col, ok := inScope.proc.GetVar(e.String()); ok {
 				// proc param is OK
 				if pp, ok := col.scalarGf().(*expression.ProcedureParam); ok {
-					if !pp.Type().Promote().Equals(types.Int64) && !pp.Type().Promote().Equals(types.Uint64) {
-						err := fmt.Errorf("the variable '%s' has a non-integer based type: %s", pp.Name(), pp.Type().String())
+					if !pp.Type(b.ctx).Promote().Equals(types.Int64) && !pp.Type(b.ctx).Promote().Equals(types.Uint64) {
+						err := fmt.Errorf("the variable '%s' has a non-integer based type: %s", pp.Name(), pp.Type(b.ctx).String())
 						b.handleErr(err)
 					}
 					return pp
 				}
 			}
 		}
-		err := fmt.Errorf("limit expression expected to be numeric or prodecure parameter, found invalid column: %s", e.String())
+		err := fmt.Errorf("limit expression expected to be numeric or procedure parameter, found invalid column: %s", e.String())
 		b.handleErr(err)
 	default:
 		l := b.buildScalar(inScope, e)
@@ -178,9 +185,9 @@ func (b *Builder) typeCoerceLiteral(e sql.Expression) sql.Expression {
 	// todo this should be in a module that can generically coerce to a type or type class
 	switch e := e.(type) {
 	case *expression.Literal:
-		val, _, err := types.Int64.Convert(e.Value())
+		val, _, err := types.Int64.Convert(b.ctx, e.Value())
 		if err != nil {
-			err = fmt.Errorf("%s: %w", err.Error(), sql.ErrInvalidTypeForLimit.New(types.Int64, e.Type()))
+			err = fmt.Errorf("%s: %w", err.Error(), sql.ErrInvalidTypeForLimit.New(types.Int64, e.Type(b.ctx)))
 		}
 		return expression.NewLiteral(val, types.Int64)
 	case *expression.BindVar:
@@ -194,10 +201,17 @@ func (b *Builder) typeCoerceLiteral(e sql.Expression) sql.Expression {
 
 // buildDistinct creates a new plan.Distinct node if the query has a DISTINCT option.
 // If the query has both DISTINCT and ALL, an error is returned.
-func (b *Builder) buildDistinct(inScope *scope, distinct bool) {
-	if distinct {
-		inScope.node = plan.NewDistinct(inScope.node)
+func (b *Builder) buildDistinct(inScope *scope, distinct bool, distinctOn ast.Exprs) error {
+	if !distinct {
+		return nil
 	}
+	distinctOnExprs := make([]sql.Expression, len(distinctOn))
+	for i := range distinctOn {
+		distinctOnExprs[i] = b.buildScalar(inScope, distinctOn[i])
+	}
+	var err error
+	inScope.node, err = b.f.buildDistinct(b.ctx, inScope.node, inScope.refsSubquery, distinctOnExprs)
+	return err
 }
 
 func (b *Builder) currentDb() sql.Database {
@@ -210,11 +224,10 @@ func (b *Builder) currentDb() sql.Database {
 		if err != nil {
 			b.handleErr(err)
 		}
-
-		if privilegedDatabase, ok := database.(mysql_db.PrivilegedDatabase); ok {
-			database = privilegedDatabase.Unwrap()
-		}
 		b.currentDatabase = database
+	}
+	if privilegedDatabase, ok := b.currentDatabase.(mysql_db.PrivilegedDatabase); ok {
+		b.currentDatabase = privilegedDatabase.Unwrap()
 	}
 	return b.currentDatabase
 }
@@ -229,5 +242,24 @@ func (b *Builder) renameSource(scope *scope, table string, cols []string) {
 	for i, c := range scope.cols {
 		c.scalar = nil
 		scope.cols[i] = c
+	}
+}
+
+// buildForUpdateOf builds the `FOR UPDATE OF` clause, ensuring that all tables listed are
+// present in the clause. `FOR UPDATE` in general is a no-op, so `FOR UPDATE OF` is
+// also a no-op: https://www.dolthub.com/blog/2023-10-23-hold-my-beer/
+// TODO: implement actual row-level locking for `FOR UPDATE` clauses in general.
+func (b *Builder) buildForUpdateOf(lock *ast.Lock, fromScope *scope) {
+	if lock == nil {
+		return
+	}
+
+	for _, tableName := range lock.Tables {
+		tableNameStr := tableName.Name.String()
+
+		if !fromScope.hasTable(tableNameStr) {
+			b.handleErr(sql.ErrUnresolvedTableLock.New(tableNameStr))
+			return
+		}
 	}
 }

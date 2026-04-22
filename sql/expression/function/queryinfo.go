@@ -20,72 +20,72 @@ import (
 	"github.com/dolthub/vitess/go/sqltypes"
 
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
 // RowCount implements the ROW_COUNT() function
 type RowCount struct{}
 
-func (r RowCount) IsNonDeterministic() bool {
-	return true
+func NewRowCount(ctx *sql.Context) sql.Expression {
+	return &RowCount{}
 }
 
-func NewRowCount() sql.Expression {
-	return RowCount{}
-}
-
-var _ sql.FunctionExpression = RowCount{}
-var _ sql.CollationCoercible = RowCount{}
+var _ sql.FunctionExpression = &RowCount{}
+var _ sql.CollationCoercible = &RowCount{}
 
 // Description implements sql.FunctionExpression
-func (r RowCount) Description() string {
+func (r *RowCount) Description() string {
 	return "returns the number of rows updated."
 }
 
 // Resolved implements sql.Expression
-func (r RowCount) Resolved() bool {
+func (r *RowCount) Resolved() bool {
 	return true
 }
 
 // String implements sql.Expression
-func (r RowCount) String() string {
+func (r *RowCount) String() string {
 	return fmt.Sprintf("%s()", r.FunctionName())
 }
 
 // Type implements sql.Expression
-func (r RowCount) Type() sql.Type {
+func (r *RowCount) Type(ctx *sql.Context) sql.Type {
 	return types.Int64
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
-func (RowCount) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
+func (*RowCount) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.Collation_binary, 5
 }
 
 // IsNullable implements sql.Expression
-func (r RowCount) IsNullable() bool {
+func (r *RowCount) IsNullable(ctx *sql.Context) bool {
 	return false
 }
 
 // Eval implements sql.Expression
-func (r RowCount) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
-	return ctx.GetLastQueryInfoInt(sql.RowCount), nil
+func (r *RowCount) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+	return ctx.GetLastQueryInfo().RowCount.Load(), nil
 }
 
 // Children implements sql.Expression
-func (r RowCount) Children() []sql.Expression {
+func (r *RowCount) Children() []sql.Expression {
 	return nil
 }
 
 // WithChildren implements sql.Expression
-func (r RowCount) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return sql.NillaryWithChildren(r, children...)
+func (r *RowCount) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return sql.NillaryWithChildren(ctx, r, children...)
 }
 
 // FunctionName implements sql.FunctionExpression
-func (r RowCount) FunctionName() string {
+func (r *RowCount) FunctionName() string {
 	return "row_count"
+}
+
+// IsNonDeterministic implements sql.NonDeterministicExpression
+func (r *RowCount) IsNonDeterministic() bool {
+	return true
 }
 
 // LastInsertUuid implements the LAST_INSERT_UUID() function. This function is
@@ -93,122 +93,117 @@ func (r RowCount) FunctionName() string {
 // if customers are inserting UUIDs into a table.
 type LastInsertUuid struct{}
 
-var _ sql.FunctionExpression = LastInsertUuid{}
-var _ sql.CollationCoercible = LastInsertUuid{}
+var _ sql.FunctionExpression = &LastInsertUuid{}
+var _ sql.CollationCoercible = &LastInsertUuid{}
 
-func NewLastInsertUuid(children ...sql.Expression) (sql.Expression, error) {
+func NewLastInsertUuid(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) > 0 {
-		return nil, sql.ErrInvalidChildrenNumber.New(LastInsertUuid{}.String(), len(children), 0)
+		return nil, sql.ErrInvalidChildrenNumber.New((&LastInsertUuid{}).String(), len(children), 0)
 	}
-
 	return &LastInsertUuid{}, nil
 }
 
-func (l LastInsertUuid) CollationCoercibility(_ *sql.Context) (collation sql.CollationID, coercibility byte) {
+func (l *LastInsertUuid) CollationCoercibility(_ *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.Collation_binary, 5
 }
 
-func (l LastInsertUuid) Resolved() bool {
+func (l *LastInsertUuid) Resolved() bool {
 	return true
 }
 
-func (l LastInsertUuid) String() string {
+func (l *LastInsertUuid) String() string {
 	return fmt.Sprintf("%s()", l.FunctionName())
 }
 
-func (l LastInsertUuid) Type() sql.Type {
+func (l *LastInsertUuid) Type(ctx *sql.Context) sql.Type {
 	return types.MustCreateStringWithDefaults(sqltypes.VarChar, 36)
 }
 
-func (l LastInsertUuid) IsNullable() bool {
+func (l *LastInsertUuid) IsNullable(ctx *sql.Context) bool {
 	return false
 }
 
-func (l LastInsertUuid) Eval(ctx *sql.Context, _ sql.Row) (interface{}, error) {
-	lastInsertUuid := ctx.GetLastQueryInfoString(sql.LastInsertUuid)
-	result, _, err := l.Type().Convert(lastInsertUuid)
+func (l *LastInsertUuid) Eval(ctx *sql.Context, _ sql.Row) (interface{}, error) {
+	lastInsertUUID := ctx.GetLastQueryInfo().LastInsertUUID.Load()
+	result, _, err := l.Type(ctx).Convert(ctx, lastInsertUUID)
 	if err != nil {
 		return nil, err
 	}
 	return result, nil
 }
 
-func (l LastInsertUuid) Children() []sql.Expression {
+func (l *LastInsertUuid) Children() []sql.Expression {
 	return nil
 }
 
-func (l LastInsertUuid) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return NewLastInsertUuid(children...)
+func (l *LastInsertUuid) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return NewLastInsertUuid(ctx, children...)
 }
 
-func (l LastInsertUuid) FunctionName() string {
+func (l *LastInsertUuid) FunctionName() string {
 	return "last_insert_uuid"
 }
 
-func (l LastInsertUuid) Description() string {
+func (l *LastInsertUuid) Description() string {
 	return "returns the first value of the UUID() function from the last INSERT statement."
 }
 
 // LastInsertId implements the LAST_INSERT_ID() function
 // https://dev.mysql.com/doc/refman/8.0/en/information-functions.html#function_last-insert-id
 type LastInsertId struct {
-	expression.UnaryExpression
+	Child sql.Expression
 }
 
-func (r LastInsertId) IsNonDeterministic() bool {
-	return true
-}
-
-func NewLastInsertId(children ...sql.Expression) (sql.Expression, error) {
+func NewLastInsertId(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	switch len(children) {
 	case 0:
-		return LastInsertId{}, nil
+		return &LastInsertId{}, nil
 	case 1:
-		return LastInsertId{UnaryExpression: expression.UnaryExpression{Child: children[0]}}, nil
+		return &LastInsertId{Child: children[0]}, nil
 	default:
 		return nil, sql.ErrInvalidArgumentNumber.New("LastInsertId", len(children), 1)
 	}
 }
 
-var _ sql.FunctionExpression = LastInsertId{}
-var _ sql.CollationCoercible = LastInsertId{}
+var _ sql.FunctionExpression = &LastInsertId{}
+var _ sql.CollationCoercible = &LastInsertId{}
 
 // Description implements sql.FunctionExpression
-func (r LastInsertId) Description() string {
+func (r *LastInsertId) Description() string {
 	return "returns value of the AUTOINCREMENT column for the last INSERT."
 }
 
 // Resolved implements sql.Expression
-func (r LastInsertId) Resolved() bool {
+func (r *LastInsertId) Resolved() bool {
 	return true
 }
 
 // String implements sql.Expression
-func (r LastInsertId) String() string {
+func (r *LastInsertId) String() string {
 	return fmt.Sprintf("%s(%s)", r.FunctionName(), r.Child)
 }
 
 // Type implements sql.Expression
-func (r LastInsertId) Type() sql.Type {
+func (r *LastInsertId) Type(ctx *sql.Context) sql.Type {
 	return types.Uint64
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
-func (LastInsertId) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
+func (*LastInsertId) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.Collation_binary, 5
 }
 
 // IsNullable implements sql.Expression
-func (r LastInsertId) IsNullable() bool {
+func (r *LastInsertId) IsNullable(ctx *sql.Context) bool {
 	return false
 }
 
 // Eval implements sql.Expression
-func (r LastInsertId) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (r *LastInsertId) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	// With no arguments, just return the last insert id for this session
 	if len(r.Children()) == 0 {
-		lastInsertId := ctx.GetLastQueryInfoInt(sql.LastInsertId)
-		unsigned, _, err := types.Uint64.Convert(lastInsertId)
+		lastInsertId := ctx.GetLastQueryInfo().LastInsertId.Load()
+		unsigned, _, err := types.Uint64.Convert(ctx, lastInsertId)
 		if err != nil {
 			return nil, err
 		}
@@ -220,17 +215,17 @@ func (r LastInsertId) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	id, _, err := types.Int64.Convert(res)
+	id, _, err := types.Int64.Convert(ctx, res)
 	if err != nil {
 		return nil, err
 	}
 
-	ctx.SetLastQueryInfoInt(sql.LastInsertId, id.(int64))
+	ctx.GetLastQueryInfo().LastInsertId.Store(id.(int64))
 	return id, nil
 }
 
 // Children implements sql.Expression
-func (r LastInsertId) Children() []sql.Expression {
+func (r *LastInsertId) Children() []sql.Expression {
 	if r.Child == nil {
 		return nil
 	}
@@ -238,75 +233,81 @@ func (r LastInsertId) Children() []sql.Expression {
 }
 
 // WithChildren implements sql.Expression
-func (r LastInsertId) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return NewLastInsertId(children...)
+func (r *LastInsertId) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return NewLastInsertId(ctx, children...)
 }
 
 // FunctionName implements sql.FunctionExpression
-func (r LastInsertId) FunctionName() string {
+func (r *LastInsertId) FunctionName() string {
 	return "last_insert_id"
+}
+
+// IsNonDeterministic implements sql.NonDeterministicExpression
+func (r *LastInsertId) IsNonDeterministic() bool {
+	return true
 }
 
 // FoundRows implements the FOUND_ROWS() function
 type FoundRows struct{}
 
-func (r FoundRows) IsNonDeterministic() bool {
-	return true
+func NewFoundRows(ctx *sql.Context) sql.Expression {
+	return &FoundRows{}
 }
 
-func NewFoundRows() sql.Expression {
-	return FoundRows{}
-}
-
-var _ sql.FunctionExpression = FoundRows{}
-var _ sql.CollationCoercible = FoundRows{}
+var _ sql.FunctionExpression = &FoundRows{}
+var _ sql.CollationCoercible = &FoundRows{}
 
 // FunctionName implements sql.FunctionExpression
-func (r FoundRows) FunctionName() string {
+func (r *FoundRows) FunctionName() string {
 	return "found_rows"
 }
 
 // Description implements sql.Expression
-func (r FoundRows) Description() string {
+func (r *FoundRows) Description() string {
 	return "for a SELECT with a LIMIT clause, returns the number of rows that would be returned were there no LIMIT clause."
 }
 
 // Resolved implements sql.Expression
-func (r FoundRows) Resolved() bool {
+func (r *FoundRows) Resolved() bool {
 	return true
 }
 
 // String implements sql.Expression
-func (r FoundRows) String() string {
+func (r *FoundRows) String() string {
 	return fmt.Sprintf("%s()", r.FunctionName())
 }
 
 // Type implements sql.Expression
-func (r FoundRows) Type() sql.Type {
+func (r *FoundRows) Type(ctx *sql.Context) sql.Type {
 	return types.Int64
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
-func (FoundRows) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
+func (*FoundRows) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.Collation_binary, 5
 }
 
 // IsNullable implements sql.Expression
-func (r FoundRows) IsNullable() bool {
+func (r *FoundRows) IsNullable(ctx *sql.Context) bool {
 	return false
 }
 
 // Eval implements sql.Expression
-func (r FoundRows) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
-	return ctx.GetLastQueryInfoInt(sql.FoundRows), nil
+func (r *FoundRows) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+	return ctx.GetLastQueryInfo().FoundRows.Load(), nil
 }
 
 // Children implements sql.Expression
-func (r FoundRows) Children() []sql.Expression {
+func (r *FoundRows) Children() []sql.Expression {
 	return nil
 }
 
 // WithChildren implements sql.Expression
-func (r FoundRows) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return sql.NillaryWithChildren(r, children...)
+func (r *FoundRows) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return sql.NillaryWithChildren(ctx, r, children...)
+}
+
+// IsNonDeterministic implements sql.NonDeterministicExpression
+func (r *FoundRows) IsNonDeterministic() bool {
+	return true
 }

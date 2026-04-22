@@ -38,20 +38,26 @@ type DoneFunc func()
 // connections and keep track of which sessions are in each connection, so
 // they can be cancelled if the connection is closed.
 type SessionManager struct {
-	addr        string
 	tracer      trace.Tracer
+	processlist sql.ProcessList
 	getDbFunc   func(ctx *sql.Context, db string) (sql.Database, error)
 	memory      *sql.MemoryManager
-	processlist sql.ProcessList
 	mu          *sync.Mutex
 	builder     SessionBuilder
 	sessions    map[uint32]sql.Session
 	connections map[uint32]*mysql.Conn
-	lastPid     uint64
+	ctxFactory  sql.ContextFactory
+	addr        string
+	// Implements WaitForClosedConnections(), which is only used
+	// at server shutdown to allow the integrator to ensure that
+	// no connections are being handled by handlers.
+	wg      sync.WaitGroup
+	lastPid uint64
 }
 
 // NewSessionManager creates a SessionManager with the given SessionBuilder.
 func NewSessionManager(
+	ctxFactory sql.ContextFactory,
 	builder SessionBuilder,
 	tracer trace.Tracer,
 	getDbFunc func(ctx *sql.Context, db string) (sql.Database, error),
@@ -69,6 +75,7 @@ func NewSessionManager(
 		builder:     builder,
 		sessions:    make(map[uint32]sql.Session),
 		connections: make(map[uint32]*mysql.Conn),
+		ctxFactory:  ctxFactory,
 	}
 }
 
@@ -77,6 +84,13 @@ func (s *SessionManager) nextPid() uint64 {
 	defer s.mu.Unlock()
 	s.lastPid++
 	return s.lastPid
+}
+
+// Block the calling thread until all known connections are closed. It
+// is an error to call this concurrently while the server might still
+// be accepting new connections.
+func (s *SessionManager) WaitForClosedConnections() {
+	s.wg.Wait()
 }
 
 // AddConn adds a connection to be tracked by the SessionManager. Should be called as
@@ -90,6 +104,20 @@ func (s *SessionManager) AddConn(conn *mysql.Conn) {
 	defer s.mu.Unlock()
 	s.connections[conn.ConnectionID] = conn
 	s.processlist.AddConnection(conn.ConnectionID, conn.RemoteAddr().String())
+	s.wg.Add(1)
+}
+
+// Called once a connection is authenticated and in a ready
+// state. Responsible for creating the session associated with the
+// connection and registering the session, with appropriate
+// authentication information, with the process list.
+func (s *SessionManager) ConnReady(ctx context.Context, conn *mysql.Conn) error {
+	sess, err := s.getOrCreateSession(ctx, conn)
+	if err != nil {
+		return err
+	}
+	s.processlist.ConnectionReady(sess)
+	return nil
 }
 
 // NewSession creates a Session for the given connection and saves it to the session pool.
@@ -102,6 +130,10 @@ func (s *SessionManager) NewSession(ctx context.Context, conn *mysql.Conn) error
 	}
 
 	session.SetConnectionId(conn.ConnectionID)
+
+	if cur, ok := s.sessions[conn.ConnectionID]; ok {
+		sql.SessionEnd(cur)
+	}
 
 	s.sessions[conn.ConnectionID] = session
 
@@ -119,16 +151,29 @@ func (s *SessionManager) NewSession(ctx context.Context, conn *mysql.Conn) error
 	return err
 }
 
-func (s *SessionManager) SetDB(conn *mysql.Conn, dbName string) error {
-	sess, err := s.getOrCreateSession(context.Background(), conn)
+// SetDB sets the current database of the given connection session.
+// If the session does not exist, it creates a new session with given connection.
+func (s *SessionManager) SetDB(ctx context.Context, conn *mysql.Conn, dbName string) error {
+	sess, err := s.getOrCreateSession(ctx, conn)
 	if err != nil {
 		return err
 	}
 
-	ctx := sql.NewContext(context.Background(), sql.WithSession(sess))
+	err = sql.SessionCommandBegin(sess)
+	if err != nil {
+		return err
+	}
+	defer sql.SessionCommandEnd(sess)
+
+	sqlCtx := s.ctxFactory(ctx, sql.WithSession(sess))
+	sqlCtx, err = s.processlist.BeginOperation(sqlCtx)
+	if err != nil {
+		return err
+	}
+	defer s.processlist.EndOperation(sqlCtx)
 	var db sql.Database
 	if dbName != "" {
-		db, err = s.getDbFunc(ctx, dbName)
+		db, err = s.getDbFunc(sqlCtx, dbName)
 		if err != nil {
 			return err
 		}
@@ -139,14 +184,32 @@ func (s *SessionManager) SetDB(conn *mysql.Conn, dbName string) error {
 		if pdb, ok := db.(mysql_db.PrivilegedDatabase); ok {
 			db = pdb.Unwrap()
 		}
-		err = sess.UseDatabase(ctx, db)
+		err = sess.UseDatabase(sqlCtx, db)
 		if err != nil {
 			return err
 		}
 	}
 
+	// We do this here and in ConnReady.
+	//
+	// Previously, Vitess did not have a ConnectionAuthenticated
+	// callback on the Handler and the only time we updated the
+	// authenticated user information in the processlist was on
+	// ComInitDB. This resulted in "unathenticated user" being
+	// shown in the process list if a connection chose to run
+	// queries without issuing ComInitDB.
+	//
+	// Calling this here makes certain the current database
+	// updates StartedAt and allows the newly selected database to
+	// be correctly reflected in the process list.
 	s.processlist.ConnectionReady(sess)
 	return nil
+}
+
+// GetCurrentDB returns the current database name of the given connection session.
+func (s *SessionManager) GetCurrentDB(conn *mysql.Conn) string {
+	sess := s.session(conn)
+	return sess.GetCurrentDatabase()
 }
 
 // Iter iterates over the active sessions and executes the specified callback function on each one.
@@ -176,11 +239,6 @@ func (s *SessionManager) session(conn *mysql.Conn) sql.Session {
 	return s.sessions[conn.ConnectionID]
 }
 
-// NewContext creates a new context for the session at the given conn.
-func (s *SessionManager) NewContext(ctx context.Context, conn *mysql.Conn, query string) (*sql.Context, error) {
-	return s.NewContextWithQuery(ctx, conn, query)
-}
-
 func (s *SessionManager) getOrCreateSession(ctx context.Context, conn *mysql.Conn) (sql.Session, error) {
 	s.mu.Lock()
 	sess, ok := s.sessions[conn.ConnectionID]
@@ -202,6 +260,15 @@ func (s *SessionManager) getOrCreateSession(ctx context.Context, conn *mysql.Con
 	return sess, nil
 }
 
+// InitSessionDefaultVariable sets a default value to a parameter of a session at start.
+func (s *SessionManager) InitSessionDefaultVariable(ctx context.Context, conn *mysql.Conn, name, value string) error {
+	sess, err := s.getOrCreateSession(ctx, conn)
+	if err != nil {
+		return err
+	}
+	return sess.InitSessionVariableDefault(s.ctxFactory(ctx, sql.WithSession(sess)), name, value)
+}
+
 // NewContextWithQuery creates a new context for the session at the given conn.
 func (s *SessionManager) NewContextWithQuery(ctx context.Context, conn *mysql.Conn, query string) (*sql.Context, error) {
 	sess, err := s.getOrCreateSession(ctx, conn)
@@ -212,7 +279,7 @@ func (s *SessionManager) NewContextWithQuery(ctx context.Context, conn *mysql.Co
 
 	ctx, span := s.tracer.Start(ctx, "query")
 
-	context := sql.NewContext(
+	createdCtx := s.ctxFactory(
 		ctx,
 		sql.WithSession(sess),
 		sql.WithTracer(s.tracer),
@@ -227,7 +294,7 @@ func (s *SessionManager) NewContextWithQuery(ctx context.Context, conn *mysql.Co
 		}),
 	)
 
-	return context, nil
+	return createdCtx, nil
 }
 
 // Exposed through (*sql.Context).Services.KillConnection. Calls Close on the
@@ -249,6 +316,10 @@ func (s *SessionManager) KillConnection(connID uint32) error {
 func (s *SessionManager) RemoveConn(conn *mysql.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.wg.Done()
+	if cur, ok := s.sessions[conn.ConnectionID]; ok {
+		sql.SessionEnd(cur)
+	}
 	delete(s.sessions, conn.ConnectionID)
 	delete(s.connections, conn.ConnectionID)
 	s.processlist.RemoveConnection(conn.ConnectionID)

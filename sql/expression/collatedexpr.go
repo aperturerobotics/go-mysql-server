@@ -16,6 +16,7 @@ package expression
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/types"
@@ -34,7 +35,7 @@ var _ sql.CollationCoercible = (*CollatedExpression)(nil)
 var _ sql.DebugStringer = (*CollatedExpression)(nil)
 
 // NewCollatedExpression creates a new CollatedExpression expression. If the given expression is already a
-// CollatedExpression, then the previous collation is overriden with the given one.
+// CollatedExpression, then the previous collation is overridden with the given one.
 func NewCollatedExpression(expr sql.Expression, collation sql.CollationID) *CollatedExpression {
 	if collatedExpr, ok := expr.(*CollatedExpression); ok {
 		return &CollatedExpression{
@@ -54,13 +55,13 @@ func (ce *CollatedExpression) Resolved() bool {
 }
 
 // IsNullable implements the sql.Expression interface.
-func (ce *CollatedExpression) IsNullable() bool {
-	return ce.expr.IsNullable()
+func (ce *CollatedExpression) IsNullable(ctx *sql.Context) bool {
+	return ce.expr.IsNullable(ctx)
 }
 
 // Type implements the sql.Expression interface.
-func (ce *CollatedExpression) Type() sql.Type {
-	typ := ce.expr.Type()
+func (ce *CollatedExpression) Type(ctx *sql.Context) sql.Type {
+	typ := ce.expr.Type(ctx)
 	if collatedType, ok := typ.(sql.TypeWithCollation); ok {
 		newType, err := collatedType.WithNewCollation(ce.collation)
 		if err == nil {
@@ -80,13 +81,24 @@ func (ce *CollatedExpression) CollationCoercibility(ctx *sql.Context) (collation
 
 // Eval implements the sql.Expression interface.
 func (ce *CollatedExpression) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
-	typ := ce.expr.Type()
+	typ := ce.expr.Type(ctx)
 	if !types.IsText(typ) {
 		return nil, sql.ErrCollatedExprWrongType.New()
 	}
 	if ce.collation.CharacterSet() != typ.(sql.TypeWithCollation).Collation().CharacterSet() {
-		return nil, sql.ErrCollationInvalidForCharSet.New(
-			ce.collation.Name(), typ.(sql.TypeWithCollation).Collation().CharacterSet().Name())
+		// We expose information_schema as utf8mb3 but some tools will try to use our default charset of utf8mb4, so we
+		// ignore the collation altogether in these cases. This is added due to tools throwing collations in places
+		// where it's not necessary.
+		shouldIgnore := false
+		if gf, ok := ce.expr.(*GetField); ok {
+			if strings.EqualFold("information_schema", gf.db) {
+				shouldIgnore = true
+			}
+		}
+		if !shouldIgnore {
+			return nil, sql.ErrCollationInvalidForCharSet.New(
+				ce.collation.Name(), typ.(sql.TypeWithCollation).Collation().CharacterSet().Name())
+		}
 	}
 	return ce.expr.Eval(ctx, row)
 }
@@ -96,10 +108,10 @@ func (ce *CollatedExpression) String() string {
 }
 
 // DebugString implements the sql.DebugStringer interface.
-func (ce *CollatedExpression) DebugString() string {
+func (ce *CollatedExpression) DebugString(ctx *sql.Context) string {
 	var innerDebugStr string
 	if debugExpr, ok := ce.expr.(sql.DebugStringer); ok {
-		innerDebugStr = debugExpr.DebugString()
+		innerDebugStr = debugExpr.DebugString(ctx)
 	} else {
 		innerDebugStr = ce.expr.String()
 	}
@@ -107,7 +119,7 @@ func (ce *CollatedExpression) DebugString() string {
 }
 
 // WithChildren implements the sql.Expression interface.
-func (ce *CollatedExpression) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (ce *CollatedExpression) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(ce, len(children), 1)
 	}

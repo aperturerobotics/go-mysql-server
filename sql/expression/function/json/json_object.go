@@ -35,7 +35,7 @@ var _ sql.FunctionExpression = JSONObject{}
 var _ sql.CollationCoercible = JSONObject{}
 
 // NewJSONObject creates a new JSONObject function.
-func NewJSONObject(exprs ...sql.Expression) (sql.Expression, error) {
+func NewJSONObject(ctx *sql.Context, exprs ...sql.Expression) (sql.Expression, error) {
 	if len(exprs)%2 != 0 {
 		return nil, sql.ErrInvalidArgumentNumber.New("JSON_OBJECT", "an even number of", len(exprs))
 	}
@@ -79,7 +79,7 @@ func (j JSONObject) String() string {
 	return fmt.Sprintf("%s(%s)", j.FunctionName(), strings.Join(parts, ","))
 }
 
-func (j JSONObject) Type() sql.Type {
+func (j JSONObject) Type(ctx *sql.Context) sql.Type {
 	return types.JSON
 }
 
@@ -88,7 +88,7 @@ func (JSONObject) CollationCoercibility(ctx *sql.Context) (collation sql.Collati
 	return ctx.GetCharacterSet().BinaryCollation(), 2
 }
 
-func (j JSONObject) IsNullable() bool {
+func (j JSONObject) IsNullable(ctx *sql.Context) bool {
 	return false
 }
 
@@ -102,14 +102,21 @@ func (j JSONObject) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 			return nil, err
 		}
 		if i%2 == 0 {
-			val, _, err := types.LongText.Convert(val)
+			val, _, err = types.LongText.Convert(ctx, val)
 			if err != nil {
 				return nil, err
 			}
-			key = val.(string)
+			key, _, err = sql.Unwrap[string](ctx, val)
+			if err != nil {
+				return nil, err
+			}
 		} else {
+			val, err = sql.UnwrapAny(ctx, val)
+			if err != nil {
+				return nil, err
+			}
 			if json, ok := val.(sql.JSONWrapper); ok {
-				val, err = json.ToInterface()
+				val, err = json.ToInterface(ctx)
 				if err != nil {
 					return nil, err
 				}
@@ -125,10 +132,10 @@ func (j JSONObject) Children() []sql.Expression {
 	return j.keyValPairs
 }
 
-func (j JSONObject) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (j JSONObject) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(j.Children()) != len(children) {
 		return nil, fmt.Errorf("json_object did not receive the correct amount of args")
 	}
 
-	return NewJSONObject(children...)
+	return NewJSONObject(ctx, children...)
 }

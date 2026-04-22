@@ -15,10 +15,15 @@
 package types
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
@@ -26,11 +31,49 @@ import (
 	"gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/values"
 )
 
 const ZeroDateStr = "0000-00-00"
 
-const ZeroTimestampDatetimeStr = "0000-00-00 00:00:00"
+var ZeroTimestampDatetimeStrs = [][]byte{
+	[]byte("0000-00-00 00:00:00"),
+	[]byte("0000-00-00 00:00:00.0"),
+	[]byte("0000-00-00 00:00:00.00"),
+	[]byte("0000-00-00 00:00:00.000"),
+	[]byte("0000-00-00 00:00:00.0000"),
+	[]byte("0000-00-00 00:00:00.00000"),
+	[]byte("0000-00-00 00:00:00.000000"),
+}
+
+// A Zero timestamp or datetime begins with three delimited groups of zeros,
+// and then optionally either a space or a dot, followed by a zero time.
+var zeroTimestampRegex = regexp.MustCompile(`^0+-0+-0+(.*)$`)
+
+// IsZeroTimestampStr checks if a string is a valid zero string for a datetime type.
+func IsZeroTimestampStr(timestamp string) bool {
+	match := zeroTimestampRegex.FindStringSubmatchIndex(timestamp)
+
+	if match == nil {
+		return false
+	}
+	remainder := timestamp[match[2]:]
+	if len(remainder) == 0 {
+		return true
+	}
+	if remainder[0] != '.' && remainder[0] != ' ' {
+		return false
+	}
+	return IsZeroTimeStr(remainder[1:])
+}
+
+func IsZeroTimeStr(time string) bool {
+	return strings.HasPrefix("00:00:00.000000", time)
+}
+
+const MinDatetimeStringLength = 8 // length of "2000-1-1"
+
+const MaxDatetimePrecision = 6
 
 var (
 	// ErrConvertingToTime is thrown when a value cannot be converted to a Time
@@ -38,58 +81,77 @@ var (
 
 	ErrConvertingToTimeOutOfRange = errors.NewKind("value %q is outside of %v range")
 
-	// datetimeTypeMaxDatetime is the maximum representable Datetime/Date value.
-	datetimeTypeMaxDatetime = time.Date(9999, 12, 31, 23, 59, 59, 999999000, time.UTC)
+	// datetimeTypeMaxDatetime is the maximum representable Datetime/Date value. MYSQL: 9999-12-31 23:59:59.499999 (microseconds)
+	datetimeTypeMaxDatetime = time.Date(9999, 12, 31, 23, 59, 59, 499999000, time.UTC)
 
-	// datetimeTypeMinDatetime is the minimum representable Datetime/Date value.
-	datetimeTypeMinDatetime = time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC)
+	// datetimeTypeMinDatetime is the minimum representable Datetime/Date value. MYSQL: 1000-01-01 00:00:00.000000 (microseconds)
+	datetimeTypeMinDatetime = time.Date(1000, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	// datetimeTypeMaxTimestamp is the maximum representable Timestamp value, which is the maximum 32-bit integer as a Unix time.
-	datetimeTypeMaxTimestamp = time.Unix(math.MaxInt32, 999999000)
+	// datetimeTypeMaxTimestamp is the maximum representable Timestamp value, MYSQL: 2038-01-19 03:14:07.999999 (microseconds)
+	datetimeTypeMaxTimestamp = time.Unix(math.MaxInt32, 999999000).UTC()
 
-	// datetimeTypeMinTimestamp is the minimum representable Timestamp value, which is one second past the epoch.
-	datetimeTypeMinTimestamp = time.Unix(1, 0)
+	// datetimeTypeMinTimestamp is the minimum representable Timestamp value, MYSQL: 1970-01-01 00:00:01.000000 (microseconds)
+	datetimeTypeMinTimestamp = time.Unix(1, 0).UTC()
+
+	datetimeTypeMaxDate = time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
+
+	// datetimeTypeMinDate is the minimum representable Date value, MYSQL: 1000-01-01 00:00:00.000000 (microseconds)
+	datetimeTypeMinDate = time.Date(1000, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// The MAX and MIN are extrapolated from commit ff05628a530 in the MySQL source code from my_time.cc
+	// datetimeMaxTime is the maximum representable time value, MYSQL: 9999-12-31 23:59:59.999999 (microseconds)
+	datetimeMaxTime = time.Date(9999, 12, 31, 23, 59, 59, 999999000, time.UTC)
+
+	// datetimeMinTime is the minimum representable time value, MYSQL: 0000-00-00 00:00:00.000000 (microseconds)
+	datetimeMinTime = ZeroTime
 
 	DateOnlyLayouts = []string{
-		"20060102",
-		"2006-1-2",
 		"2006-01-02",
 		"2006/01/02",
+		"20060102",
+		"2006-1-2",
 	}
+
+	TimezoneTimestampDatetimeLayout = "2006-01-02 15:04:05.999999999 -0700 MST" // represents standard Time.time.UTC()
 
 	// TimestampDatetimeLayouts hold extra timestamps allowed for parsing. It does
 	// not have all the layouts supported by mysql. Missing are two digit year
 	// versions of common cases and dates that use non common separators.
 	//
 	// https://github.com/MariaDB/server/blob/mysql-5.5.36/sql-common/my_time.c#L124
-	TimestampDatetimeLayouts = append(DateOnlyLayouts, []string{
-		"2006-01-02 15:4",
-		"2006-01-02 15:04",
-		"2006-01-02 15:04:",
-		"2006-01-02 15:04:.",
-		"2006-01-02 15:04:05.",
-		"2006-01-02 15:04:05.999999",
-		"2006-1-2 15:4:5.999999",
-		time.RFC3339,
+	TimestampDatetimeLayouts = append([]string{
 		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999",
+		"2006-1-2 15:4:5.999999999",
+		"2006-1-2:15:4:5.999999999",
+		time.RFC3339,
+		"2006-01-02 15:04:05.",
 		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:.",
+		"2006-01-02 15:04:",
+		"2006-01-02 15:04",
+		"2006-01-02 15:4",
 		"20060102150405",
-		"2006-01-02 15:04:05.999999999 -0700 MST", // represents standard Time.time.UTC()
-	}...)
+	}, DateOnlyLayouts...)
 
-	// zeroTime is 0000-01-01 00:00:00 UTC which is the closest Go can get to 0000-00-00 00:00:00
-	zeroTime = time.Unix(-62167219200, 0).UTC()
+	// zeroTime is -0001-11-30 00:00:00 UTC which is the closest Go can get to 0000-00-00 00:00:00 without conflicting
+	// with a valid timestamp in MySQL
+	ZeroTime = time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)
 
 	// Date is a date with day, month and year.
 	Date = MustCreateDatetimeType(sqltypes.Date, 0)
 	// Datetime is a date and a time with default precision (no fractional seconds).
 	Datetime = MustCreateDatetimeType(sqltypes.Datetime, 0)
+	// Datetime3 is a date and time with a precision of 3 (fractional seconds to 3 decimal places)
+	Datetime3 = MustCreateDatetimeType(sqltypes.Datetime, 3)
 	// DatetimeMaxPrecision is a date and a time with maximum precision
-	DatetimeMaxPrecision = MustCreateDatetimeType(sqltypes.Datetime, 6)
+	DatetimeMaxPrecision = MustCreateDatetimeType(sqltypes.Datetime, MaxDatetimePrecision)
 	// Timestamp is a UNIX timestamp with default precision (no fractional seconds).
 	Timestamp = MustCreateDatetimeType(sqltypes.Timestamp, 0)
 	// TimestampMaxPrecision is a UNIX timestamp with maximum precision
-	TimestampMaxPrecision = MustCreateDatetimeType(sqltypes.Timestamp, 6)
+	TimestampMaxPrecision = MustCreateDatetimeType(sqltypes.Timestamp, MaxDatetimePrecision)
+	// DatetimeMaxRange is a date and a time with maximum precision and maximum range.
+	DatetimeMaxRange = MustCreateDatetimeType(sqltypes.Datetime, MaxDatetimePrecision)
 
 	datetimeValueType = reflect.TypeOf(time.Time{})
 )
@@ -106,7 +168,7 @@ var _ sql.CollationCoercible = datetimeType{}
 func CreateDatetimeType(baseType query.Type, precision int) (sql.DatetimeType, error) {
 	switch baseType {
 	case sqltypes.Date, sqltypes.Datetime, sqltypes.Timestamp:
-		if precision < 0 || precision > 6 {
+		if precision < 0 || precision > MaxDatetimePrecision {
 			return nil, fmt.Errorf("precision must be between 0 and 6, got %d", precision)
 		}
 		return datetimeType{
@@ -131,7 +193,7 @@ func (t datetimeType) Precision() int {
 }
 
 // Compare implements Type interface.
-func (t datetimeType) Compare(a interface{}, b interface{}) (int, error) {
+func (t datetimeType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -141,7 +203,7 @@ func (t datetimeType) Compare(a interface{}, b interface{}) (int, error) {
 	var ok bool
 	var err error
 	if at, ok = a.(time.Time); !ok {
-		at, err = ConvertToTime(a, t)
+		at, err = ConvertToTime(ctx, a, t)
 		if err != nil {
 			return 0, err
 		}
@@ -149,7 +211,7 @@ func (t datetimeType) Compare(a interface{}, b interface{}) (int, error) {
 		at = at.Truncate(24 * time.Hour)
 	}
 	if bt, ok = b.(time.Time); !ok {
-		bt, err = ConvertToTime(b, t)
+		bt, err = ConvertToTime(ctx, b, t)
 		if err != nil {
 			return 0, err
 		}
@@ -166,16 +228,21 @@ func (t datetimeType) Compare(a interface{}, b interface{}) (int, error) {
 	return 0, nil
 }
 
+// CompareValue implements the ValueType interface
+func (t datetimeType) CompareValue(ctx *sql.Context, a, b sql.Value) (int, error) {
+	panic("TODO: implement CompareValue for DatetimeType")
+}
+
 // Convert implements Type interface.
-func (t datetimeType) Convert(v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t datetimeType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
 	if v == nil {
 		return nil, sql.InRange, nil
 	}
-	res, err := ConvertToTime(v, t)
-	if err != nil {
-		return nil, sql.OutOfRange, err
+	res, err := ConvertToTime(ctx, v, t)
+	if err != nil && !sql.ErrTruncatedIncorrect.Is(err) {
+		return nil, sql.InRange, err
 	}
-	return res, sql.InRange, nil
+	return res, sql.InRange, err
 }
 
 // precisionConversion is a conversion ratio to divide time.Second by to truncate the appropriate amount for the
@@ -184,24 +251,35 @@ var precisionConversion = [7]int{
 	1, 10, 100, 1_000, 10_000, 100_000, 1_000_000,
 }
 
-func ConvertToTime(v interface{}, t datetimeType) (time.Time, error) {
+func ConvertToTime(ctx context.Context, v interface{}, t datetimeType) (time.Time, error) {
 	if v == nil {
 		return time.Time{}, nil
 	}
 
-	res, err := t.ConvertWithoutRangeCheck(v)
-	if err != nil {
+	res, err := t.ConvertWithoutRangeCheck(ctx, v)
+	if err != nil && !sql.ErrTruncatedIncorrect.Is(err) {
 		return time.Time{}, err
 	}
 
-	if res.Equal(zeroTime) {
-		return zeroTime, nil
+	if res.Equal(ZeroTime) {
+		return ZeroTime, nil
 	}
 
-	// Truncate the date to the precision of this type
-	truncationDuration := time.Second
-	truncationDuration /= time.Duration(precisionConversion[t.precision])
-	res = res.Truncate(truncationDuration)
+	// Round the date to the precision of this type
+	if t.precision < MaxDatetimePrecision {
+		truncationDuration := time.Second / time.Duration(precisionConversion[t.precision])
+		res = res.Round(truncationDuration)
+	} else {
+		res = res.Round(time.Microsecond)
+	}
+
+	if t == DatetimeMaxRange {
+		validated := ValidateTime(res)
+		if validated == nil {
+			return time.Time{}, ErrConvertingToTimeOutOfRange.New(v, t)
+		}
+		return validated.(time.Time), err
+	}
 
 	switch t.baseType {
 	case sqltypes.Date:
@@ -213,141 +291,175 @@ func ConvertToTime(v interface{}, t datetimeType) (time.Time, error) {
 			return time.Time{}, ErrConvertingToTimeOutOfRange.New(res.Format(sql.TimestampDatetimeLayout), t.String())
 		}
 	case sqltypes.Timestamp:
-		if res.Before(datetimeTypeMinTimestamp) || res.After(datetimeTypeMaxTimestamp) {
+		if ValidateTimestamp(res) == nil {
 			return time.Time{}, ErrConvertingToTimeOutOfRange.New(res.Format(sql.TimestampDatetimeLayout), t.String())
 		}
 	}
-	return res, nil
+
+	return res, err
 }
 
 // ConvertWithoutRangeCheck converts the parameter to time.Time without checking the range.
-func (t datetimeType) ConvertWithoutRangeCheck(v interface{}) (time.Time, error) {
+func (t datetimeType) ConvertWithoutRangeCheck(ctx context.Context, v interface{}) (time.Time, error) {
 	var res time.Time
 
+	var err error
+	v, err = sql.UnwrapAny(ctx, v)
+	if err != nil {
+		return time.Time{}, err
+	}
 	if bs, ok := v.([]byte); ok {
 		v = string(bs)
 	}
 	switch value := v.(type) {
 	case string:
-		if value == ZeroDateStr || value == ZeroTimestampDatetimeStr {
-			return zeroTime, nil
+		if IsZeroTimestampStr(value) {
+			return ZeroTime, nil
 		}
 		// TODO: consider not using time.Parse if we want to match MySQL exactly ('2010-06-03 11:22.:.:.:.:' is a valid timestamp)
-		parsed := false
-		for _, fmt := range TimestampDatetimeLayouts {
-			if t, err := time.Parse(fmt, value); err == nil {
-				res = t.UTC()
-				parsed = true
-				break
-			}
-		}
+		var parsed bool
+		res, parsed, err = parseDatetime(value)
 		if !parsed {
-			return zeroTime, ErrConvertingToTime.New(v)
+			return ZeroTime, ErrConvertingToTime.New(v)
 		}
 	case time.Time:
 		res = value.UTC()
-		// For most integer values, we just return an error (but MySQL is more lenient for some of these). A special case
-		// is zero values, which are important when converting from postgres defaults.
+	// For most integer values, we just return an error (but MySQL is more lenient for some of these). A special case
+	// is zero values, which are important when converting from postgres defaults.
 	case int:
 		if value == 0 {
-			return zeroTime, nil
+			return ZeroTime, nil
 		}
-		return zeroTime, ErrConvertingToTime.New(v)
+		return ZeroTime, ErrConvertingToTime.New(v)
 	case int8:
 		if value == 0 {
-			return zeroTime, nil
+			return ZeroTime, nil
 		}
-		return zeroTime, ErrConvertingToTime.New(v)
+		return ZeroTime, ErrConvertingToTime.New(v)
 	case int16:
 		if value == 0 {
-			return zeroTime, nil
+			return ZeroTime, nil
 		}
-		return zeroTime, ErrConvertingToTime.New(v)
+		return ZeroTime, ErrConvertingToTime.New(v)
 	case int32:
 		if value == 0 {
-			return zeroTime, nil
+			return ZeroTime, nil
 		}
-		return zeroTime, ErrConvertingToTime.New(v)
+		return ZeroTime, ErrConvertingToTime.New(v)
 	case int64:
 		if value == 0 {
-			return zeroTime, nil
+			return ZeroTime, nil
 		}
-		return zeroTime, ErrConvertingToTime.New(v)
+		return ZeroTime, ErrConvertingToTime.New(v)
 	case uint:
 		if value == 0 {
-			return zeroTime, nil
+			return ZeroTime, nil
 		}
-		return zeroTime, ErrConvertingToTime.New(v)
+		return ZeroTime, ErrConvertingToTime.New(v)
 	case uint8:
 		if value == 0 {
-			return zeroTime, nil
+			return ZeroTime, nil
 		}
-		return zeroTime, ErrConvertingToTime.New(v)
+		return ZeroTime, ErrConvertingToTime.New(v)
 	case uint16:
 		if value == 0 {
-			return zeroTime, nil
+			return ZeroTime, nil
 		}
-		return zeroTime, ErrConvertingToTime.New(v)
+		return ZeroTime, ErrConvertingToTime.New(v)
 	case uint32:
 		if value == 0 {
-			return zeroTime, nil
+			return ZeroTime, nil
 		}
-		return zeroTime, ErrConvertingToTime.New(v)
+		return ZeroTime, ErrConvertingToTime.New(v)
 	case uint64:
 		if value == 0 {
-			return zeroTime, nil
+			return ZeroTime, nil
 		}
-		return zeroTime, ErrConvertingToTime.New(v)
+		return ZeroTime, ErrConvertingToTime.New(v)
 	case float32:
 		if value == 0 {
-			return zeroTime, nil
+			return ZeroTime, nil
 		}
-		return zeroTime, ErrConvertingToTime.New(v)
+		return ZeroTime, ErrConvertingToTime.New(v)
 	case float64:
 		if value == 0 {
-			return zeroTime, nil
+			return ZeroTime, nil
 		}
-		return zeroTime, ErrConvertingToTime.New(v)
+		return ZeroTime, ErrConvertingToTime.New(v)
 	case decimal.Decimal:
 		if value.IsZero() {
-			return zeroTime, nil
+			return ZeroTime, nil
 		}
-		return zeroTime, ErrConvertingToTime.New(v)
+		return ZeroTime, ErrConvertingToTime.New(v)
 	case decimal.NullDecimal:
 		if value.Valid && value.Decimal.IsZero() {
-			return zeroTime, nil
+			return ZeroTime, nil
 		}
-		return zeroTime, ErrConvertingToTime.New(v)
+		return ZeroTime, ErrConvertingToTime.New(v)
 	case Timespan:
 		// when receiving TIME, MySQL fills in date with today
 		nowTimeStr := sql.Now().Format("2006-01-02")
 		nowTime, err := time.Parse("2006-01-02", nowTimeStr)
 		if err != nil {
-			return zeroTime, ErrConvertingToTime.New(v)
+			return ZeroTime, ErrConvertingToTime.New(v)
 		}
 		return nowTime.Add(value.AsTimeDuration()), nil
+	case bool:
+		if !value {
+			return ZeroTime, nil
+		}
+		return ZeroTime, ErrConvertingToTime.New(v)
 	default:
-		return zeroTime, sql.ErrConvertToSQL.New(value, t)
+		return ZeroTime, sql.ErrConvertToSQL.New(value, t)
 	}
 
 	if t.baseType == sqltypes.Date {
 		res = res.Truncate(24 * time.Hour)
 	}
 
-	return res, nil
+	return res, err
 }
 
-func (t datetimeType) MustConvert(v interface{}) interface{} {
-	value, _, err := t.Convert(v)
-	if err != nil {
-		panic(err)
+func parseDatetime(value string) (time.Time, bool, error) {
+	if t, err := time.Parse(TimezoneTimestampDatetimeLayout, value); err == nil {
+		return t.UTC(), true, nil
 	}
-	return value
+
+	valueLen := len(value)
+	end := valueLen
+
+	for end >= MinDatetimeStringLength {
+		for _, layout := range TimestampDatetimeLayouts {
+			if t, err := time.Parse(layout, value[0:end]); err == nil {
+				if end != valueLen {
+					err = sql.ErrTruncatedIncorrect.New(t, value)
+				}
+				return t.UTC(), true, err
+			}
+		}
+		end = findDatetimeEnd(value, end-1)
+	}
+	return time.Time{}, false, nil
+}
+
+// findDatetimeEnd returns the index of the last digit before `end`
+func findDatetimeEnd(value string, end int) int {
+	for end >= MinDatetimeStringLength {
+		char := rune(value[end-1])
+		if unicode.IsDigit(char) {
+			return end
+		}
+		end--
+	}
+	return end
 }
 
 // Equals implements the Type interface.
 func (t datetimeType) Equals(otherType sql.Type) bool {
-	return t.baseType == otherType.Type()
+	if dtType, isDtType := otherType.(sql.DatetimeType); isDtType {
+		return t.baseType == dtType.Type() && t.precision == dtType.Precision()
+	}
+	return false
 }
 
 // MaxTextResponseByteLength implements the Type interface
@@ -368,49 +480,90 @@ func (t datetimeType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t datetimeType) SQL(_ *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t datetimeType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
 
-	v, _, err := t.Convert(v)
+	vt, err := ConvertToTime(ctx, v, t)
 	if err != nil {
 		return sqltypes.Value{}, err
 	}
-	vt := v.(time.Time)
-
-	var typ query.Type
-	var val string
 
 	switch t.baseType {
 	case sqltypes.Date:
-		typ = sqltypes.Date
-		if vt.Equal(zeroTime) {
-			val = vt.Format(ZeroDateStr)
-		} else {
-			val = vt.Format(sql.DateLayout)
-		}
-	case sqltypes.Datetime:
-		typ = sqltypes.Datetime
-		if vt.Equal(zeroTime) {
-			val = vt.Format(ZeroTimestampDatetimeStr)
-		} else {
-			val = vt.Format(sql.TimestampDatetimeLayout)
-		}
-	case sqltypes.Timestamp:
-		typ = sqltypes.Timestamp
-		if vt.Equal(zeroTime) {
-			val = vt.Format(ZeroTimestampDatetimeStr)
-		} else {
-			val = vt.Format(sql.TimestampDatetimeLayout)
-		}
+		dest = appendDateFormat(dest, vt)
+	case sqltypes.Datetime, sqltypes.Timestamp:
+		dest = appendDatetimeFormat(dest, vt, t.precision)
 	default:
-		panic(sql.ErrInvalidBaseType.New(t.baseType.String(), "datetime"))
+		return sqltypes.Value{}, sql.ErrInvalidBaseType.New(t.baseType.String(), "datetime")
 	}
 
-	valBytes := AppendAndSliceString(dest, val)
+	return sqltypes.MakeTrusted(t.baseType, dest), nil
+}
 
-	return sqltypes.MakeTrusted(typ, valBytes), nil
+// SQLValue implements the ValueType interface.
+func (t datetimeType) SQLValue(ctx *sql.Context, v sql.Value, dest []byte) (sqltypes.Value, error) {
+	if v.IsNull() {
+		return sqltypes.NULL, nil
+	}
+
+	switch t.baseType {
+	case sqltypes.Date:
+		vt := values.ReadDate(v.Val)
+		if vt.Equal(ZeroTime) {
+			dest = append(dest, ZeroDateStr...)
+		} else {
+			dest = appendDateFormat(dest, vt)
+		}
+	case sqltypes.Datetime, sqltypes.Timestamp:
+		x := values.ReadInt64(v.Val)
+		vt := time.UnixMicro(x).UTC()
+		dest = appendDatetimeFormat(dest, vt, t.precision)
+	default:
+		return sqltypes.Value{}, sql.ErrInvalidBaseType.New(t.baseType.String(), "datetime")
+	}
+	return sqltypes.MakeTrusted(t.baseType, dest), nil
+}
+
+func appendDateFormat(dest []byte, t time.Time) []byte {
+	if t.Equal(ZeroTime) {
+		dest = append(dest, ZeroDateStr...)
+		return dest
+	}
+	year, m, d := t.Date()
+	if year == 0 {
+		dest = append(dest, '0', '0', '0', '0')
+	} else {
+		dest = strconv.AppendInt(dest, int64(year), 10)
+	}
+	dest = append(dest, '-')
+
+	month := int64(m)
+	if month < 10 {
+		dest = append(dest, '0')
+	}
+	dest = strconv.AppendInt(dest, month, 10)
+	dest = append(dest, '-')
+
+	day := int64(d)
+	if day < 10 {
+		dest = append(dest, '0')
+	}
+	dest = strconv.AppendInt(dest, day, 10)
+	return dest
+}
+
+func appendDatetimeFormat(dest []byte, t time.Time, precision int) []byte {
+	if t.Equal(ZeroTime) {
+		dest = append(dest, ZeroTimestampDatetimeStrs[precision]...)
+		return dest
+	}
+	dest = appendDateFormat(dest, t)
+	dest = append(dest, ' ')
+	h, m, s := t.Clock()
+	dest = appendTimeFormat(dest, int64(h), int64(m), int64(s), int64(t.Nanosecond()/1000), precision)
+	return dest
 }
 
 func (t datetimeType) String() string {
@@ -443,7 +596,7 @@ func (t datetimeType) ValueType() reflect.Type {
 }
 
 func (t datetimeType) Zero() interface{} {
-	return zeroTime
+	return ZeroTime
 }
 
 // CollationCoercibility implements sql.CollationCoercible interface.
@@ -470,7 +623,16 @@ func (t datetimeType) MinimumTime() time.Time {
 // ValidateTime receives a time and returns either that time or nil if it's
 // not a valid time.
 func ValidateTime(t time.Time) interface{} {
-	if t.After(time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC)) {
+	if t.Before(datetimeMinTime) || t.After(datetimeMaxTime) {
+		return nil
+	}
+	return t
+}
+
+// ValidateTimestamp receives a time and returns either that time or nil if it's
+// not a valid timestamp.
+func ValidateTimestamp(t time.Time) interface{} {
+	if t.Before(datetimeTypeMinTimestamp) || t.After(datetimeTypeMaxTimestamp) {
 		return nil
 	}
 	return t

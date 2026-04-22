@@ -45,7 +45,7 @@ func (o *Offset) Expressions() []sql.Expression {
 }
 
 // WithExpressions implements sql.Expressioner
-func (o *Offset) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (o *Offset) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(o, len(exprs), 1)
 	}
@@ -58,16 +58,11 @@ func (o *Offset) Resolved() bool {
 }
 
 // WithChildren implements the Node interface.
-func (o *Offset) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (o *Offset) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(o, len(children), 1)
 	}
 	return NewOffset(o.Offset, children[0]), nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (o *Offset) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return o.Child.CheckPrivileges(ctx, opChecker)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

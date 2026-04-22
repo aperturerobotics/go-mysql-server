@@ -26,8 +26,8 @@ import (
 // ShowTables is a node that shows the database tables.
 type ShowTables struct {
 	db   sql.Database
-	Full bool
 	asOf sql.Expression
+	Full bool
 }
 
 // NewShowTables creates a new show tables node given a database.
@@ -72,7 +72,7 @@ func (*ShowTables) Children() []sql.Node {
 }
 
 // Schema implements the Node interface.
-func (p *ShowTables) Schema() sql.Schema {
+func (p *ShowTables) Schema(ctx *sql.Context) sql.Schema {
 	var sch sql.Schema
 	colName := fmt.Sprintf("Tables_in_%s", p.Database().Name())
 	sch = sql.Schema{
@@ -85,7 +85,7 @@ func (p *ShowTables) Schema() sql.Schema {
 }
 
 // WithAsOf implements the Versionable interface.
-func (p *ShowTables) WithAsOf(asOf sql.Expression) (sql.Node, error) {
+func (p *ShowTables) WithAsOf(ctx *sql.Context, asOf sql.Expression) (sql.Node, error) {
 	np := *p
 	np.asOf = asOf
 	return &np, nil
@@ -97,18 +97,12 @@ func (p *ShowTables) AsOf() sql.Expression {
 }
 
 // WithChildren implements the Node interface.
-func (p *ShowTables) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (p *ShowTables) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(p, len(children), 0)
 	}
 
 	return p, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (p *ShowTables) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	// Some tables won't be visible during the resolution step if the user doesn't have the correct privileges
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -129,7 +123,7 @@ func (p *ShowTables) Expressions() []sql.Expression {
 }
 
 // WithExpressions implements sql.Expressioner
-func (p *ShowTables) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (p *ShowTables) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(p, len(exprs), 1)
 	}

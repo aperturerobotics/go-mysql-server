@@ -27,7 +27,7 @@ import (
 )
 
 func TestJsonLength(t *testing.T) {
-	_, err := json.NewJSONValid()
+	_, err := json.NewJSONValid(sql.NewEmptyContext())
 	require.True(t, errors.Is(err, sql.ErrInvalidArgumentNumber))
 
 	f1 := buildGetFieldExpressions(t, json.NewJsonLength, 1)
@@ -74,7 +74,11 @@ func TestJsonLength(t *testing.T) {
 			row: sql.Row{`{"a": 1}`},
 			exp: 1,
 		},
-
+		{
+			f:   f1,
+			row: sql.Row{`{"a": 1, "b": 2}`},
+			exp: 2,
+		},
 		{
 			f:   f2,
 			row: sql.Row{`{"a": [1, false]}`, nil},

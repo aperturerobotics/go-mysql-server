@@ -22,6 +22,7 @@ import (
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
+	dtablefunctions "github.com/dolthub/go-mysql-server/sql/expression/tablefunction"
 	"github.com/dolthub/go-mysql-server/sql/mysql_db"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/transform"
@@ -74,7 +75,18 @@ func (b *Builder) isUsingJoin(te *ast.JoinTableExpr) bool {
 	return te.Condition.Using != nil ||
 		strings.EqualFold(te.Join, ast.NaturalJoinStr) ||
 		strings.EqualFold(te.Join, ast.NaturalLeftJoinStr) ||
-		strings.EqualFold(te.Join, ast.NaturalRightJoinStr)
+		strings.EqualFold(te.Join, ast.NaturalRightJoinStr) ||
+		strings.EqualFold(te.Join, ast.NaturalFullJoinStr)
+}
+
+func (b *Builder) canConvertToCrossJoin(te *ast.JoinTableExpr) bool {
+	switch te.Join {
+	case ast.LeftJoinStr, ast.RightJoinStr, ast.FullOuterJoinStr:
+		return false
+	default:
+		return (te.Condition.On == nil || te.Condition.On == ast.BoolVal(true)) &&
+			te.Condition.Using == nil
+	}
 }
 
 func (b *Builder) buildJoin(inScope *scope, te *ast.JoinTableExpr) (outScope *scope) {
@@ -100,10 +112,10 @@ func (b *Builder) buildJoin(inScope *scope, te *ast.JoinTableExpr) (outScope *sc
 	outScope.appendColumnsFromScope(rightScope)
 
 	// cross join
-	if (te.Condition.On == nil || te.Condition.On == ast.BoolVal(true)) && te.Condition.Using == nil {
+	if b.canConvertToCrossJoin(te) {
 		if rast, ok := te.RightExpr.(*ast.AliasedTableExpr); ok && rast.Lateral {
 			var err error
-			outScope.node, err = b.f.buildJoin(leftScope.node, rightScope.node, plan.JoinTypeLateralCross, expression.NewLiteral(true, types.Boolean))
+			outScope.node, err = b.f.buildJoin(b.ctx, leftScope.node, rightScope.node, plan.JoinTypeLateralCross, nil)
 			if err != nil {
 				b.handleErr(err)
 			}
@@ -150,7 +162,7 @@ func (b *Builder) buildJoin(inScope *scope, te *ast.JoinTableExpr) (outScope *sc
 		b.handleErr(fmt.Errorf("unknown join type: %s", te.Join))
 	}
 	var err error
-	outScope.node, err = b.f.buildJoin(leftScope.node, rightScope.node, op, filter)
+	outScope.node, err = b.f.buildJoin(b.ctx, leftScope.node, rightScope.node, op, filter)
 	if err != nil {
 		b.handleErr(err)
 	}
@@ -253,6 +265,7 @@ func (b *Builder) buildUsingJoin(inScope, leftScope, rightScope *scope, te *ast.
 	}
 
 	switch strings.ToLower(te.Join) {
+	// TODO handle ast.FullOuterJoinStr, ast.NaturalFullJoinStr case https://github.com/dolthub/dolt/issues/10295
 	case ast.JoinStr, ast.NaturalJoinStr:
 		outScope.node = plan.NewInnerJoin(leftScope.node, rightScope.node, filter)
 	case ast.LeftJoinStr, ast.NaturalLeftJoinStr:
@@ -272,12 +285,15 @@ func (b *Builder) buildDataSource(inScope *scope, te ast.TableExpr) (outScope *s
 	// build individual table, collect column definitions
 	switch t := (te).(type) {
 	case *ast.AliasedTableExpr:
+		if err := b.cat.AuthorizationHandler().HandleAuth(b.ctx, b.authQueryState, t.Auth); err != nil && b.authEnabled {
+			b.handleErr(err)
+		}
 		switch e := t.Expr.(type) {
 		case ast.TableName:
 			tableName := strings.ToLower(e.Name.String())
 			tAlias := strings.ToLower(t.As.String())
 			if cteScope := inScope.getCte(tableName); cteScope != nil {
-				outScope = cteScope.aliasCte(tAlias)
+				outScope = cteScope.aliasCte(b.ctx, tAlias)
 				outScope.parent = inScope
 			} else {
 				var ok bool
@@ -364,11 +380,11 @@ func (b *Builder) buildDataSource(inScope *scope, te ast.TableExpr) (outScope *s
 			}
 
 			outScope = inScope.push()
-			vdt := plan.NewValueDerivedTable(plan.NewValues(exprTuples), t.As.String())
+			vdt := plan.NewValueDerivedTable(b.ctx, plan.NewValues(exprTuples), t.As.String())
 			tableName := strings.ToLower(t.As.String())
 			tabId := outScope.addTable(tableName)
 			var cols sql.ColSet
-			for _, c := range vdt.Schema() {
+			for _, c := range vdt.Schema(b.ctx) {
 				id := outScope.newColumn(scopeColumn{col: c.Name, db: c.DatabaseSource, table: tableName, typ: c.Type, nullable: c.Nullable})
 				cols.Add(sql.ColumnId(id))
 			}
@@ -444,20 +460,11 @@ func (b *Builder) resolveTable(tab, db string, asOf interface{}) *plan.ResolvedT
 func (b *Builder) buildTableFunc(inScope *scope, t *ast.TableFuncExpr) (outScope *scope) {
 	//TODO what are valid mysql table arguments
 	args := make([]sql.Expression, 0, len(t.Exprs))
-	for _, e := range t.Exprs {
-		switch e := e.(type) {
+	for _, expr := range t.Exprs {
+		switch e := expr.(type) {
 		case *ast.AliasedExpr:
-			expr := b.buildScalar(inScope, e.Expr)
-
-			if !e.As.IsEmpty() {
-				b.handleErr(sql.ErrUnsupportedSyntax.New(ast.String(e)))
-			}
-
-			if selectExprNeedsAlias(e, expr) {
-				b.handleErr(sql.ErrUnsupportedSyntax.New(ast.String(e)))
-			}
-
-			args = append(args, expr)
+			scalarExpr := b.buildScalar(inScope, e.Expr)
+			args = append(args, scalarExpr)
 		default:
 			b.handleErr(sql.ErrUnsupportedSyntax.New(ast.String(e)))
 		}
@@ -465,9 +472,14 @@ func (b *Builder) buildTableFunc(inScope *scope, t *ast.TableFuncExpr) (outScope
 
 	utf := expression.NewUnresolvedTableFunction(t.Name, args)
 
-	tableFunction, err := b.cat.TableFunction(b.ctx, utf.Name())
-	if err != nil {
-		b.handleErr(err)
+	tableFunction, found := b.cat.TableFunction(b.ctx, utf.Name())
+	if !found {
+		// try getting regular function
+		f, funcFound := b.cat.Function(b.ctx, utf.Name())
+		if !funcFound {
+			b.handleErr(sql.ErrTableFunctionNotFound.New(utf.Name()))
+		}
+		tableFunction = dtablefunctions.NewTableFunctionWrapper(f)
 	}
 
 	database := b.currentDb()
@@ -497,6 +509,11 @@ func (b *Builder) buildTableFunc(inScope *scope, t *ast.TableFuncExpr) (outScope
 			b.handleErr(err)
 		}
 	}
+	if authCheckerNode, ok := newInstance.(sql.AuthorizationCheckerNode); ok {
+		if err = b.cat.AuthorizationHandler().HandleAuthNode(b.ctx, b.authQueryState, authCheckerNode); err != nil {
+			b.handleErr(err)
+		}
+	}
 
 	// Table Function must always have an alias, pick function name as alias if none is provided
 	var name string
@@ -514,7 +531,7 @@ func (b *Builder) buildTableFunc(inScope *scope, t *ast.TableFuncExpr) (outScope
 
 	tabId := outScope.addTable(name)
 	var colset sql.ColSet
-	for _, c := range newAlias.Schema() {
+	for _, c := range newAlias.Schema(b.ctx) {
 		id := outScope.newColumn(scopeColumn{
 			db:    database.Name(),
 			table: name,
@@ -656,7 +673,7 @@ func (b *Builder) buildResolvedTable(inScope *scope, db, schema, name string, as
 			b.handleErr(err)
 		}
 		if !schemaFound {
-			b.handleErr(sql.ErrDatabaseSchemaNotFound.New(schema))
+			return outScope, false
 		}
 	} else if isScd && schema == "" {
 		// try using builder's current database, if it's SchemaDatabase
@@ -674,9 +691,9 @@ func (b *Builder) buildResolvedTable(inScope *scope, db, schema, name string, as
 		asOfLit = asof
 	}
 
-	if view := b.resolveView(name, database, asOfLit); view != nil {
+	if view := b.resolveView(name, database, asOfLit, outScope); view != nil {
 		// TODO: Schema name
-		return resolvedViewScope(outScope, view, db, name)
+		return resolvedViewScope(b.ctx, outScope, view, db, name)
 	}
 
 	var tab sql.Table
@@ -712,7 +729,7 @@ func (b *Builder) buildResolvedTable(inScope *scope, db, schema, name string, as
 	}
 
 	// TODO: this is maybe too broad for this method, we don't need this for some statements
-	if tab.Schema().HasVirtualColumns() {
+	if tab.Schema(b.ctx).HasVirtualColumns() {
 		tab = b.buildVirtualTableScan(db, tab)
 	}
 
@@ -725,7 +742,7 @@ func (b *Builder) buildResolvedTable(inScope *scope, db, schema, name string, as
 	tabId := outScope.addTable(strings.ToLower(tab.Name()))
 	var cols sql.ColSet
 
-	for _, c := range tab.Schema() {
+	for _, c := range tab.Schema(b.ctx) {
 		id := outScope.newColumn(scopeColumn{
 			db:          db,
 			table:       strings.ToLower(tab.Name()),
@@ -781,30 +798,17 @@ func (b *Builder) buildResolvedTable(inScope *scope, db, schema, name string, as
 	return outScope, true
 }
 
-func resolvedViewScope(outScope *scope, view sql.Node, db string, name string) (*scope, bool) {
+func resolvedViewScope(ctx *sql.Context, outScope *scope, view sql.Node, db string, name string) (*scope, bool) {
 	outScope.node = view
-	tabId := outScope.addTable(strings.ToLower(view.Schema()[0].Name))
-	var cols sql.ColSet
-	for _, c := range view.Schema() {
-		id := outScope.newColumn(scopeColumn{
-			db:          db,
-			table:       name,
-			col:         strings.ToLower(c.Name),
-			originalCol: c.Name,
-			typ:         c.Type,
-			nullable:    c.Nullable,
-		})
-		cols.Add(sql.ColumnId(id))
-	}
+	tabId := outScope.addTable(strings.ToLower(view.Schema(ctx)[0].Name))
 	if tin, ok := view.(plan.TableIdNode); ok {
 		// TODO should *sql.View implement TableIdNode?
-		outScope.node = tin.WithId(tabId).WithColumns(cols)
+		outScope.node = tin.WithId(tabId)
 	}
-
 	return outScope, true
 }
 
-func (b *Builder) resolveView(name string, database sql.Database, asOf interface{}) sql.Node {
+func (b *Builder) resolveView(name string, database sql.Database, asOf interface{}, outScope *scope) sql.Node {
 	var view *sql.View
 
 	if vdb, vok := database.(sql.ViewDatabase); vok {
@@ -826,11 +830,14 @@ func (b *Builder) resolveView(name string, database sql.Database, asOf interface
 				b.ViewCtx().DbName = outerDb
 			}()
 			b.parserOpts = sql.NewSqlModeFromString(viewDef.SqlMode).ParserOptions()
-			stmt, _, _, err := sql.GlobalParser.ParseWithOptions(b.ctx, viewDef.CreateViewStatement, ';', false, b.parserOpts)
+			stmt, _, _, err := b.parser.ParseWithOptions(b.ctx, viewDef.CreateViewStatement, ';', false, b.parserOpts)
 			if err != nil {
 				b.handleErr(err)
 			}
-			node, _, err := b.bindOnlyWithDatabase(database, stmt, viewDef.CreateViewStatement)
+			// TODO: Once view definers are persisted, load the real definer client
+			restoreInvoker := b.mockDefiner(sql.PrivilegeType_CreateView)
+			defer restoreInvoker()
+			viewScope, _, err := b.bindOnlyWithDatabase(database, stmt, viewDef.CreateViewStatement)
 			if err != nil {
 				// TODO: Need to account for non-existing functions or
 				//  users without appropriate privilege to the referenced table/column/function.
@@ -840,9 +847,11 @@ func (b *Builder) resolveView(name string, database sql.Database, asOf interface
 				}
 				b.handleErr(err)
 			}
-			create, ok := node.(*plan.CreateView)
+			outScope.appendColumnsFromScope(viewScope)
+			create, ok := viewScope.node.(*plan.CreateView)
 			if !ok {
-				err = fmt.Errorf("expected create view statement, found: %T", node)
+				err = fmt.Errorf("expected create view statement, found: %T", viewScope.node)
+				b.handleErr(err)
 			}
 			switch n := create.Child.(type) {
 			case *plan.SubqueryAlias:
@@ -857,7 +866,7 @@ func (b *Builder) resolveView(name string, database sql.Database, asOf interface
 	if view == nil {
 		view, _ = b.ctx.GetViewRegistry().View(database.Name(), name)
 		if view != nil {
-			def, _, _ := transform.NodeWithOpaque(view.Definition(), func(n sql.Node) (sql.Node, transform.TreeIdentity, error) {
+			def, _, _ := transform.NodeWithOpaque(b.ctx, view.Definition(), func(ctx *sql.Context, n sql.Node) (sql.Node, transform.TreeIdentity, error) {
 				// TODO this is a hack because the test registry setup is busted, these should always be resolved
 				if urt, ok := n.(*plan.UnresolvedTable); ok {
 					return b.resolveTable(urt.Name(), urt.Database().Name(), urt.AsOf()), transform.NewTree, nil
@@ -873,7 +882,7 @@ func (b *Builder) resolveView(name string, database sql.Database, asOf interface
 	}
 
 	query := view.Definition().Children()[0]
-	n, err := view.Definition().WithChildren(query)
+	n, err := view.Definition().WithChildren(b.ctx, query)
 	if err != nil {
 		b.handleErr(err)
 	}
@@ -882,11 +891,12 @@ func (b *Builder) resolveView(name string, database sql.Database, asOf interface
 
 // bindOnlyWithDatabase sets the current database to given database before binding and sets it back to the original
 // database after binding. This function is used for binding a subquery using the same database as the original query.
-func (b *Builder) bindOnlyWithDatabase(db sql.Database, stmt ast.Statement, s string) (sql.Node, *sql.QueryFlags, error) {
+func (b *Builder) bindOnlyWithDatabase(db sql.Database, stmt ast.Statement, s string) (*scope, *sql.QueryFlags, error) {
 	curDb := b.currentDb()
 	defer func() {
 		b.currentDatabase = curDb
 	}()
 	b.currentDatabase = db
-	return b.BindOnly(stmt, s)
+	outScope, err := b.bindOnly(stmt, s, nil)
+	return outScope, b.qFlags, err
 }

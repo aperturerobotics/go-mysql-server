@@ -15,10 +15,12 @@
 package expression
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/dolthub/vitess/go/vt/proto/query"
+	"github.com/dolthub/vitess/go/vt/sqlparser"
 	"github.com/shopspring/decimal"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -27,23 +29,36 @@ import (
 
 // Literal represents a literal expression (string, number, bool, ...).
 type Literal struct {
-	value     interface{}
-	val2      sql.Value
-	fieldType sql.Type
+	Val  interface{}
+	Typ  sql.Type
+	val2 sql.Value
 }
 
 var _ sql.Expression = &Literal{}
-var _ sql.Expression2 = &Literal{}
+var _ sql.ValueExpression = &Literal{}
 var _ sql.CollationCoercible = &Literal{}
+var _ sqlparser.Injectable = &Literal{}
 
 // NewLiteral creates a new Literal expression.
 func NewLiteral(value interface{}, fieldType sql.Type) *Literal {
 	val2, _ := sql.ConvertToValue(value)
 	return &Literal{
-		value:     value,
-		val2:      val2,
-		fieldType: fieldType,
+		Val:  value,
+		val2: val2,
+		Typ:  fieldType,
 	}
+}
+
+// NewTrue creates a new Literal that represents a true boolean
+// TODO: replace NewLiteral(true, types.Boolean) calls with call to NewTrue
+func NewTrue() *Literal {
+	return NewLiteral(true, types.Boolean)
+}
+
+// NewFalse creates a new Literal that represents a false boolean
+// TODO: replace NewLiteral(false, types.Boolean) calls with call to NewFalse
+func NewFalse() *Literal {
+	return NewLiteral(false, types.Boolean)
 }
 
 // Resolved implements the Expression interface.
@@ -52,19 +67,19 @@ func (lit *Literal) Resolved() bool {
 }
 
 // IsNullable implements the Expression interface.
-func (lit *Literal) IsNullable() bool {
-	return lit.value == nil
+func (lit *Literal) IsNullable(ctx *sql.Context) bool {
+	return lit.Val == nil
 }
 
 // Type implements the Expression interface.
-func (lit *Literal) Type() sql.Type {
-	return lit.fieldType
+func (lit *Literal) Type(ctx *sql.Context) sql.Type {
+	return lit.Typ
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (lit *Literal) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
-	if types.IsText(lit.fieldType) {
-		collation, _ = lit.fieldType.CollationCoercibility(ctx)
+	if types.IsText(lit.Typ) {
+		collation, _ = lit.Typ.CollationCoercibility(ctx)
 		return collation, 4
 	}
 	return sql.Collation_binary, 5
@@ -72,15 +87,15 @@ func (lit *Literal) CollationCoercibility(ctx *sql.Context) (collation sql.Colla
 
 // Eval implements the Expression interface.
 func (lit *Literal) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
-	return lit.value, nil
+	return lit.Val, nil
 }
 
 func (lit *Literal) String() string {
-	switch litVal := lit.value.(type) {
+	switch litVal := lit.Val.(type) {
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		return fmt.Sprintf("%d", litVal)
 	case string:
-		switch lit.fieldType.Type() {
+		switch lit.Typ.Type() {
 		// utf8 charset cannot encode binary string
 		case query.Type_VARBINARY, query.Type_BINARY:
 			return fmt.Sprintf("'0x%X'", litVal)
@@ -101,9 +116,9 @@ func (lit *Literal) String() string {
 	}
 }
 
-func (lit *Literal) DebugString() string {
-	typeStr := lit.fieldType.String()
-	switch v := lit.value.(type) {
+func (lit *Literal) DebugString(ctx *sql.Context) string {
+	typeStr := lit.Typ.String()
+	switch v := lit.Val.(type) {
 	case string:
 		return fmt.Sprintf("%s (%s)", v, typeStr)
 	case []byte:
@@ -122,7 +137,7 @@ func (lit *Literal) DebugString() string {
 }
 
 // WithChildren implements the Expression interface.
-func (lit *Literal) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (lit *Literal) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(lit, len(children), 0)
 	}
@@ -134,19 +149,24 @@ func (*Literal) Children() []sql.Expression {
 	return nil
 }
 
-func (lit *Literal) Eval2(ctx *sql.Context, row sql.Row2) (sql.Value, error) {
+// EvalValue implements the sql.ValueExpression interface.
+func (lit *Literal) EvalValue(ctx *sql.Context, row sql.ValueRow) (sql.Value, error) {
 	return lit.val2, nil
 }
 
-func (lit *Literal) Type2() sql.Type2 {
-	t2, ok := lit.fieldType.(sql.Type2)
-	if !ok {
-		panic(fmt.Errorf("expected Type2, but was %T", lit.fieldType))
-	}
-	return t2
+// IsValueExpression implements the ValueExpression interface.
+func (lit *Literal) IsValueExpression(ctx *sql.Context) bool {
+	return types.IsInteger(lit.Typ)
 }
 
 // Value returns the literal value.
-func (p *Literal) Value() interface{} {
-	return p.value
+func (lit *Literal) Value() interface{} {
+	return lit.Val
+}
+
+func (lit *Literal) WithResolvedChildren(ctx context.Context, children []any) (any, error) {
+	if len(children) != 0 {
+		return nil, sql.ErrInvalidChildrenNumber.New(lit, len(children), 0)
+	}
+	return lit, nil
 }

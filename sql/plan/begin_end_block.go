@@ -47,7 +47,7 @@ func (b *BeginEndBlock) String() string {
 		label = b.Label + ": "
 	}
 	p := sql.NewTreePrinter()
-	_ = p.WriteNode(label + "BEGIN .. END")
+	_ = p.WriteNode("%s", label+"BEGIN .. END")
 	var children []string
 	for _, s := range b.statements {
 		children = append(children, s.String())
@@ -57,33 +57,28 @@ func (b *BeginEndBlock) String() string {
 }
 
 // DebugString implements the interface sql.DebugStringer.
-func (b *BeginEndBlock) DebugString() string {
+func (b *BeginEndBlock) DebugString(ctx *sql.Context) string {
 	label := ""
 	if len(b.Label) > 0 {
 		label = b.Label + ": "
 	}
 	p := sql.NewTreePrinter()
-	_ = p.WriteNode(label + "BEGIN .. END")
+	_ = p.WriteNode("%s", label+"BEGIN .. END")
 	var children []string
 	for _, s := range b.statements {
-		children = append(children, sql.DebugString(s))
+		children = append(children, sql.DebugString(ctx, s))
 	}
 	_ = p.WriteChildren(children...)
 	return p.String()
 }
 
 // WithChildren implements the interface sql.Node.
-func (b *BeginEndBlock) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (b *BeginEndBlock) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	newBeginEndBlock := *b
 	newBlock := *b.Block
 	newBlock.statements = children
 	newBeginEndBlock.Block = &newBlock
 	return &newBeginEndBlock, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (b *BeginEndBlock) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return b.Block.CheckPrivileges(ctx, opChecker)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

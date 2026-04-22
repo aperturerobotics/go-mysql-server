@@ -50,17 +50,12 @@ func (sv *ShowVariables) Resolved() bool {
 }
 
 // WithChildren implements the Node interface.
-func (sv *ShowVariables) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (sv *ShowVariables) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(sv, len(children), 0)
 	}
 
 	return sv, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (sv *ShowVariables) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -82,7 +77,7 @@ func (sv *ShowVariables) String() string {
 }
 
 // Schema returns a new Schema reference for "SHOW VARIABLES" query.
-func (*ShowVariables) Schema() sql.Schema {
+func (*ShowVariables) Schema(ctx *sql.Context) sql.Schema {
 	return sql.Schema{
 		{
 			Name: ShowVariablesVariableCol,
@@ -113,7 +108,7 @@ func (sv *ShowVariables) IsReadOnly() bool {
 	return true
 }
 
-func (sv *ShowVariables) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (sv *ShowVariables) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(sv, len(exprs), 1)
 	}

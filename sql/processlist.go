@@ -40,6 +40,17 @@ type ProcessList interface {
 	// EndQuery transitions a previously transitioned connection from Command "Query" to Command "Sleep".
 	EndQuery(ctx *Context)
 
+	// BeginOperation registers and returns a SubContext for a
+	// long-running operation on the conneciton which does not
+	// change the process's Command state. This SubContext will be
+	// killed by a call to |Kill|, and unregistered by a call to
+	// |EndOperation|.
+	BeginOperation(ctx *Context) (*Context, error)
+
+	// EndOperation cancels and deregisters the SubContext which
+	// BeginOperation registered.
+	EndOperation(ctx *Context)
+
 	// Kill terminates all queries for a given connection id
 	Kill(connID uint32)
 
@@ -81,19 +92,17 @@ const (
 
 // Process represents a process in the SQL server.
 type Process struct {
-	Connection uint32
+	// The time of the last Command transition
+	StartedAt  time.Time
+	Progress   map[string]TableProgress
+	Kill       context.CancelFunc
 	Host       string
 	Database   string
 	User       string
 	Command    ProcessCommand
-
-	// The time of the last Command transition...
-	StartedAt time.Time
-
-	QueryPid uint64
-	Query    string
-	Progress map[string]TableProgress
-	Kill     context.CancelFunc
+	Query      string
+	QueryPid   uint64
+	Connection uint32
 }
 
 // Done needs to be called when this process has finished.
@@ -121,8 +130,8 @@ func (p Progress) totalString() string {
 
 // TableProgress keeps track of a table progress, and for each of its partitions
 type TableProgress struct {
-	Progress
 	PartitionsProgress map[string]PartitionProgress
+	Progress
 }
 
 func NewTableProgress(name string, total int64) TableProgress {
@@ -166,6 +175,10 @@ func (e EmptyProcessList) BeginQuery(ctx *Context, query string) (*Context, erro
 	return ctx, nil
 }
 func (e EmptyProcessList) EndQuery(ctx *Context) {}
+func (e EmptyProcessList) BeginOperation(ctx *Context) (*Context, error) {
+	return ctx, nil
+}
+func (e EmptyProcessList) EndOperation(ctx *Context) {}
 
 func (e EmptyProcessList) Kill(connID uint32)                                       {}
 func (e EmptyProcessList) Done(pid uint64)                                          {}

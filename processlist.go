@@ -17,7 +17,6 @@ package sqle
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -29,9 +28,9 @@ import (
 // ProcessList is a structure that keeps track of all the processes and their
 // status.
 type ProcessList struct {
-	mu         sync.RWMutex
 	procs      map[uint32]*sql.Process
 	byQueryPid map[uint64]uint32
+	mu         sync.RWMutex
 }
 
 // NewProcessList creates a new process list.
@@ -113,6 +112,9 @@ func (pl *ProcessList) BeginQuery(
 	ctx *sql.Context,
 	query string,
 ) (*sql.Context, error) {
+	if ctx.IsInterpreted() {
+		return ctx, nil
+	}
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
 
@@ -144,6 +146,9 @@ func (pl *ProcessList) BeginQuery(
 }
 
 func (pl *ProcessList) EndQuery(ctx *sql.Context) {
+	if ctx.IsInterpreted() {
+		return
+	}
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
 	id := ctx.Session.ID()
@@ -166,6 +171,46 @@ func (pl *ProcessList) EndQuery(ctx *sql.Context) {
 		p.Kill = nil
 		p.QueryPid = 0
 		p.Progress = nil
+	}
+}
+
+// Registers the process and session associated with |ctx| as performing
+// a long-running operation that should be able to be canceled with Kill.
+//
+// This is not used for Query processing --- the process is still in
+// CommandSleep, it does not have a QueryPid, etc. Must always be
+// bracketed with EndOperation(). Should certainly be used for any
+// Handler callbacks which may access the database, like Prepare.
+func (pl *ProcessList) BeginOperation(ctx *sql.Context) (*sql.Context, error) {
+	if ctx.IsInterpreted() {
+		return ctx, nil
+	}
+	pl.mu.Lock()
+	defer pl.mu.Unlock()
+	id := ctx.Session.ID()
+	p := pl.procs[id]
+	if p == nil {
+		return nil, errors.New("internal error: connection not registered with process list")
+	}
+	if p.Kill != nil {
+		return nil, errors.New("internal error: attempt to begin operation on connection which was already running one")
+	}
+	newCtx, cancel := ctx.NewSubContext()
+	p.Kill = cancel
+	return newCtx, nil
+}
+
+func (pl *ProcessList) EndOperation(ctx *sql.Context) {
+	if ctx.IsInterpreted() {
+		return
+	}
+	pl.mu.Lock()
+	defer pl.mu.Unlock()
+	id := ctx.Session.ID()
+	p := pl.procs[id]
+	if p != nil && p.Kill != nil {
+		p.Kill()
+		p.Kill = nil
 	}
 }
 
@@ -322,7 +367,11 @@ func (pl *ProcessList) Kill(connID uint32) {
 
 	p := pl.procs[connID]
 	if p != nil && p.Kill != nil {
-		logrus.Infof("kill query: pid %d", p.QueryPid)
+		if p.QueryPid != 0 {
+			logrus.Infof("kill query: pid %d", p.QueryPid)
+		} else {
+			logrus.Infof("canceling context: connID %d", connID)
+		}
 		p.Kill()
 	}
 }
@@ -337,7 +386,7 @@ func getLongQueryTime() float64 {
 	}
 	longQueryTime, ok := longQueryTimeValue.(float64)
 	if !ok {
-		logrus.Errorf(fmt.Sprintf("unexpected type for value of long_query_time system variable: %T", longQueryTimeValue))
+		logrus.Errorf("unexpected type for value of long_query_time system variable: %T", longQueryTimeValue)
 		return 0
 	}
 	return longQueryTime

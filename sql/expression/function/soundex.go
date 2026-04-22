@@ -29,15 +29,15 @@ import (
 // soundex string is four characters long, but the SOUNDEX() function returns
 // an arbitrarily long string.
 type Soundex struct {
-	expression.UnaryExpression
+	expression.UnaryExpressionStub
 }
 
 var _ sql.FunctionExpression = (*Soundex)(nil)
 var _ sql.CollationCoercible = (*Soundex)(nil)
 
 // NewSoundex creates a new Soundex expression.
-func NewSoundex(e sql.Expression) sql.Expression {
-	return &Soundex{expression.UnaryExpression{Child: e}}
+func NewSoundex(ctx *sql.Context, e sql.Expression) sql.Expression {
+	return &Soundex{expression.UnaryExpressionStub{Child: e}}
 }
 
 // FunctionName implements sql.FunctionExpression
@@ -61,7 +61,13 @@ func (s *Soundex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	v, _, err = types.LongText.Convert(v)
+	v, _, err = types.LongText.Convert(ctx, v)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle Dolt's TextStorage wrapper that doesn't convert to plain string
+	v, err = sql.UnwrapAny(ctx, v)
 	if err != nil {
 		return nil, err
 	}
@@ -116,15 +122,15 @@ func (s *Soundex) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (s *Soundex) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (s *Soundex) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(s, len(children), 1)
 	}
-	return NewSoundex(children[0]), nil
+	return NewSoundex(ctx, children[0]), nil
 }
 
 // Type implements the Expression interface.
-func (s *Soundex) Type() sql.Type {
+func (s *Soundex) Type(ctx *sql.Context) sql.Type {
 	return types.LongText
 }
 

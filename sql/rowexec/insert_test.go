@@ -15,8 +15,8 @@
 package rowexec
 
 import (
+	"math"
 	"testing"
-	"time"
 
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/stretchr/testify/require"
@@ -28,46 +28,133 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
-func TestInsertIgnoreConversions(t *testing.T) {
+func TestInsert(t *testing.T) {
 	testCases := []struct {
 		name      string
 		colType   sql.Type
 		value     interface{}
 		valueType sql.Type
 		expected  interface{}
+		warning   bool
+		ignore    bool
 		err       bool
 	}{
 		{
-			name:      "inserting a string into a integer defaults to a 0",
+			name:      "inserting a string into a integer defaults to a 0 (with ignore)",
 			colType:   types.Int64,
 			value:     "dadasd",
 			valueType: types.Text,
 			expected:  int64(0),
-			err:       true,
+			warning:   true,
+			ignore:    true,
 		},
 		{
-			name:      "string too long gets truncated",
+			name:      "string too long gets truncated (with ignore)",
 			colType:   types.MustCreateStringWithDefaults(sqltypes.VarChar, 2),
 			value:     "dadsa",
 			valueType: types.Text,
 			expected:  "da",
-			err:       true,
+			warning:   true,
+			ignore:    true,
 		},
 		{
-			name:      "inserting a string into a datetime results in 0 time",
+			name:      "inserting a string into a datetime results in 0 time (with ignore)",
 			colType:   types.Datetime,
 			value:     "dadasd",
 			valueType: types.Text,
-			expected:  time.Unix(-62167219200, 0).UTC(),
-			err:       true,
+			expected:  types.ZeroTime,
+			warning:   true,
+			ignore:    true,
 		},
 		{
-			name:      "inserting a negative into an unsigned int results in 0",
+			name:      "inserting a negative into an unsigned int results in 0 (with ignore)",
 			colType:   types.Uint64,
 			value:     int64(-1),
 			expected:  uint64(1<<64 - 1),
 			valueType: types.Uint64,
-			err:       true,
+			warning:   true,
+			ignore:    true,
+		},
+		{
+			// This diverges from MySQL because NaN values are okay in Postgres
+			name:     "inserting NaN into float results is okay",
+			colType:  types.Float64,
+			value:    math.NaN(),
+			expected: math.NaN(),
+		},
+		{
+			name:    "inserting NaN into int results in error",
+			colType: types.Int64,
+			value:   math.NaN(),
+			err:     true,
+		},
+		{
+			name:    "inserting NaN into unsigned int results in error",
+			colType: types.Uint64,
+			value:   math.NaN(),
+			err:     true,
+		},
+		{
+			// TODO: Postgres possibly allows NaN values for decimals (documentation unclear) but shopspring/decimal
+			//  does not
+			name:    "inserting NaN into Decimal results in error",
+			colType: types.MustCreateDecimalType(types.DecimalTypeMaxPrecision, types.DecimalTypeMaxScale),
+			value:   math.NaN(),
+			err:     true,
+		},
+		{
+			// This diverges from MySQL because Infinity values are okay in Postgres
+			name:     "inserting Infinity into float is okay",
+			colType:  types.Float64,
+			value:    math.Inf(1),
+			expected: math.Inf(1),
+		},
+		{
+			name:    "inserting Infinity into int results in error",
+			colType: types.Int64,
+			value:   math.Inf(1),
+			err:     true,
+		},
+		{
+			name:    "inserting Infinity into unsigned int results in error",
+			colType: types.Uint64,
+			value:   math.Inf(1),
+			err:     true,
+		},
+		{
+			// TODO: Postgres possibly allows Inf values for decimals (documentation unclear) but shopspring/decimal
+			//  does not
+			name:    "inserting Infinity into Decimal results in error",
+			colType: types.MustCreateDecimalType(types.DecimalTypeMaxPrecision, types.DecimalTypeMaxScale),
+			value:   math.Inf(1),
+			err:     true,
+		},
+		{
+			// This diverges from MySQL because Infinity values are okay in Postgres
+			name:     "inserting negative Infinity into float results is okay",
+			colType:  types.Float64,
+			value:    math.Inf(-1),
+			expected: math.Inf(-1),
+		},
+		{
+			name:    "inserting negative Infinity into int results in error",
+			colType: types.Int64,
+			value:   math.Inf(-1),
+			err:     true,
+		},
+		{
+			name:    "inserting negative Infinity into unsigned int results in error",
+			colType: types.Uint64,
+			value:   math.Inf(-1),
+			err:     true,
+		},
+		{
+			// TODO: Postgres possibly allows Inf values for decimals (documentation unclear) but shopspring/decimal
+			//  does not
+			name:    "inserting negative Infinity into Decimal results in error",
+			colType: types.MustCreateDecimalType(types.DecimalTypeMaxPrecision, types.DecimalTypeMaxScale),
+			value:   math.Inf(-1),
+			err:     true,
 		},
 	}
 
@@ -77,27 +164,39 @@ func TestInsertIgnoreConversions(t *testing.T) {
 			pro := memory.NewDBProvider(db)
 			ctx := newContext(pro)
 
-			table := memory.NewTable(db.BaseDatabase, "foo", sql.NewPrimaryKeySchema(sql.Schema{
+			table := memory.NewTable(ctx, db.BaseDatabase, "foo", sql.NewPrimaryKeySchema(sql.Schema{
 				{Name: "c1", Source: "foo", Type: tc.colType},
 			}), nil)
 
 			insertPlan := plan.NewInsertInto(sql.UnresolvedDatabase(""), plan.NewResolvedTable(table, nil, nil), plan.NewValues([][]sql.Expression{{
 				expression.NewLiteral(tc.value, tc.valueType),
-			}}), false, []string{"c1"}, []sql.Expression{}, true)
+			}}), false, []string{"c1"}, nil, tc.ignore)
 
 			ri, err := DefaultBuilder.Build(ctx, insertPlan, nil)
 			require.NoError(t, err)
 
 			row, err := ri.Next(ctx)
-			require.NoError(t, err)
-
-			require.Equal(t, sql.Row{tc.expected}, row)
-
-			var warningCnt int
 			if tc.err {
-				warningCnt = 1
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+
+				require.True(t, len(row) == 1)
+				// math.NaN != math.NaN so using math.IsNaN is the only way math.NaN results can be checked
+				if expectedFloat64, expectedIsFloat64 := tc.expected.(float64); expectedIsFloat64 && math.IsNaN(expectedFloat64) {
+					resultFloat64, resultIsFloat64 := row[0].(float64)
+					require.True(t, resultIsFloat64)
+					require.True(t, math.IsNaN(resultFloat64))
+				} else {
+					require.Equal(t, sql.Row{tc.expected}, row)
+				}
+
+				var warningCnt int
+				if tc.warning {
+					warningCnt = 1
+				}
+				require.Equal(t, ctx.WarningCount(), uint16(warningCnt))
 			}
-			require.Equal(t, ctx.WarningCount(), uint16(warningCnt))
 		})
 	}
 }

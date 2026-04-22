@@ -15,8 +15,6 @@
 package aggregation
 
 import (
-	"fmt"
-
 	"gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -28,27 +26,27 @@ var ErrEvalUnsupportedOnAggregation = errors.NewKind("Unimplemented %s.Eval(). T
 // unaryAggBase is the generic embedded class optgen
 // uses to codegen single expression aggregate functions.
 type unaryAggBase struct {
-	expression.UnaryExpression
+	Child        sql.Expression
+	typ          sql.Type
 	window       *sql.WindowDefinition
 	functionName string
 	description  string
-	typ          sql.Type
 	id           sql.ColumnId
 }
 
 var _ sql.Aggregation = (*unaryAggBase)(nil)
 var _ sql.CollationCoercible = (*unaryAggBase)(nil)
 
-func (a *unaryAggBase) NewWindowFunction() (sql.WindowFunction, error) {
+func (a *unaryAggBase) NewWindowFunction(ctx *sql.Context) (sql.WindowFunction, error) {
 	panic("unaryAggBase is a base type, type must implement NewWindowFunction")
 }
 
-func (a *unaryAggBase) NewBuffer() (sql.AggregationBuffer, error) {
+func (a *unaryAggBase) NewBuffer(ctx *sql.Context) (sql.AggregationBuffer, error) {
 	panic("unaryAggBase is a base type, type must implement NewWindowFunction")
 }
 
 // WithWindow returns a new unaryAggBase to be embedded in wrapping type
-func (a *unaryAggBase) WithWindow(window *sql.WindowDefinition) sql.WindowAdaptableExpression {
+func (a *unaryAggBase) WithWindow(ctx *sql.Context, window *sql.WindowDefinition) sql.WindowAdaptableExpression {
 	na := *a
 	na.window = window
 	return &na
@@ -59,10 +57,10 @@ func (a *unaryAggBase) Window() *sql.WindowDefinition {
 }
 
 func (a *unaryAggBase) String() string {
-	return fmt.Sprintf("%s(%s)", a.functionName, a.Child)
+	return a.functionName + "(" + a.Child.String() + ")"
 }
 
-func (a *unaryAggBase) Type() sql.Type {
+func (a *unaryAggBase) Type(ctx *sql.Context) sql.Type {
 	return a.typ
 }
 
@@ -76,6 +74,11 @@ func (a *unaryAggBase) WithId(id sql.ColumnId) sql.IdExpression {
 	ret := *a
 	ret.id = id
 	return &ret
+}
+
+// IsNullable returns whether the expression can be null.
+func (a *unaryAggBase) IsNullable(ctx *sql.Context) bool {
+	return a.Child.IsNullable(ctx)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -98,7 +101,8 @@ func (a *unaryAggBase) Children() []sql.Expression {
 func (a *unaryAggBase) Resolved() bool {
 	if _, ok := a.Child.(*expression.Star); ok {
 		return true
-	} else if !a.Child.Resolved() {
+	}
+	if !a.Child.Resolved() {
 		return false
 	}
 	if a.window == nil {
@@ -108,28 +112,28 @@ func (a *unaryAggBase) Resolved() bool {
 }
 
 // WithChildren returns a new unaryAggBase to be embedded in wrapping type
-func (a *unaryAggBase) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (a *unaryAggBase) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) < 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(a, len(children), 1)
 	}
 
 	na := *a
-	na.UnaryExpression = expression.UnaryExpression{Child: children[0]}
+	na.Child = children[0]
 	if len(children) > 1 && a.window != nil {
-		w, err := a.window.FromExpressions(children[1:])
+		w, err := a.window.FromExpressions(ctx, children[1:])
 		if err != nil {
 			return nil, err
 		}
-		return na.WithWindow(w), nil
+		return na.WithWindow(ctx, w), nil
 	}
 	return &na, nil
 }
 
-func (a unaryAggBase) FunctionName() string {
+func (a *unaryAggBase) FunctionName() string {
 	return a.functionName
 }
 
-func (a unaryAggBase) Description() string {
+func (a *unaryAggBase) Description() string {
 	return a.description
 }
 

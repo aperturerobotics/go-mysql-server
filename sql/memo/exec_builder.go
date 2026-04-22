@@ -15,13 +15,14 @@ func NewExecBuilder() *ExecBuilder {
 	return &ExecBuilder{}
 }
 
-func (b *ExecBuilder) buildRel(r RelExpr, children ...sql.Node) (sql.Node, error) {
-	n, err := buildRelExpr(b, r, children...)
+func (b *ExecBuilder) buildRel(ctx *sql.Context, r RelExpr, children ...sql.Node) (sql.Node, error) {
+	n, err := buildRelExpr(ctx, b, r, children...)
 	if err != nil {
 		return nil, err
 	}
 
-	return b.buildDistinct(n, r.Distinct())
+	// TODO: distinctOp doesn't seem to be propagated through all the time
+	return b.wrapInDistinct(n, r.Distinct(), r.DistinctOn())
 }
 
 func (b *ExecBuilder) buildInnerJoin(j *InnerJoin, children ...sql.Node) (sql.Node, error) {
@@ -37,9 +38,10 @@ func (b *ExecBuilder) buildCrossJoin(j *CrossJoin, children ...sql.Node) (sql.No
 	return plan.NewCrossJoin(children[0], children[1]), nil
 }
 
+// TODO: buildLeftJoin, buildSemiJoin, and buildAntiJoin are all identical. Condense into single function
 func (b *ExecBuilder) buildLeftJoin(j *LeftJoin, children ...sql.Node) (sql.Node, error) {
 	filters := b.buildFilterConjunction(j.Filter...)
-	return plan.NewLeftOuterJoin(children[0], children[1], filters), nil
+	return plan.NewJoin(children[0], children[1], j.Op, filters), nil
 }
 
 func (b *ExecBuilder) buildFullOuterJoin(j *FullOuterJoin, children ...sql.Node) (sql.Node, error) {
@@ -65,14 +67,14 @@ func (b *ExecBuilder) buildLookupJoin(j *LookupJoin, children ...sql.Node) (sql.
 		return nil, err
 	}
 	filters := b.buildFilterConjunction(j.Filter...)
-	return plan.NewJoin(left, right, j.Op, filters).WithScopeLen(j.g.m.scopeLen), nil
+	return plan.NewJoin(left, right, j.Op, filters), nil
 }
 
 func (b *ExecBuilder) buildRangeHeap(sr *RangeHeap, children ...sql.Node) (ret sql.Node, err error) {
 	switch n := children[0].(type) {
 	case *plan.Distinct:
 		ret, err = b.buildRangeHeap(sr, n.Child)
-		ret = plan.NewDistinct(ret)
+		ret = plan.NewDistinct(ret, n.DistinctOn()...)
 	case *plan.OrderedDistinct:
 		ret, err = b.buildRangeHeap(sr, n.Child)
 		ret = plan.NewOrderedDistinct(ret)
@@ -145,7 +147,7 @@ func (b *ExecBuilder) buildRangeHeapJoin(j *RangeHeapJoin, children ...sql.Node)
 		return nil, err
 	}
 	filters := b.buildFilterConjunction(j.Filter...)
-	return plan.NewJoin(left, right, j.Op, filters).WithScopeLen(j.g.m.scopeLen), nil
+	return plan.NewJoin(left, right, j.Op, filters), nil
 }
 
 func (b *ExecBuilder) buildConcatJoin(j *ConcatJoin, children ...sql.Node) (sql.Node, error) {
@@ -180,10 +182,10 @@ func (b *ExecBuilder) buildConcatJoin(j *ConcatJoin, children ...sql.Node) (sql.
 
 	filters := b.buildFilterConjunction(j.Filter...)
 
-	return plan.NewJoin(children[0], right, j.Op, filters).WithScopeLen(j.g.m.scopeLen), nil
+	return plan.NewJoin(children[0], right, j.Op, filters), nil
 }
 
-func (b *ExecBuilder) buildHashJoin(j *HashJoin, children ...sql.Node) (sql.Node, error) {
+func (b *ExecBuilder) buildHashJoin(ctx *sql.Context, j *HashJoin, children ...sql.Node) (sql.Node, error) {
 	leftProbeFilters := make([]sql.Expression, len(j.LeftAttrs))
 	for i := range j.LeftAttrs {
 		leftProbeFilters[i] = j.LeftAttrs[i]
@@ -203,9 +205,9 @@ func (b *ExecBuilder) buildHashJoin(j *HashJoin, children ...sql.Node) (sql.Node
 
 	filters := b.buildFilterConjunction(j.Filter...)
 
-	outer := plan.NewHashLookup(children[1], rightEntryKey, leftProbeKey, j.Op)
+	outer := plan.NewHashLookup(ctx, children[1], rightEntryKey, leftProbeKey, j.Op)
 	inner := children[0]
-	return plan.NewJoin(inner, outer, j.Op, filters).WithScopeLen(j.g.m.scopeLen), nil
+	return plan.NewJoin(inner, outer, j.Op, filters), nil
 }
 
 func (b *ExecBuilder) buildIndexScan(i *IndexScan, children ...sql.Node) (sql.Node, error) {
@@ -232,7 +234,7 @@ func (b *ExecBuilder) buildIndexScan(i *IndexScan, children ...sql.Node) (sql.No
 		ret = i.Table
 	case *plan.Distinct:
 		ret, err = b.buildIndexScan(i, n.Child)
-		ret = plan.NewDistinct(ret)
+		ret = plan.NewDistinct(ret, n.DistinctOn()...)
 	case *plan.OrderedDistinct:
 		ret, err = b.buildIndexScan(i, n.Child)
 		ret = plan.NewOrderedDistinct(ret)
@@ -257,9 +259,13 @@ func (b *ExecBuilder) buildIndexScan(i *IndexScan, children ...sql.Node) (sql.No
 	return ret, nil
 }
 
-func checkIndexTypeMismatch(idx sql.Index, rang sql.Range) bool {
-	for i, typ := range idx.ColumnExpressionTypes() {
-		if !types.Null.Equals(rang[i].Typ) && !typ.Type.Equals(rang[i].Typ) {
+func checkIndexTypeMismatch(ctx *sql.Context, idx sql.Index, rang sql.Range) bool {
+	mysqlRange, ok := rang.(sql.MySQLRange)
+	if !ok {
+		return false
+	}
+	for i, typ := range idx.ColumnExpressionTypes(ctx) {
+		if !types.Null.Equals(mysqlRange[i].Typ) && !typ.Type.Equals(mysqlRange[i].Typ) {
 			return true
 		}
 	}
@@ -289,12 +295,12 @@ func (b *ExecBuilder) buildMergeJoin(j *MergeJoin, children ...sql.Node) (sql.No
 		}
 	}
 	filters := b.buildFilterConjunction(j.Filter...)
-	return plan.NewJoin(inner, outer, j.Op, filters).WithScopeLen(j.g.m.scopeLen), nil
+	return plan.NewJoin(inner, outer, j.Op, filters), nil
 }
 
 func (b *ExecBuilder) buildLateralJoin(j *LateralJoin, children ...sql.Node) (sql.Node, error) {
 	if len(j.Filter) == 0 {
-		return plan.NewCrossJoin(children[0], children[1]), nil
+		return plan.NewLateralCrossJoin(children[0], children[1]), nil
 	}
 	filters := b.buildFilterConjunction(j.Filter...)
 	return plan.NewJoin(children[0], children[1], j.Op.AsLateral(), filters), nil
@@ -352,15 +358,19 @@ func (b *ExecBuilder) buildProject(r *Project, children ...sql.Node) (sql.Node, 
 	return plan.NewProject(proj, children[0]), nil
 }
 
+func (b *ExecBuilder) buildDistinct(r *Distinct, children ...sql.Node) (sql.Node, error) {
+	return plan.NewDistinct(children[0], r.distinctOn...), nil
+}
+
 func (b *ExecBuilder) buildFilter(r *Filter, children ...sql.Node) (sql.Node, error) {
 	ret := plan.NewFilter(expression.JoinAnd(r.Filters...), children[0])
 	return ret, nil
 }
 
-func (b *ExecBuilder) buildDistinct(n sql.Node, d distinctOp) (sql.Node, error) {
+func (b *ExecBuilder) wrapInDistinct(n sql.Node, d distinctOp, distinctOn []sql.Expression) (sql.Node, error) {
 	switch d {
 	case HashDistinctOp:
-		return plan.NewDistinct(n), nil
+		return plan.NewDistinct(n, distinctOn...), nil
 	case SortedDistinctOp:
 		return plan.NewOrderedDistinct(n), nil
 	case NoDistinctOp:

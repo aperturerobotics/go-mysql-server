@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shopspring/decimal"
 	"gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -52,6 +53,8 @@ func compEval(
 			return nil, err
 		}
 
+		// TODO: this switch statement can be cleaned up a lot. A lot of these type conversions and conversions are
+		//  also unnecessary because they get converted during compare
 		switch t := val.(type) {
 		case int, int8, int16, int32, int64, uint,
 			uint8, uint16, uint32, uint64:
@@ -117,6 +120,11 @@ func compEval(
 			if i == 0 || cmp(t, selectedTime) {
 				selectedTime = t
 			}
+		case decimal.Decimal:
+			fval, _ := t.Float64()
+			if i == 0 || cmp(fval, selectedNum) {
+				selectedNum = fval
+			}
 		case nil:
 			return nil, nil
 		default:
@@ -142,7 +150,7 @@ func compEval(
 
 // compRetType is used to determine the type from args based on the rules described for
 // Greatest/Least
-func compRetType(args ...sql.Expression) (sql.Type, error) {
+func compRetType(ctx *sql.Context, args ...sql.Expression) (sql.Type, error) {
 	if len(args) == 0 {
 		return nil, sql.ErrInvalidArgumentNumber.New("LEAST", "1 or more", 0)
 	}
@@ -155,7 +163,7 @@ func compRetType(args ...sql.Expression) (sql.Type, error) {
 		if !arg.Resolved() {
 			return nil, nil
 		}
-		argType := arg.Type()
+		argType := arg.Type(ctx)
 
 		if svt, ok := argType.(sql.SystemVariableType); ok {
 			argType = svt.UnderlyingType()
@@ -166,8 +174,7 @@ func compRetType(args ...sql.Expression) (sql.Type, error) {
 		} else if types.IsNumber(argType) {
 			allString = false
 			allDatetime = false
-			if types.IsFloat(argType) {
-				allString = false
+			if !types.IsInteger(argType) {
 				allInt = false
 			}
 		} else if types.IsText(argType) {
@@ -186,6 +193,7 @@ func compRetType(args ...sql.Expression) (sql.Type, error) {
 		}
 	}
 
+	// TODO: return Decimal type if all Decimals. Account for Decimals of different scales and precisions
 	if allString {
 		return types.LongText, nil
 	} else if allInt {
@@ -203,8 +211,8 @@ func compRetType(args ...sql.Expression) (sql.Type, error) {
 // convertible strings or integers mixed with floats. When ints or floats
 // are mixed with non numerically convertible strings, those are ignored.
 type Greatest struct {
-	Args       []sql.Expression
 	returnType sql.Type
+	Args       []sql.Expression
 }
 
 var _ sql.FunctionExpression = (*Greatest)(nil)
@@ -213,8 +221,8 @@ var _ sql.FunctionExpression = (*Greatest)(nil)
 var ErrUnsupportedType = errors.NewKind("unsupported type for greatest/least argument: %T")
 
 // NewGreatest creates a new Greatest UDF
-func NewGreatest(args ...sql.Expression) (sql.Expression, error) {
-	retType, err := compRetType(args...)
+func NewGreatest(ctx *sql.Context, args ...sql.Expression) (sql.Expression, error) {
+	retType, err := compRetType(ctx, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -232,17 +240,17 @@ func (f *Greatest) Description() string {
 }
 
 // Type implements the Expression interface.
-func (f *Greatest) Type() sql.Type {
+func (f *Greatest) Type(ctx *sql.Context) sql.Type {
 	if f.returnType != nil {
 		return f.returnType
 	}
-	return f.Args[0].Type()
+	return f.Args[0].Type(ctx)
 }
 
 // IsNullable implements the Expression interface.
-func (f *Greatest) IsNullable() bool {
+func (f *Greatest) IsNullable(ctx *sql.Context) bool {
 	for _, arg := range f.Args {
-		if arg.IsNullable() {
+		if arg.IsNullable(ctx) {
 			return true
 		}
 	}
@@ -258,8 +266,8 @@ func (f *Greatest) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (f *Greatest) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return NewGreatest(children...)
+func (f *Greatest) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return NewGreatest(ctx, children...)
 }
 
 // Resolved implements the Expression interface.
@@ -316,15 +324,15 @@ func (f *Greatest) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 // convertible strings or integers mixed with floats. When ints or floats
 // are mixed with non numerically convertible strings, those are ignored.
 type Least struct {
-	Args       []sql.Expression
 	returnType sql.Type
+	Args       []sql.Expression
 }
 
 var _ sql.FunctionExpression = (*Least)(nil)
 
 // NewLeast creates a new Least UDF
-func NewLeast(args ...sql.Expression) (sql.Expression, error) {
-	retType, err := compRetType(args...)
+func NewLeast(ctx *sql.Context, args ...sql.Expression) (sql.Expression, error) {
+	retType, err := compRetType(ctx, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -342,17 +350,17 @@ func (f *Least) Description() string {
 }
 
 // Type implements the Expression interface.
-func (f *Least) Type() sql.Type {
+func (f *Least) Type(ctx *sql.Context) sql.Type {
 	if f.returnType != nil {
 		return f.returnType
 	}
-	return f.Args[0].Type()
+	return f.Args[0].Type(ctx)
 }
 
 // IsNullable implements the Expression interface.
-func (f *Least) IsNullable() bool {
+func (f *Least) IsNullable(ctx *sql.Context) bool {
 	for _, arg := range f.Args {
-		if arg.IsNullable() {
+		if arg.IsNullable(ctx) {
 			return true
 		}
 	}
@@ -368,8 +376,8 @@ func (f *Least) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (f *Least) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return NewLeast(children...)
+func (f *Least) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return NewLeast(ctx, children...)
 }
 
 // Resolved implements the Expression interface.

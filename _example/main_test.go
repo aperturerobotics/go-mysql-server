@@ -17,13 +17,15 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"net"
 	"testing"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gocraft/dbr/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	gms "github.com/dolthub/go-mysql-server/sql"
 )
 
 var expectedResults = [][]string{
@@ -35,11 +37,14 @@ var expectedResults = [][]string{
 
 func TestExampleUsersDisabled(t *testing.T) {
 	enableUsers = false
-	useUnusedPort(t)
+	_, err := gms.GetEmptyPort()
+	require.NoError(t, err)
 	go func() {
 		main()
 	}()
 
+	// Wait for the database to start
+	time.Sleep(1 * time.Second)
 	conn, err := dbr.Open("mysql", fmt.Sprintf("no_user:@tcp(%s:%d)/%s", address, port, dbName), nil)
 	require.NoError(t, err)
 	require.NoError(t, conn.Ping())
@@ -53,11 +58,11 @@ func TestExampleUsersDisabled(t *testing.T) {
 func TestExampleRootUserEnabled(t *testing.T) {
 	enableUsers = true
 	pretendThatFileExists = false
-	useUnusedPort(t)
+	_, err := gms.GetEmptyPort()
+	require.NoError(t, err)
 	go func() {
 		main()
 	}()
-
 	conn, err := dbr.Open("mysql", fmt.Sprintf("no_user:@tcp(%s:%d)/%s", address, port, dbName), nil)
 	require.NoError(t, err)
 	require.ErrorContains(t, conn.Ping(), "User not found")
@@ -74,11 +79,11 @@ func TestExampleRootUserEnabled(t *testing.T) {
 func TestExampleLoadedUser(t *testing.T) {
 	enableUsers = true
 	pretendThatFileExists = true
-	useUnusedPort(t)
+	_, err := gms.GetEmptyPort()
+	require.NoError(t, err)
 	go func() {
 		main()
 	}()
-
 	conn, err := dbr.Open("mysql", fmt.Sprintf("no_user:@tcp(%s:%d)/%s", address, port, dbName), nil)
 	require.NoError(t, err)
 	require.ErrorContains(t, conn.Ping(), "User not found")
@@ -99,11 +104,11 @@ func TestExampleLoadedUser(t *testing.T) {
 func TestIssue1621(t *testing.T) {
 	// This is an issue that is specific to using the example server, as this is not a logic issue but a setup issue
 	enableUsers = true
-	useUnusedPort(t)
+	_, err := gms.GetEmptyPort()
+	require.NoError(t, err)
 	go func() {
 		main()
 	}()
-
 	conn, err := dbr.Open("mysql",
 		fmt.Sprintf("root:@tcp(localhost:%d)/mydb", port), nil)
 	require.NoError(t, err)
@@ -140,12 +145,4 @@ func checkRows(t *testing.T, expectedRows [][]string, actualRows *sql.Rows) {
 		}
 	}
 	assert.NoError(t, actualRows.Close())
-}
-
-func useUnusedPort(t *testing.T) {
-	// Tests should grab an open port, otherwise they'll fail if some hardcoded port is already in use
-	listener, err := net.Listen("tcp", ":0")
-	require.NoError(t, err)
-	port = listener.Addr().(*net.TCPAddr).Port
-	require.NoError(t, listener.Close())
 }

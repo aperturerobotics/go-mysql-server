@@ -17,18 +17,22 @@ package rowexec
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/hash"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 )
 
 type updateIter struct {
-	childIter sql.RowIter
-	schema    sql.Schema
-	updater   sql.RowUpdater
-	checks    sql.CheckConstraints
-	closed    bool
-	ignore    bool
+	childIter    sql.RowIter
+	updater      sql.RowUpdater
+	checks       sql.CheckConstraints
+	returnExprs  []sql.Expression
+	schema       sql.Schema
+	returnSchema sql.Schema
+	closed       bool
+	ignore       bool
 }
 
 func (u *updateIter) Next(ctx *sql.Context) (sql.Row, error) {
@@ -38,7 +42,7 @@ func (u *updateIter) Next(ctx *sql.Context) (sql.Row, error) {
 	}
 
 	oldRow, newRow := oldAndNewRow[:len(oldAndNewRow)/2], oldAndNewRow[len(oldAndNewRow)/2:]
-	if equals, err := oldRow.Equals(newRow, u.schema); err == nil {
+	if equals, err := oldRow.Equals(ctx, newRow, u.schema); err == nil {
 		if !equals {
 			// apply check constraints
 			for _, check := range u.checks {
@@ -66,6 +70,18 @@ func (u *updateIter) Next(ctx *sql.Context) (sql.Row, error) {
 				return nil, u.ignoreOrError(ctx, newRow, err)
 			}
 		}
+
+		if len(u.returnExprs) > 0 {
+			var retExprRow sql.Row
+			for _, returnExpr := range u.returnExprs {
+				result, err := returnExpr.Eval(ctx, newRow)
+				if err != nil {
+					return nil, err
+				}
+				retExprRow = append(retExprRow, result)
+			}
+			return retExprRow, nil
+		}
 	} else {
 		return nil, err
 	}
@@ -75,18 +91,10 @@ func (u *updateIter) Next(ctx *sql.Context) (sql.Row, error) {
 
 // Applies the update expressions given to the row given, returning the new resultant row. In the case that ignore is
 // provided and there is a type conversion error, this function sets the value to the zero value as per the MySQL standard.
-func applyUpdateExpressionsWithIgnore(ctx *sql.Context, updateExprs []sql.Expression, tableSchema sql.Schema, row sql.Row, ignore bool) (sql.Row, error) {
-	var secondPass []int
-
-	for i, updateExpr := range updateExprs {
-		defaultVal, isDefaultVal := defaultValFromSetExpression(updateExpr)
-		// Any generated columns must be projected into place so that the caller gets their newest values as well. We
-		// do this in a second pass as necessary.
-		if isDefaultVal && !defaultVal.IsLiteral() {
-			secondPass = append(secondPass, i)
-			continue
-		}
-
+// TODO: This can probably be combined with insertIter.handleOnDuplicateKeyUpdate or insertIter.applyUpdates
+func applyUpdateExpressionsWithIgnore(ctx *sql.Context, updateExprs *plan.UpdateExprs, tableSchema sql.Schema, row sql.Row, ignore bool) (sql.Row, error) {
+	oldRow := row
+	for _, updateExpr := range updateExprs.ExplicitUpdateExprs() {
 		val, err := updateExpr.Eval(ctx, row)
 		if err != nil {
 			var wtce sql.WrappedTypeConversionError
@@ -106,16 +114,22 @@ func applyUpdateExpressionsWithIgnore(ctx *sql.Context, updateExprs []sql.Expres
 		}
 	}
 
-	for _, index := range secondPass {
-		val, err := updateExprs[index].Eval(ctx, row)
-		if err != nil {
+	if updateExprs.HasDerivedUpdates() {
+		if same, err := oldRow.Equals(ctx, row, tableSchema); err != nil {
 			return nil, err
-		}
+		} else if !same {
+			for _, updateExpr := range updateExprs.DerivedUpdateExprs() {
+				val, err := updateExpr.Eval(ctx, row)
+				if err != nil {
+					return nil, err
+				}
 
-		var ok bool
-		row, ok = val.(sql.Row)
-		if !ok {
-			return nil, plan.ErrUpdateUnexpectedSetResult.New(val)
+				var ok bool
+				row, ok = val.(sql.Row)
+				if !ok {
+					return nil, plan.ErrUpdateUnexpectedSetResult.New(val)
+				}
+			}
 		}
 	}
 
@@ -164,35 +178,43 @@ func newUpdateIter(
 	updater sql.RowUpdater,
 	checks sql.CheckConstraints,
 	ignore bool,
+	returnExprs []sql.Expression,
+	returnSchema sql.Schema,
 ) sql.RowIter {
 	if ignore {
 		return plan.NewCheckpointingTableEditorIter(&updateIter{
-			childIter: childIter,
-			updater:   updater,
-			schema:    schema,
-			checks:    checks,
-			ignore:    true,
+			childIter:    childIter,
+			updater:      updater,
+			schema:       schema,
+			checks:       checks,
+			ignore:       true,
+			returnExprs:  returnExprs,
+			returnSchema: returnSchema,
 		}, updater)
 	} else {
 		return plan.NewTableEditorIter(&updateIter{
-			childIter: childIter,
-			updater:   updater,
-			schema:    schema,
-			checks:    checks,
+			childIter:    childIter,
+			updater:      updater,
+			schema:       schema,
+			checks:       checks,
+			returnExprs:  returnExprs,
+			returnSchema: returnSchema,
 		}, updater)
 	}
 }
 
-// updateJoinIter wraps the child UpdateSource projectIter and returns join row in such a way that updates per table row are
+// updateJoinIter wraps the child UpdateSource ProjectIter and returns join row in such a way that updates per table row are
 // done once.
 type updateJoinIter struct {
 	updateSourceIter sql.RowIter
-	joinSchema       sql.Schema
-	updaters         map[string]sql.RowUpdater
-	caches           map[string]sql.KeyValueCache
-	disposals        map[string]sql.DisposeFunc
-	joinNode         sql.Node
-	accumulator      *updateJoinRowHandler
+	// TODO: naming this joinNode is confusing. It's not always a join node because it could be wrapped inside another
+	//  node
+	joinNode    sql.Node
+	updaters    map[string]sql.RowUpdater
+	caches      map[string]sql.KeyValueCache
+	disposals   map[string]sql.DisposeFunc
+	accumulator *updateJoinRowHandler
+	joinSchema  sql.Schema
 }
 
 var _ sql.RowIter = (*updateJoinIter)(nil)
@@ -210,6 +232,7 @@ func (u *updateJoinIter) Next(ctx *sql.Context) (sql.Row, error) {
 		tableToNewRowMap := plan.SplitRowIntoTableRowMap(newJoinRow, u.joinSchema)
 
 		for tableName, _ := range u.updaters {
+			tableName = strings.ToLower(tableName)
 			oldTableRow := tableToOldRowMap[tableName]
 
 			// Handle the case of row being ignored due to it not being valid in the join row.
@@ -228,7 +251,7 @@ func (u *updateJoinIter) Next(ctx *sql.Context) (sql.Row, error) {
 
 			// Determine whether this row in the table has already been updated
 			cache := u.getOrCreateCache(ctx, tableName)
-			hash, err := sql.HashOf(oldTableRow)
+			hash, err := hash.HashOf(ctx, nil, oldTableRow)
 			if err != nil {
 				return nil, err
 			}
@@ -237,8 +260,12 @@ func (u *updateJoinIter) Next(ctx *sql.Context) (sql.Row, error) {
 			if errors.Is(err, sql.ErrKeyNotFound) {
 				cache.Put(hash, struct{}{})
 
-				// updateJoin counts matched rows from join output
-				u.accumulator.handleRowMatched()
+				// updateJoin counts matched rows from join output, unless a RETURNING clause
+				// is in use, in which case there will not be an accumulator assigned, since we
+				// don't need to return the count of updated rows, just the RETURNING expressions.
+				if u.accumulator != nil {
+					u.accumulator.handleRowMatched()
+				}
 
 				continue
 			} else if err != nil {
@@ -251,7 +278,7 @@ func (u *updateJoinIter) Next(ctx *sql.Context) (sql.Row, error) {
 		}
 
 		newJoinRow = recreateRowFromMap(tableToNewRowMap, u.joinSchema)
-		equals, err := oldJoinRow.Equals(newJoinRow, u.joinSchema)
+		equals, err := oldJoinRow.Equals(ctx, newJoinRow, u.joinSchema)
 		if err != nil {
 			return nil, err
 		}
@@ -262,6 +289,7 @@ func (u *updateJoinIter) Next(ctx *sql.Context) (sql.Row, error) {
 }
 
 func toJoinNode(node sql.Node) *plan.JoinNode {
+	// TODO: rewrite this to use Inspect
 	switch n := node.(type) {
 	case *plan.JoinNode:
 		return n
@@ -321,6 +349,11 @@ func (u *updateJoinIter) shouldUpdateDirectionalJoin(ctx *sql.Context, joinRow, 
 	}
 
 	// If the overall row fits the join condition it is fine (i.e. middle of the venn diagram).
+	// TODO: We shouldn't be evaluating the join condition on "joinRow". "joinRow" is not actually the row from the
+	//  join node but rather the row from the updateSourceIter. The join node could be wrapped in a Project node and the
+	//  indexes in the join condition would no longer match the correct columns. We also need to consider how to handle
+	//  updateJoins where a LeftOuterJoin is filtered by a null right side. JoinCond could also be nil.
+	//  https://github.com/dolthub/dolt/issues/10614
 	val, err := jn.JoinCond().Eval(ctx, joinRow)
 	if err != nil {
 		return true, err
@@ -353,7 +386,7 @@ func (u *updateJoinIter) getOrCreateCache(ctx *sql.Context, tableName string) sq
 		return potential
 	}
 
-	cache, disposal := ctx.Memory.NewHistoryCache()
+	cache, disposal := ctx.Memory.NewHistoryCache(ctx)
 	u.caches[tableName] = cache
 	u.disposals[tableName] = disposal
 
@@ -368,15 +401,14 @@ func recreateRowFromMap(rowMap map[string]sql.Row, joinSchema sql.Schema) sql.Ro
 		return ret
 	}
 
-	currentTable := joinSchema[0].Source
+	currentTable := strings.ToLower(joinSchema[0].Source)
 	ret = append(ret, rowMap[currentTable]...)
 
 	for i := 1; i < len(joinSchema); i++ {
-		c := joinSchema[i]
-
-		if c.Source != currentTable {
-			ret = append(ret, rowMap[c.Source]...)
-			currentTable = c.Source
+		newTable := strings.ToLower(joinSchema[i].Source)
+		if !strings.EqualFold(newTable, currentTable) {
+			ret = append(ret, rowMap[newTable]...)
+			currentTable = newTable
 		}
 	}
 

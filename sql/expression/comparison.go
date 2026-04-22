@@ -17,7 +17,7 @@ package expression
 import (
 	"fmt"
 
-	errors "gopkg.in/src-d/go-errors.v1"
+	"gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/types"
@@ -39,11 +39,11 @@ var ErrNilOperand = errors.NewKind("nil operand found in comparison")
 // PreciseComparison searches an expression tree for comparison
 // expressions that require a conversion or type promotion.
 // This utility helps determine if filter predicates can be pushed down.
-func PreciseComparison(e sql.Expression) bool {
+func PreciseComparison(ctx *sql.Context, e sql.Expression) bool {
 	var imprecise bool
-	sql.Inspect(e, func(expr sql.Expression) bool {
+	sql.Inspect(ctx, e, func(ctx *sql.Context, expr sql.Expression) bool {
 		if cmp, ok := expr.(Comparer); ok {
-			left, right := cmp.Left().Type(), cmp.Right().Type()
+			left, right := cmp.Left().Type(ctx), cmp.Right().Type(ctx)
 
 			// integer comparisons are exact
 			if types.IsInteger(left) && types.IsInteger(right) {
@@ -69,6 +69,8 @@ func PreciseComparison(e sql.Expression) bool {
 			}
 
 			// comparisons with type conversions are sometimes imprecise
+			// TODO: this sometimes leads to creating unnecessary filters
+			//  for example, when comparing int key to decimal key (that is too large for integer).
 			if !left.Equals(right) {
 				imprecise = true
 				return false
@@ -127,57 +129,89 @@ func (c *comparison) Compare(ctx *sql.Context, row sql.Row) (int, error) {
 		return 0, ErrNilOperand.New()
 	}
 
-	if types.TypesEqual(c.Left().Type(), c.Right().Type()) {
-		return c.Left().Type().Compare(left, right)
+	left, err = sql.UnwrapAny(ctx, left)
+	if err != nil {
+		return 0, err
 	}
 
-	// ENUM, SET, and TIME must be excluded when doing comparisons, as they're too restrictive to use as a comparison
-	// base.
-	//
-	// The best overall method would be to assign type priority. For example, INT would have a higher priority than
-	// TINYINT. This could then be combined with the origin of the value (table column, procedure param, etc.) to
-	// determine the best type for any comparison (tie-breakers can be simple rules such as the current left preference).
-	var compareType sql.Type
-	collationPreference := sql.Collation_Default
-	switch c.Left().(type) {
-	case *GetField, *UserVar, *SystemVar, *ProcedureParam:
-		compareType = c.Left().Type()
-		if twc, ok := compareType.(sql.TypeWithCollation); ok {
-			collationPreference = twc.Collation()
-		}
-	default:
-		switch c.Right().(type) {
-		case *GetField, *UserVar, *SystemVar, *ProcedureParam:
-			compareType = c.Right().Type()
-			if twc, ok := compareType.(sql.TypeWithCollation); ok {
-				collationPreference = twc.Collation()
-			}
-		}
+	right, err = sql.UnwrapAny(ctx, right)
+	if err != nil {
+		return 0, err
 	}
-	if compareType != nil {
-		_, isEnum := compareType.(sql.EnumType)
-		_, isSet := compareType.(sql.SetType)
-		_, isTime := compareType.(types.TimeType)
-		if !isEnum && !isSet && !isTime {
-			compareType = nil
-		}
+
+	lTyp, rTyp := c.Left().Type(ctx), c.Right().Type(ctx)
+	if types.TypesEqual(lTyp, rTyp) {
+		return lTyp.Compare(ctx, left, right)
 	}
-	if compareType == nil {
-		left, right, compareType, err = c.castLeftAndRight(left, right)
-		if err != nil {
-			return 0, err
-		}
+
+	l, r, compareType, err := c.castLeftAndRight(ctx, left, right)
+	if err != nil {
+		return 0, err
 	}
-	if types.IsTextOnly(compareType) {
-		collationPreference, _ = c.CollationCoercibility(ctx)
-		if err != nil {
-			return 0, err
-		}
-		stringCompareType := compareType.(sql.StringType)
+
+	// Set comparison relies on empty strings not being converted yet
+	if types.IsSet(compareType) {
+		return compareType.Compare(ctx, left, right)
+	}
+	collationPreference, _ := c.CollationCoercibility(ctx)
+	if stringCompareType, ok := compareType.(sql.StringType); ok && types.IsTextOnly(stringCompareType) {
 		compareType = types.MustCreateString(stringCompareType.Type(), stringCompareType.Length(), collationPreference)
 	}
+	return compareType.Compare(ctx, l, r)
+}
 
-	return compareType.Compare(left, right)
+// CompareValue the two given values using the types of the expressions in the comparison.
+func (c *comparison) CompareValue(ctx *sql.Context, row sql.ValueRow) (int, error) {
+	// TODO: avoid type assertions
+	lv, err := c.LeftChild.(sql.ValueExpression).EvalValue(ctx, row)
+	if err != nil {
+		return 0, err
+	}
+	rv, err := c.RightChild.(sql.ValueExpression).EvalValue(ctx, row)
+	if err != nil {
+		return 0, err
+	}
+
+	if lv.IsNull() || rv.IsNull() {
+		return 0, nil
+	}
+
+	lTyp, rTyp := c.LeftChild.Type(ctx).(sql.ValueType), c.RightChild.Type(ctx).(sql.ValueType)
+	if types.TypesEqual(lTyp, rTyp) {
+		return lTyp.(sql.ValueType).CompareValue(ctx, lv, rv)
+	}
+
+	if types.IsNumber(lTyp) || types.IsNumber(rTyp) {
+		if types.IsUnsigned(lTyp) && types.IsUnsigned(rTyp) {
+			return types.Uint64.(sql.ValueType).CompareValue(ctx, lv, rv)
+		}
+		if types.IsSigned(lTyp) && types.IsSigned(rTyp) {
+			return types.Int64.(sql.ValueType).CompareValue(ctx, lv, rv)
+		}
+		if types.IsDecimal(lTyp) || types.IsDecimal(rTyp) {
+			return types.InternalDecimalType.(sql.ValueType).CompareValue(ctx, lv, rv)
+		}
+		return types.Float64.(sql.ValueType).CompareValue(ctx, lv, rv)
+	}
+
+	return lTyp.CompareValue(ctx, lv, rv)
+}
+
+// IsValueExpression returns whether every child supports sql.ValueExpression
+func (c *comparison) IsValueExpression(ctx *sql.Context) bool {
+	l, ok := c.LeftChild.(sql.ValueExpression)
+	if !ok {
+		return false
+	}
+	r, ok := c.RightChild.(sql.ValueExpression)
+	if !ok {
+		return false
+	}
+	// TODO: only allow comparisons between Integers, Floats, Decimals, Bits and Year for now
+	if !types.IsNumber(c.LeftChild.Type(ctx)) || !types.IsNumber(c.RightChild.Type(ctx)) {
+		return false
+	}
+	return l.IsValueExpression(ctx) && r.IsValueExpression(ctx)
 }
 
 func (c *comparison) evalLeftAndRight(ctx *sql.Context, row sql.Row) (interface{}, interface{}, error) {
@@ -194,52 +228,109 @@ func (c *comparison) evalLeftAndRight(ctx *sql.Context, row sql.Row) (interface{
 	return left, right, nil
 }
 
-func (c *comparison) castLeftAndRight(left, right interface{}) (interface{}, interface{}, sql.Type, error) {
-	leftType := c.Left().Type()
-	rightType := c.Right().Type()
-	if types.IsTuple(leftType) && types.IsTuple(rightType) {
-		return left, right, c.Left().Type(), nil
+func (c *comparison) castLeftAndRight(ctx *sql.Context, left, right any) (any, any, sql.Type, error) {
+	lTyp := c.Left().Type(ctx)
+	rTyp := c.Right().Type(ctx)
+
+	leftIsEnumOrSet := types.IsEnum(lTyp) || types.IsSet(lTyp)
+	rightIsEnumOrSet := types.IsEnum(rTyp) || types.IsSet(rTyp)
+
+	// Only convert if same Enum or Set
+	if leftIsEnumOrSet && rightIsEnumOrSet && types.TypesEqual(lTyp, rTyp) {
+		return left, right, lTyp, nil
 	}
 
-	if types.IsTime(leftType) || types.IsTime(rightType) {
-		l, r, err := convertLeftAndRight(left, right, ConvertToDatetime)
+	// If right side is convertible to enum/set, convert. Otherwise, convert left side
+	if leftIsEnumOrSet && (types.IsText(rTyp) || types.IsNumber(rTyp)) {
+		if r, inRange, err := lTyp.Convert(ctx, right); inRange == sql.InRange && err == nil {
+			return left, r, lTyp, nil
+		}
+		l, _, err := types.TypeAwareConversion(ctx, left, lTyp, rTyp)
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		return l, right, rTyp, nil
+	}
+	// If left side is convertible to enum/set, convert. Otherwise, convert right side
+	if rightIsEnumOrSet && (types.IsText(lTyp) || types.IsNumber(lTyp)) {
+		if l, inRange, err := rTyp.Convert(ctx, left); inRange == sql.InRange && err == nil {
+			return l, right, rTyp, nil
+		}
+		r, _, err := types.TypeAwareConversion(ctx, right, rTyp, lTyp)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return left, r, lTyp, nil
+	}
 
+	if types.IsTimespan(lTyp) || types.IsTimespan(rTyp) {
+		if l, err := types.Time.ConvertToTimespan(left); err == nil {
+			if r, err := types.Time.ConvertToTimespan(right); err == nil {
+				return l, r, types.Time, nil
+			}
+		}
+	}
+
+	if types.IsTuple(lTyp) && types.IsTuple(rTyp) {
+		return left, right, lTyp, nil
+	}
+
+	if types.IsTime(lTyp) || types.IsTime(rTyp) {
+		l, err := convertValue(ctx, left, ConvertToDatetime, lTyp, types.MaxDatetimePrecision, 0)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		r, err := convertValue(ctx, right, ConvertToDatetime, rTyp, types.MaxDatetimePrecision, 0)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 		return l, r, types.DatetimeMaxPrecision, nil
 	}
 
 	// Rely on types.JSON.Compare to handle JSON comparisons
-	if types.IsJSON(leftType) || types.IsJSON(rightType) {
+	if types.IsJSON(lTyp) || types.IsJSON(rTyp) {
 		return left, right, types.JSON, nil
 	}
 
-	if types.IsBinaryType(leftType) || types.IsBinaryType(rightType) {
-		l, r, err := convertLeftAndRight(left, right, ConvertToBinary)
+	if types.IsBinaryType(lTyp) || types.IsBinaryType(rTyp) {
+		l, err := convertValue(ctx, left, ConvertToBinary, lTyp, 0, 0)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		r, err := convertValue(ctx, right, ConvertToBinary, rTyp, 0, 0)
 		if err != nil {
 			return nil, nil, nil, err
 		}
 		return l, r, types.LongBlob, nil
 	}
 
-	if types.IsNumber(leftType) || types.IsNumber(rightType) {
-		if types.IsDecimal(leftType) || types.IsDecimal(rightType) {
-			//TODO: We need to set to the actual DECIMAL type
-			l, r, err := convertLeftAndRight(left, right, ConvertToDecimal)
+	if types.IsNumber(lTyp) || types.IsNumber(rTyp) {
+		if types.IsDecimal(lTyp) || types.IsDecimal(rTyp) {
+			// TODO: We need to set to the actual DECIMAL type
+			l, err := convertValue(ctx, left, ConvertToDecimal, lTyp, 0, 0)
 			if err != nil {
 				return nil, nil, nil, err
 			}
-
-			if types.IsDecimal(leftType) {
-				return l, r, leftType, nil
+			r, err := convertValue(ctx, right, ConvertToDecimal, rTyp, 0, 0)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if types.IsDecimal(lTyp) {
+				return l, r, lTyp, nil
 			} else {
-				return l, r, rightType, nil
+				return l, r, rTyp, nil
 			}
 		}
 
-		if types.IsFloat(leftType) || types.IsFloat(rightType) {
-			l, r, err := convertLeftAndRight(left, right, ConvertToDouble)
+		if types.IsFloat(lTyp) || types.IsFloat(rTyp) {
+			l, err := convertValue(ctx, left, ConvertToDouble, lTyp, 0, 0)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			r, err := convertValue(ctx, right, ConvertToDouble, rTyp, 0, 0)
+			if err != nil {
+				return nil, nil, nil, err
+			}
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -247,56 +338,54 @@ func (c *comparison) castLeftAndRight(left, right interface{}) (interface{}, int
 			return l, r, types.Float64, nil
 		}
 
-		if types.IsSigned(leftType) && types.IsSigned(rightType) {
-			l, r, err := convertLeftAndRight(left, right, ConvertToSigned)
+		if types.IsSigned(lTyp) && types.IsSigned(rTyp) {
+			l, err := convertValue(ctx, left, ConvertToSigned, lTyp, 0, 0)
 			if err != nil {
 				return nil, nil, nil, err
 			}
-
+			r, err := convertValue(ctx, right, ConvertToSigned, rTyp, 0, 0)
+			if err != nil {
+				return nil, nil, nil, err
+			}
 			return l, r, types.Int64, nil
 		}
 
-		if types.IsUnsigned(leftType) && types.IsUnsigned(rightType) {
-			l, r, err := convertLeftAndRight(left, right, ConvertToUnsigned)
+		if types.IsUnsigned(lTyp) && types.IsUnsigned(rTyp) {
+			l, err := convertValue(ctx, left, ConvertToUnsigned, lTyp, 0, 0)
 			if err != nil {
 				return nil, nil, nil, err
 			}
-
+			r, err := convertValue(ctx, right, ConvertToUnsigned, rTyp, 0, 0)
+			if err != nil {
+				return nil, nil, nil, err
+			}
 			return l, r, types.Uint64, nil
 		}
 
-		l, r, err := convertLeftAndRight(left, right, ConvertToDouble)
+		l, err := convertValue(ctx, left, ConvertToDouble, lTyp, 0, 0)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-
+		r, err := convertValue(ctx, right, ConvertToDouble, rTyp, 0, 0)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 		return l, r, types.Float64, nil
 	}
 
-	left, right, err := convertLeftAndRight(left, right, ConvertToChar)
+	l, err := convertValue(ctx, left, ConvertToChar, lTyp, 0, 0)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-
-	return left, right, types.LongText, nil
-}
-
-func convertLeftAndRight(left, right interface{}, convertTo string) (interface{}, interface{}, error) {
-	l, err := convertValue(left, convertTo, nil, 0, 0)
+	r, err := convertValue(ctx, right, ConvertToChar, rTyp, 0, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-
-	r, err := convertValue(right, convertTo, nil, 0, 0)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return l, r, nil
+	return l, r, types.LongText, nil
 }
 
 // Type implements the Expression interface.
-func (*comparison) Type() sql.Type {
+func (*comparison) Type(ctx *sql.Context) sql.Type {
 	return types.Boolean
 }
 
@@ -306,6 +395,14 @@ func (c *comparison) Left() sql.Expression { return c.BinaryExpressionStub.LeftC
 // Right implements Comparer interface
 func (c *comparison) Right() sql.Expression { return c.BinaryExpressionStub.RightChild }
 
+// Equality is an expression that may represent equality between two parameters (the equals operator is one such example).
+type Equality interface {
+	BinaryExpression
+	RepresentsEquality() bool
+	SwapParameters(ctx *sql.Context) (Equality, error)
+	ToComparer(ctx *sql.Context) (Comparer, error)
+}
+
 // Equals is a comparison that checks an expression is equal to another.
 type Equals struct {
 	comparison
@@ -313,6 +410,7 @@ type Equals struct {
 
 var _ sql.Expression = (*Equals)(nil)
 var _ sql.CollationCoercible = (*Equals)(nil)
+var _ Equality = (*Equals)(nil)
 
 // NewEquals returns a new Equals expression.
 func NewEquals(left sql.Expression, right sql.Expression) *Equals {
@@ -339,7 +437,7 @@ func (e *Equals) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 }
 
 // WithChildren implements the Expression interface.
-func (e *Equals) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (e *Equals) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(e, len(children), 2)
 	}
@@ -353,15 +451,30 @@ func (e *Equals) String() string {
 	return fmt.Sprintf("(%s = %s)", e.Left(), e.Right())
 }
 
-func (e *Equals) DebugString() string {
+func (e *Equals) DebugString(ctx *sql.Context) string {
 	if e == nil {
 		return ""
 	}
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("Eq")
-	children := []string{sql.DebugString(e.Left()), sql.DebugString(e.Right())}
+	children := []string{sql.DebugString(ctx, e.Left()), sql.DebugString(ctx, e.Right())}
 	_ = pr.WriteChildren(children...)
 	return pr.String()
+}
+
+// RepresentsEquality implements the Equality interface.
+func (e *Equals) RepresentsEquality() bool {
+	return true
+}
+
+// SwapParameters implements the Equality interface.
+func (e *Equals) SwapParameters(ctx *sql.Context) (Equality, error) {
+	return NewEquals(e.RightChild, e.LeftChild), nil
+}
+
+// ToComparer implements the Equality interface.
+func (e *Equals) ToComparer(ctx *sql.Context) (Comparer, error) {
+	return e, nil
 }
 
 // NullSafeEquals is a comparison that checks an expression is equal to
@@ -380,7 +493,7 @@ func NewNullSafeEquals(left sql.Expression, right sql.Expression) *NullSafeEqual
 }
 
 // Type implements the Expression interface.
-func (e *NullSafeEquals) Type() sql.Type {
+func (e *NullSafeEquals) Type(ctx *sql.Context) sql.Type {
 	return types.Boolean
 }
 
@@ -403,17 +516,18 @@ func (e *NullSafeEquals) Compare(ctx *sql.Context, row sql.Row) (int, error) {
 		return -1, nil
 	}
 
-	if types.TypesEqual(e.Left().Type(), e.Right().Type()) {
-		return e.Left().Type().Compare(left, right)
+	lTyp, rTyp := e.Left().Type(ctx), e.Right().Type(ctx)
+	if types.TypesEqual(lTyp, rTyp) {
+		return lTyp.Compare(ctx, left, right)
 	}
 
 	var compareType sql.Type
-	left, right, compareType, err = e.castLeftAndRight(left, right)
+	left, right, compareType, err = e.castLeftAndRight(ctx, left, right)
 	if err != nil {
 		return 0, err
 	}
 
-	return compareType.Compare(left, right)
+	return compareType.Compare(ctx, left, right)
 }
 
 // Eval implements the Expression interface.
@@ -426,8 +540,13 @@ func (e *NullSafeEquals) Eval(ctx *sql.Context, row sql.Row) (interface{}, error
 	return result == 0, nil
 }
 
+// IsNullable implements sql.Expression
+func (e *NullSafeEquals) IsNullable(ctx *sql.Context) bool {
+	return false
+}
+
 // WithChildren implements the Expression interface.
-func (e *NullSafeEquals) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (e *NullSafeEquals) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(e, len(children), 2)
 	}
@@ -438,8 +557,8 @@ func (e *NullSafeEquals) String() string {
 	return fmt.Sprintf("(%s <=> %s)", e.Left(), e.Right())
 }
 
-func (e *NullSafeEquals) DebugString() string {
-	return fmt.Sprintf("(%s <=> %s)", sql.DebugString(e.Left()), sql.DebugString(e.Right()))
+func (e *NullSafeEquals) DebugString(ctx *sql.Context) string {
+	return fmt.Sprintf("(%s <=> %s)", sql.DebugString(ctx, e.Left()), sql.DebugString(ctx, e.Right()))
 }
 
 // GreaterThan is a comparison that checks an expression is greater than another.
@@ -448,6 +567,7 @@ type GreaterThan struct {
 }
 
 var _ sql.Expression = (*GreaterThan)(nil)
+var _ sql.ValueExpression = (*GreaterThan)(nil)
 var _ sql.CollationCoercible = (*GreaterThan)(nil)
 
 // NewGreaterThan creates a new GreaterThan expression.
@@ -475,7 +595,7 @@ func (gt *GreaterThan) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) 
 }
 
 // WithChildren implements the Expression interface.
-func (gt *GreaterThan) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (gt *GreaterThan) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(gt, len(children), 2)
 	}
@@ -486,12 +606,29 @@ func (gt *GreaterThan) String() string {
 	return fmt.Sprintf("(%s > %s)", gt.Left(), gt.Right())
 }
 
-func (gt *GreaterThan) DebugString() string {
+func (gt *GreaterThan) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("GreaterThan")
-	children := []string{sql.DebugString(gt.Left()), sql.DebugString(gt.Right())}
+	children := []string{sql.DebugString(ctx, gt.Left()), sql.DebugString(ctx, gt.Right())}
 	_ = pr.WriteChildren(children...)
 	return pr.String()
+}
+
+// EvalValue implements the sql.ValueExpression interface.
+func (gt *GreaterThan) EvalValue(ctx *sql.Context, row sql.ValueRow) (sql.Value, error) {
+	cmp, err := gt.CompareValue(ctx, row)
+	if err != nil {
+		return sql.NullValue, err
+	}
+	if cmp != 1 {
+		return sql.FalseValue, nil
+	}
+	return sql.TrueValue, nil
+}
+
+// IsValueExpression implements the ValueExpression interface.
+func (gt *GreaterThan) IsValueExpression(ctx *sql.Context) bool {
+	return gt.comparison.IsValueExpression(ctx)
 }
 
 // LessThan is a comparison that checks an expression is less than another.
@@ -519,15 +656,13 @@ func (lt *LessThan) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		if ErrNilOperand.Is(err) {
 			return nil, nil
 		}
-
 		return nil, err
 	}
-
 	return result == -1, nil
 }
 
 // WithChildren implements the Expression interface.
-func (lt *LessThan) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (lt *LessThan) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(lt, len(children), 2)
 	}
@@ -538,12 +673,29 @@ func (lt *LessThan) String() string {
 	return fmt.Sprintf("(%s < %s)", lt.Left(), lt.Right())
 }
 
-func (lt *LessThan) DebugString() string {
+func (lt *LessThan) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("LessThan")
-	children := []string{sql.DebugString(lt.Left()), sql.DebugString(lt.Right())}
+	children := []string{sql.DebugString(ctx, lt.Left()), sql.DebugString(ctx, lt.Right())}
 	_ = pr.WriteChildren(children...)
 	return pr.String()
+}
+
+// EvalValue implements the sql.ValueExpression interface.
+func (lt *LessThan) EvalValue(ctx *sql.Context, row sql.ValueRow) (sql.Value, error) {
+	cmp, err := lt.CompareValue(ctx, row)
+	if err != nil {
+		return sql.NullValue, err
+	}
+	if cmp != -1 {
+		return sql.FalseValue, nil
+	}
+	return sql.TrueValue, nil
+}
+
+// IsValueExpression implements the ValueExpression interface.
+func (lt *LessThan) IsValueExpression(ctx *sql.Context) bool {
+	return lt.comparison.IsValueExpression(ctx)
 }
 
 // GreaterThanOrEqual is a comparison that checks an expression is greater or equal to
@@ -572,15 +724,13 @@ func (gte *GreaterThanOrEqual) Eval(ctx *sql.Context, row sql.Row) (interface{},
 		if ErrNilOperand.Is(err) {
 			return nil, nil
 		}
-
 		return nil, err
 	}
-
 	return result > -1, nil
 }
 
 // WithChildren implements the Expression interface.
-func (gte *GreaterThanOrEqual) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (gte *GreaterThanOrEqual) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(gte, len(children), 2)
 	}
@@ -591,12 +741,29 @@ func (gte *GreaterThanOrEqual) String() string {
 	return fmt.Sprintf("(%s >= %s)", gte.Left(), gte.Right())
 }
 
-func (gte *GreaterThanOrEqual) DebugString() string {
+func (gte *GreaterThanOrEqual) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("GreaterThanOrEqual")
-	children := []string{sql.DebugString(gte.Left()), sql.DebugString(gte.Right())}
+	children := []string{sql.DebugString(ctx, gte.Left()), sql.DebugString(ctx, gte.Right())}
 	_ = pr.WriteChildren(children...)
 	return pr.String()
+}
+
+// EvalValue implements the sql.ValueExpression interface.
+func (gte *GreaterThanOrEqual) EvalValue(ctx *sql.Context, row sql.ValueRow) (sql.Value, error) {
+	cmp, err := gte.CompareValue(ctx, row)
+	if err != nil {
+		return sql.NullValue, err
+	}
+	if cmp == -1 {
+		return sql.FalseValue, nil
+	}
+	return sql.TrueValue, nil
+}
+
+// IsValueExpression implements the ValueExpression interface.
+func (gte *GreaterThanOrEqual) IsValueExpression(ctx *sql.Context) bool {
+	return gte.comparison.IsValueExpression(ctx)
 }
 
 // LessThanOrEqual is a comparison that checks an expression is equal or lower than
@@ -633,7 +800,7 @@ func (lte *LessThanOrEqual) Eval(ctx *sql.Context, row sql.Row) (interface{}, er
 }
 
 // WithChildren implements the Expression interface.
-func (lte *LessThanOrEqual) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (lte *LessThanOrEqual) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(lte, len(children), 2)
 	}
@@ -644,12 +811,29 @@ func (lte *LessThanOrEqual) String() string {
 	return fmt.Sprintf("(%s <= %s)", lte.Left(), lte.Right())
 }
 
-func (lte *LessThanOrEqual) DebugString() string {
+func (lte *LessThanOrEqual) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("LessThanOrEqual")
-	children := []string{sql.DebugString(lte.Left()), sql.DebugString(lte.Right())}
+	children := []string{sql.DebugString(ctx, lte.Left()), sql.DebugString(ctx, lte.Right())}
 	_ = pr.WriteChildren(children...)
 	return pr.String()
+}
+
+// EvalValue implements the sql.ValueExpression interface.
+func (lte *LessThanOrEqual) EvalValue(ctx *sql.Context, row sql.ValueRow) (sql.Value, error) {
+	cmp, err := lte.CompareValue(ctx, row)
+	if err != nil {
+		return sql.NullValue, err
+	}
+	if cmp == 1 {
+		return sql.FalseValue, nil
+	}
+	return sql.TrueValue, nil
+}
+
+// IsValueExpression implements the ValueExpression interface.
+func (lte *LessThanOrEqual) IsValueExpression(ctx *sql.Context) bool {
+	return lte.comparison.IsValueExpression(ctx)
 }
 
 var (

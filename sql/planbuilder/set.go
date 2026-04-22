@@ -151,7 +151,28 @@ func (b *Builder) setExprsToExpressions(inScope *scope, e ast.SetVarExprs) []sql
 			}
 		}
 
-		sysVarType, _ := setVar.Type().(sql.SystemVariableType)
+		if sysVar, ok := setVar.(*expression.SystemVar); ok {
+			if sqlVal, ok := setExpr.Expr.(*ast.SQLVal); ok && sqlVal.Type == ast.IntVal {
+				switch strings.ToLower(sysVar.Name) {
+				case "sql_mode":
+					converted, err := sql.ConvertSqlModeBitmask(sqlVal.Val)
+					if err != nil {
+						b.handleErr(err)
+					}
+					setExpr.Expr = ast.NewStrVal([]byte(converted))
+				case "collation_database", "collation_connection", "collation_server":
+					converted, err := sql.ConvertCollationID(sqlVal.Val)
+					if err != nil {
+						b.handleErr(err)
+					}
+					setExpr.Expr = ast.NewStrVal([]byte(converted))
+				case "lc_time_names":
+					setExpr.Expr = ast.NewStrVal(sqlVal.Val)
+				}
+			}
+		}
+
+		sysVarType, _ := setVar.Type(b.ctx).(sql.SystemVariableType)
 		innerExpr, ok := b.simplifySetExpr(setExpr.Name, setScope, setExpr.Expr, sysVarType)
 		if !ok {
 			innerExpr = b.buildScalar(inScope, setExpr.Expr)
@@ -263,7 +284,7 @@ func (b *Builder) simplifySetExpr(name *ast.ColName, varScope ast.SetScope, val 
 			}
 		}
 
-		enum, _, err := sysVarType.Convert(setVal)
+		enum, _, err := sysVarType.Convert(b.ctx, setVal)
 		if err != nil {
 			b.handleErr(err)
 		}
@@ -301,7 +322,7 @@ func (b *Builder) simplifySetExpr(name *ast.ColName, varScope ast.SetScope, val 
 			return nil, false
 		}
 
-		enum, _, err := sysVarType.Convert(setVal)
+		enum, _, err := sysVarType.Convert(b.ctx, setVal)
 		if err != nil {
 			b.handleErr(err)
 		}
@@ -341,8 +362,9 @@ func (b *Builder) simplifySetExpr(name *ast.ColName, varScope ast.SetScope, val 
 
 		switch varScope {
 		case ast.SetScope_None, ast.SetScope_Session, ast.SetScope_Global:
-			_, value, ok := sql.SystemVariables.GetGlobal(varName)
-			if ok {
+			// cannot use sql.SystemVariables.GetGlobal as the default value can be defined at session start runtime.
+			value, err := b.ctx.GetSessionVariableDefault(b.ctx, varName)
+			if err == nil {
 				return expression.NewLiteral(value, types.ApproximateTypeFromValue(value)), true
 			}
 			err = sql.ErrUnknownSystemVariable.New(varName)

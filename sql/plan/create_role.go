@@ -25,9 +25,9 @@ import (
 
 // CreateRole represents the statement CREATE ROLE.
 type CreateRole struct {
-	IfNotExists bool
-	Roles       []UserName
 	MySQLDb     sql.Database
+	Roles       []UserName
+	IfNotExists bool
 }
 
 // NewCreateRole returns a new CreateRole node.
@@ -43,7 +43,7 @@ var _ sql.Node = (*CreateRole)(nil)
 var _ sql.CollationCoercible = (*CreateRole)(nil)
 
 // Schema implements the interface sql.Node.
-func (n *CreateRole) Schema() sql.Schema {
+func (n *CreateRole) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -88,19 +88,11 @@ func (n *CreateRole) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (n *CreateRole) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (n *CreateRole) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(n, len(children), 0)
 	}
 	return n, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (n *CreateRole) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	// Both CREATE ROLE and CREATE USER are valid privileges, so we use an OR
-	subject := sql.PrivilegeCheckSubject{}
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_CreateRole)) ||
-		opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_CreateUser))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

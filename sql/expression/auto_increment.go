@@ -31,7 +31,7 @@ var (
 
 // AutoIncrement implements AUTO_INCREMENT
 type AutoIncrement struct {
-	UnaryExpression
+	UnaryExpressionStub
 	autoTbl sql.AutoIncrementTable
 	autoCol *sql.Column
 }
@@ -47,7 +47,7 @@ func NewAutoIncrement(ctx *sql.Context, table sql.Table, given sql.Expression) (
 	}
 
 	var autoCol *sql.Column
-	for _, c := range autoTbl.Schema() {
+	for _, c := range autoTbl.Schema(ctx) {
 		if c.AutoIncrement {
 			autoCol = c
 			break
@@ -58,7 +58,7 @@ func NewAutoIncrement(ctx *sql.Context, table sql.Table, given sql.Expression) (
 	}
 
 	return &AutoIncrement{
-		UnaryExpression{Child: given},
+		UnaryExpressionStub{Child: given},
 		autoTbl,
 		autoCol,
 	}, nil
@@ -72,19 +72,19 @@ func NewAutoIncrementForColumn(ctx *sql.Context, table sql.Table, autoCol *sql.C
 	}
 
 	return &AutoIncrement{
-		UnaryExpression{Child: given},
+		UnaryExpressionStub{Child: given},
 		autoTbl,
 		autoCol,
 	}, nil
 }
 
 // IsNullable implements the Expression interface.
-func (i *AutoIncrement) IsNullable() bool {
+func (i *AutoIncrement) IsNullable(ctx *sql.Context) bool {
 	return false
 }
 
 // Type implements the Expression interface.
-func (i *AutoIncrement) Type() sql.Type {
+func (i *AutoIncrement) Type(ctx *sql.Context) sql.Type {
 	return i.autoCol.Type
 }
 
@@ -102,14 +102,14 @@ func (i *AutoIncrement) Eval(ctx *sql.Context, row sql.Row) (interface{}, error)
 	}
 
 	// When a row passes in 0 as the auto_increment value it is equivalent to NULL.
-	cmp, err := i.Type().Compare(given, i.Type().Zero())
+	cmp, err := i.Type(ctx).Compare(ctx, given, i.Type(ctx).Zero())
 	if err != nil {
 		return nil, err
 	}
 
 	// if given is negative, don't do any auto_increment logic
 	if cmp < 0 {
-		ret, _, err := i.Type().Convert(given)
+		ret, _, err := i.Type(ctx).Convert(ctx, given)
 		if err != nil {
 			return nil, err
 		}
@@ -118,7 +118,7 @@ func (i *AutoIncrement) Eval(ctx *sql.Context, row sql.Row) (interface{}, error)
 
 	if cmp == 0 {
 		if sql.LoadSqlMode(ctx).ModeEnabled(sql.NoAutoValueOnZero) {
-			ret, _, err := i.Type().Convert(given)
+			ret, _, err := i.Type(ctx).Convert(ctx, given)
 			if err != nil {
 				return nil, err
 			}
@@ -139,7 +139,10 @@ func (i *AutoIncrement) Eval(ctx *sql.Context, row sql.Row) (interface{}, error)
 		given = seq
 	}
 
-	ret, _, err := i.Type().Convert(given)
+	ret, inRange, err := i.Type(ctx).Convert(ctx, given)
+	if err == nil && inRange != sql.InRange {
+		err = sql.ErrValueOutOfRange.New(given, i.Type(ctx))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -151,12 +154,12 @@ func (i *AutoIncrement) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (i *AutoIncrement) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (i *AutoIncrement) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(i, len(children), 1)
 	}
 	return &AutoIncrement{
-		UnaryExpression{Child: children[0]},
+		UnaryExpressionStub{Child: children[0]},
 		i.autoTbl,
 		i.autoCol,
 	}, nil

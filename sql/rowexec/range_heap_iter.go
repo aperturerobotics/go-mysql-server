@@ -13,6 +13,33 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/plan"
 )
 
+// joinIter is an iterator that iterates over every row in the primary table and performs an index lookup in
+// the secondary table for each value
+type rangeHeapJoinIter struct {
+	b   sql.NodeExecBuilder
+	err error
+
+	cond         sql.Expression
+	primary      sql.RowIter
+	secondary    sql.RowIter
+	childRowIter sql.RowIter
+
+	ctx           *sql.Context
+	rangeHeapPlan *plan.RangeHeap
+
+	activeRanges []sql.Row
+	pendingRow   sql.Row
+	primaryRow   sql.Row
+
+	scopeLen  int
+	parentLen int
+	rowSize   int
+
+	foundMatch     bool
+	loadPrimaryRow bool
+	joinType       plan.JoinType
+}
+
 func newRangeHeapJoinIter(ctx *sql.Context, b sql.NodeExecBuilder, j *plan.JoinNode, row sql.Row) (sql.RowIter, error) {
 	var leftName, rightName string
 	if leftTable, ok := j.Left().(sql.Nameable); ok {
@@ -43,50 +70,39 @@ func newRangeHeapJoinIter(ctx *sql.Context, b sql.NodeExecBuilder, j *plan.JoinN
 		return nil, errors.New("right side of join must be a range heap")
 	}
 
+	parentLen := len(row)
+
+	primaryRow := make(sql.Row, parentLen+len(j.Left().Schema(ctx)))
+	copy(primaryRow, row)
+
 	return sql.NewSpanIter(span, &rangeHeapJoinIter{
-		parentRow:     row,
-		primary:       l,
-		cond:          j.Filter,
-		joinType:      j.Op,
-		rowSize:       len(row) + len(j.Left().Schema()) + len(j.Right().Schema()),
-		scopeLen:      j.ScopeLen,
-		b:             b,
+		ctx:      ctx,
+		b:        b,
+		joinType: j.Op,
+		cond:     j.Filter,
+
+		primary:        l,
+		primaryRow:     primaryRow,
+		loadPrimaryRow: true,
+
+		rowSize:   len(row) + len(j.Left().Schema(ctx)) + len(j.Right().Schema(ctx)),
+		scopeLen:  j.ScopeLen,
+		parentLen: parentLen,
+
 		rangeHeapPlan: rhp,
 	}), nil
 }
 
-// joinIter is an iterator that iterates over every row in the primary table and performs an index lookup in
-// the secondary table for each value
-type rangeHeapJoinIter struct {
-	parentRow  sql.Row
-	primary    sql.RowIter
-	primaryRow sql.Row
-	secondary  sql.RowIter
-	cond       sql.Expression
-	joinType   plan.JoinType
-
-	foundMatch bool
-	rowSize    int
-	scopeLen   int
-	b          sql.NodeExecBuilder
-
-	rangeHeapPlan *plan.RangeHeap
-	childRowIter  sql.RowIter
-	pendingRow    sql.Row
-
-	activeRanges []sql.Row
-	err          error
-}
-
 func (iter *rangeHeapJoinIter) loadPrimary(ctx *sql.Context) error {
-	if iter.primaryRow == nil {
+	if iter.loadPrimaryRow {
 		r, err := iter.primary.Next(ctx)
 		if err != nil {
 			return err
 		}
 
-		iter.primaryRow = iter.parentRow.Append(r)
+		copy(iter.primaryRow[iter.parentLen:], r)
 		iter.foundMatch = false
+		iter.loadPrimaryRow = false
 
 		err = iter.initializeHeap(ctx, iter.b, iter.primaryRow)
 		if err != nil {
@@ -100,7 +116,6 @@ func (iter *rangeHeapJoinIter) loadPrimary(ctx *sql.Context) error {
 func (iter *rangeHeapJoinIter) loadSecondary(ctx *sql.Context) (sql.Row, error) {
 	if iter.secondary == nil {
 		rowIter, err := iter.getActiveRanges(ctx, iter.b, iter.primaryRow)
-
 		if err != nil {
 			return nil, err
 		}
@@ -118,7 +133,7 @@ func (iter *rangeHeapJoinIter) loadSecondary(ctx *sql.Context) (sql.Row, error) 
 			if err != nil {
 				return nil, err
 			}
-			iter.primaryRow = nil
+			iter.loadPrimaryRow = true
 			return nil, io.EOF
 		}
 		return nil, err
@@ -138,14 +153,14 @@ func (iter *rangeHeapJoinIter) Next(ctx *sql.Context) (sql.Row, error) {
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if !iter.foundMatch && iter.joinType.IsLeftOuter() {
-					iter.primaryRow = nil
+					iter.loadPrimaryRow = true
 					row := iter.buildRow(primary, nil)
 					return iter.removeParentRow(row), nil
 				}
 				continue
 			} else if errors.Is(err, plan.ErrEmptyCachedResult) {
 				if !iter.foundMatch && iter.joinType.IsLeftOuter() {
-					iter.primaryRow = nil
+					iter.loadPrimaryRow = true
 					row := iter.buildRow(primary, nil)
 					return iter.removeParentRow(row), nil
 				}
@@ -168,7 +183,7 @@ func (iter *rangeHeapJoinIter) Next(ctx *sql.Context) (sql.Row, error) {
 			if err != nil {
 				return nil, err
 			}
-			iter.primaryRow = nil
+			iter.loadPrimaryRow = true
 			continue
 		}
 
@@ -182,18 +197,16 @@ func (iter *rangeHeapJoinIter) Next(ctx *sql.Context) (sql.Row, error) {
 }
 
 func (iter *rangeHeapJoinIter) removeParentRow(r sql.Row) sql.Row {
-	copy(r[iter.scopeLen:], r[len(iter.parentRow):])
-	r = r[:len(r)-len(iter.parentRow)+iter.scopeLen]
+	copy(r[iter.scopeLen:], r[iter.parentLen:])
+	r = r[:len(r)-iter.parentLen+iter.scopeLen]
 	return r
 }
 
 // buildRow builds the result set row using the rows from the primary and secondary tables
 func (iter *rangeHeapJoinIter) buildRow(primary, secondary sql.Row) sql.Row {
 	row := make(sql.Row, iter.rowSize)
-
 	copy(row, primary)
 	copy(row[len(primary):], secondary)
-
 	return row
 }
 
@@ -221,7 +234,7 @@ func (iter *rangeHeapJoinIter) initializeHeap(ctx *sql.Context, builder sql.Node
 		return err
 	}
 	iter.activeRanges = nil
-	iter.rangeHeapPlan.ComparisonType = iter.rangeHeapPlan.Schema()[iter.rangeHeapPlan.MaxColumnIndex].Type
+	iter.rangeHeapPlan.ComparisonType = iter.rangeHeapPlan.Schema(ctx)[iter.rangeHeapPlan.MaxColumnIndex].Type
 
 	iter.pendingRow, err = iter.childRowIter.Next(ctx)
 	if err == io.EOF {
@@ -235,7 +248,7 @@ func (iter *rangeHeapJoinIter) getActiveRanges(ctx *sql.Context, _ sql.NodeExecB
 	// Remove rows from the heap if we've advanced beyond their max value.
 	for iter.Len() > 0 {
 		maxValue := iter.Peek()
-		compareResult, err := compareNullsFirst(iter.rangeHeapPlan.ComparisonType, row[iter.rangeHeapPlan.ValueColumnIndex], maxValue)
+		compareResult, err := compareNullsFirst(ctx, iter.rangeHeapPlan.ComparisonType, row[iter.rangeHeapPlan.ValueColumnIndex], maxValue)
 		if err != nil {
 			return nil, err
 		}
@@ -254,7 +267,7 @@ func (iter *rangeHeapJoinIter) getActiveRanges(ctx *sql.Context, _ sql.NodeExecB
 	// Advance the child iterator until we encounter a row whose min value is beyond the range.
 	for iter.pendingRow != nil {
 		minValue := iter.pendingRow[iter.rangeHeapPlan.MinColumnIndex]
-		compareResult, err := compareNullsFirst(iter.rangeHeapPlan.ComparisonType, row[iter.rangeHeapPlan.ValueColumnIndex], minValue)
+		compareResult, err := compareNullsFirst(ctx, iter.rangeHeapPlan.ComparisonType, row[iter.rangeHeapPlan.ValueColumnIndex], minValue)
 		if err != nil {
 			return nil, err
 		}
@@ -289,7 +302,7 @@ func (iter *rangeHeapJoinIter) getActiveRanges(ctx *sql.Context, _ sql.NodeExecB
 // This is consistent with the order received if either child node is an index.
 // Note: We could get the same behavior by simply excluding values and ranges containing NULL,
 // but this is forward compatible if we ever want to convert joins with null-safe conditions into RangeHeapJoins.
-func compareNullsFirst(comparisonType sql.Type, a, b interface{}) (int, error) {
+func compareNullsFirst(ctx *sql.Context, comparisonType sql.Type, a, b interface{}) (int, error) {
 	if a == nil {
 		if b == nil {
 			return 0, nil
@@ -300,16 +313,16 @@ func compareNullsFirst(comparisonType sql.Type, a, b interface{}) (int, error) {
 	if b == nil {
 		return 1, nil
 	}
-	return comparisonType.Compare(a, b)
+	return comparisonType.Compare(ctx, a, b)
 }
 
-func (iter rangeHeapJoinIter) Len() int { return len(iter.activeRanges) }
+func (iter *rangeHeapJoinIter) Len() int { return len(iter.activeRanges) }
 
 func (iter *rangeHeapJoinIter) Less(i, j int) bool {
 	lhs := iter.activeRanges[i][iter.rangeHeapPlan.MaxColumnIndex]
 	rhs := iter.activeRanges[j][iter.rangeHeapPlan.MaxColumnIndex]
 	// compareResult will be 0 if lhs==rhs, -1 if lhs < rhs, and +1 if lhs > rhs.
-	compareResult, err := compareNullsFirst(iter.rangeHeapPlan.ComparisonType, lhs, rhs)
+	compareResult, err := compareNullsFirst(iter.ctx, iter.rangeHeapPlan.ComparisonType, lhs, rhs)
 	if iter.err == nil && err != nil {
 		iter.err = err
 	}

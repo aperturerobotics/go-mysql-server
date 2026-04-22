@@ -33,7 +33,9 @@ func processTruncate(ctx *sql.Context, a *Analyzer, node sql.Node, scope *plan.S
 
 	switch n := node.(type) {
 	case *plan.DeleteFrom:
-		if !n.Resolved() {
+		// If there are any returning expressions, then we can't convert to a Truncate operation,
+		// since we need to process all rows and return results.
+		if !n.Resolved() || len(n.Returning) > 0 {
 			return n, transform.SameTree, nil
 		}
 		return deleteToTruncate(ctx, a, n)
@@ -72,7 +74,7 @@ func deleteToTruncate(ctx *sql.Context, a *Analyzer, deletePlan *plan.DeleteFrom
 	tblName := strings.ToLower(tbl.Name())
 
 	// auto_increment behaves differently for TRUNCATE and DELETE
-	for _, col := range tbl.Schema() {
+	for _, col := range tbl.Schema(ctx) {
 		if col.AutoIncrement {
 			return deletePlan, transform.SameTree, nil
 		}
@@ -100,7 +102,7 @@ func deleteToTruncate(ctx *sql.Context, a *Analyzer, deletePlan *plan.DeleteFrom
 		return deletePlan, transform.SameTree, nil
 	}
 
-	triggers, err := loadTriggersFromDb(ctx, a, currentDb)
+	triggers, err := loadTriggersFromDb(ctx, a, currentDb, false)
 	if err != nil {
 		return nil, transform.SameTree, err
 	}

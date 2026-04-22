@@ -16,7 +16,6 @@ package rowexec
 
 import (
 	"testing"
-	"time"
 
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/stretchr/testify/require"
@@ -55,7 +54,7 @@ func TestUpdateIgnoreConversions(t *testing.T) {
 			colType:   types.Datetime,
 			value:     "dadasd",
 			valueType: types.Text,
-			expected:  time.Unix(-62167219200, 0).UTC(),
+			expected:  types.ZeroTime,
 		},
 		{
 			name:      "inserting a negative into an unsigned int results in 0",
@@ -75,14 +74,15 @@ func TestUpdateIgnoreConversions(t *testing.T) {
 			sch := sql.NewPrimaryKeySchema(sql.Schema{
 				{Name: "c1", Source: "foo", Type: tc.colType, Nullable: true},
 			})
-			table := memory.NewTable(db, "foo", sch, nil)
+			table := memory.NewTable(ctx, db, "foo", sch, nil)
 
 			err := table.Insert(ctx, sql.Row{nil})
 			require.NoError(t, err)
 
 			// Run the UPDATE IGNORE
 			sf := expression.NewSetField(expression.NewGetField(0, tc.colType, "c1", true), expression.NewLiteral(tc.value, tc.valueType))
-			updatePlan := plan.NewUpdate(plan.NewResolvedTable(table, nil, nil), true, []sql.Expression{sf})
+			updateExpressions := plan.NewUpdateExprs([]sql.Expression{sf}, 1)
+			updatePlan := plan.NewUpdate(plan.NewResolvedTable(table, nil, nil), true, updateExpressions)
 
 			ri, err := DefaultBuilder.Build(ctx, updatePlan, nil)
 			require.NoError(t, err)

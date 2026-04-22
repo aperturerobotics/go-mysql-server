@@ -17,35 +17,45 @@ package plan
 import (
 	"fmt"
 
-	"github.com/dolthub/go-mysql-server/sql/types"
-
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
+	"github.com/dolthub/go-mysql-server/sql/procedures"
+	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
 type Call struct {
-	db        sql.Database
-	Name      string
-	Params    []sql.Expression
-	asOf      sql.Expression
+	db     sql.Database
+	asOf   sql.Expression
+	cat    sql.Catalog
+	Runner sql.StatementRunner
+
 	Procedure *Procedure
 	Pref      *expression.ProcedureReference
-	cat       sql.Catalog
+
+	Name   string
+	Params []sql.Expression
+	Ops    []procedures.InterpreterOperation
+	resSch sql.Schema
+
+	Analyzed bool
 }
 
 var _ sql.Node = (*Call)(nil)
 var _ sql.CollationCoercible = (*Call)(nil)
 var _ sql.Expressioner = (*Call)(nil)
+var _ procedures.InterpreterNode = (*Call)(nil)
 var _ Versionable = (*Call)(nil)
 
 // NewCall returns a *Call node.
-func NewCall(db sql.Database, name string, params []sql.Expression, asOf sql.Expression, catalog sql.Catalog) *Call {
+func NewCall(db sql.Database, name string, params []sql.Expression, proc *Procedure, asOf sql.Expression, catalog sql.Catalog, ops []procedures.InterpreterOperation) *Call {
 	return &Call{
-		db:     db,
-		Name:   name,
-		Params: params,
-		asOf:   asOf,
-		cat:    catalog,
+		db:        db,
+		Name:      name,
+		Params:    params,
+		Procedure: proc,
+		asOf:      asOf,
+		cat:       catalog,
+		Ops:       ops,
 	}
 }
 
@@ -73,9 +83,12 @@ func (c *Call) IsReadOnly() bool {
 }
 
 // Schema implements the sql.Node interface.
-func (c *Call) Schema() sql.Schema {
+func (c *Call) Schema(ctx *sql.Context) sql.Schema {
+	if c.resSch != nil {
+		return c.resSch
+	}
 	if c.Procedure != nil {
-		return c.Procedure.Schema()
+		return c.Procedure.Schema(ctx)
 	}
 	return types.OkResultSchema
 }
@@ -86,36 +99,8 @@ func (c *Call) Children() []sql.Node {
 }
 
 // WithChildren implements the sql.Node interface.
-func (c *Call) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (c *Call) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(c, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (c *Call) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	// Procedure permissions checking is performed in the same way MySQL does it, with an exception where
-	// procedures which are marked as AdminOnly. These procedures are only accessible to users with explicit Execute
-	// permissions on the procedure in question.
-
-	adminOnly := false
-	if c.cat != nil {
-		paramCount := len(c.Params)
-		proc, err := c.cat.ExternalStoredProcedure(ctx, c.Name, paramCount)
-		// Not finding the procedure isn't great - but that's going to surface with a better error later in the
-		// query execution. For the permission check, we'll proceed as though the procedure exists, and is not AdminOnly.
-		if proc != nil && err == nil && proc.AdminOnly {
-			adminOnly = true
-		}
-	}
-
-	if !adminOnly {
-		subject := sql.PrivilegeCheckSubject{Database: c.Database().Name()}
-		if opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Execute)) {
-			return true
-		}
-	}
-
-	subject := sql.PrivilegeCheckSubject{Database: c.Database().Name(), Routine: c.Name, IsProcedure: true}
-	return opChecker.RoutineAdminCheck(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Execute))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -134,7 +119,7 @@ func (c *Call) AsOf() sql.Expression {
 }
 
 // WithExpressions implements the sql.Expressioner interface.
-func (c *Call) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (c *Call) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != len(c.Params) {
 		return nil, fmt.Errorf("%s: invalid param number, got %d, expected %d", c.Name, len(exprs), len(c.Params))
 	}
@@ -145,7 +130,7 @@ func (c *Call) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
 }
 
 // WithAsOf implements the Versionable interface.
-func (c *Call) WithAsOf(asOf sql.Expression) (sql.Node, error) {
+func (c *Call) WithAsOf(ctx *sql.Context, asOf sql.Expression) (sql.Node, error) {
 	nc := *c
 	nc.asOf = asOf
 	return &nc, nil
@@ -182,22 +167,19 @@ func (c *Call) String() string {
 }
 
 // DebugString implements sql.DebugStringer
-func (c *Call) DebugString() string {
+func (c *Call) DebugString(ctx *sql.Context) string {
 	paramStr := ""
 	for i, param := range c.Params {
 		if i > 0 {
 			paramStr += ", "
 		}
-		paramStr += sql.DebugString(param)
+		paramStr += sql.DebugString(ctx, param)
 	}
 	tp := sql.NewTreePrinter()
 	if c.db == nil {
 		tp.WriteNode("CALL %s(%s)", c.Name, paramStr)
 	} else {
 		tp.WriteNode("CALL %s.%s(%s)", c.db.Name(), c.Name, paramStr)
-	}
-	if c.Procedure != nil {
-		tp.WriteChildren(sql.DebugString(c.Procedure.Body))
 	}
 
 	return tp.String()
@@ -218,8 +200,34 @@ func (c *Call) WithDatabase(db sql.Database) (sql.Node, error) {
 	return &nc, nil
 }
 
-func (c *Call) Dispose() {
+func (c *Call) Dispose(ctx *sql.Context) {
 	if c.Procedure != nil {
-		disposeNode(c.Procedure)
+		disposeNode(ctx, c.Procedure)
 	}
+}
+
+// SetStatementRunner implements the sql.InterpreterNode interface.
+func (c *Call) SetStatementRunner(ctx *sql.Context, runner sql.StatementRunner) sql.Node {
+	nc := *c
+	nc.Runner = runner
+	return &nc
+}
+
+// GetRunner implements the sql.InterpreterNode interface.
+func (c *Call) GetRunner() sql.StatementRunner {
+	return c.Runner
+}
+
+func (c *Call) GetAsOf() sql.Expression {
+	return c.asOf
+}
+
+// GetStatements implements the sql.InterpreterNode interface.
+func (c *Call) GetStatements() []*procedures.InterpreterOperation {
+	return c.Procedure.Ops
+}
+
+// SetSchema implements the sql.InterpreterNode interface.
+func (c *Call) SetSchema(sch sql.Schema) {
+	c.resSch = sch
 }

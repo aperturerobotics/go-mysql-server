@@ -26,44 +26,44 @@ import (
 //	A column is a named component of a table. It has a data type, a default,
 //	and a nullability characteristic.
 type Column struct {
-	// Name is the name of the column.
-	Name string
 	// Type is the data type of the column.
 	Type Type
 	// Default contains the default value of the column or nil if it was not explicitly defined.
 	Default *ColumnDefaultValue
-	// AutoIncrement is true if the column auto-increments.
-	AutoIncrement bool
-	// Nullable is true if the column can contain NULL values, or false
-	// otherwise.
-	Nullable bool
+	// Generated is non-nil if the column is defined with a generated value. Mutually exclusive with Default
+	Generated *ColumnDefaultValue
+	// OnUpdate contains the on update value of the column or nil if it was not explicitly defined.
+	OnUpdate *ColumnDefaultValue
+	// Name is the name of the column.
+	Name string
 	// Source is the name of the table this column came from.
 	Source string
 	// DatabaseSource is the name of the database this column came from.
 	DatabaseSource string
-	// PrimaryKey is true if the column is part of the primary key for its table.
-	PrimaryKey bool
 	// Comment contains the string comment for this column.
 	Comment string
 	// Extra contains any additional information to put in the `extra` column under `information_schema.columns`.
 	Extra string
-	// Generated is non-nil if the column is defined with a generated value. Mutually exclusive with Default
-	Generated *ColumnDefaultValue
+	// PrimaryKey is true if the column is part of the primary key for its table.
+	PrimaryKey bool
+	// Nullable is true if the column can contain NULL values, or false
+	// otherwise.
+	Nullable bool
 	// Virtual is true if the column is defined as a virtual column. Generated must be non-nil in this case.
 	// Virtual column values will be provided for write operations, in case integrators need to use them to update
 	// indexes, but must not be returned in rows from tables that include them.
 	Virtual bool
-	// OnUpdate contains the on update value of the column or nil if it was not explicitly defined.
-	OnUpdate *ColumnDefaultValue
+	// AutoIncrement is true if the column auto-increments.
+	AutoIncrement bool
 }
 
 // Check ensures the value is correct for this column.
-func (c *Column) Check(v interface{}) bool {
+func (c *Column) Check(ctx *Context, v interface{}) bool {
 	if v == nil {
 		return c.Nullable
 	}
 
-	_, _, err := c.Type.Convert(v)
+	_, _, err := c.Type.Convert(ctx, v)
 	return err == nil
 }
 
@@ -75,17 +75,17 @@ func (c *Column) Equals(c2 *Column) bool {
 			strings.EqualFold(c.DatabaseSource, c2.DatabaseSource) &&
 			c.Nullable == c2.Nullable &&
 			reflect.DeepEqual(c.Default, c2.Default) &&
-			reflect.DeepEqual(c.Type, c2.Type)
+			c.Type.Equals(c2.Type)
 	}
 	return c.Name == c2.Name &&
 		strings.EqualFold(c.Source, c2.Source) &&
 		strings.EqualFold(c.DatabaseSource, c2.DatabaseSource) &&
 		c.Nullable == c2.Nullable &&
 		reflect.DeepEqual(c.Default, c2.Default) &&
-		reflect.DeepEqual(c.Type, c2.Type)
+		c.Type.Equals(c2.Type)
 }
 
-func (c *Column) DebugString() string {
+func (c *Column) DebugString(ctx *Context) string {
 	sb := strings.Builder{}
 	sb.WriteString("Name: ")
 	sb.WriteString(c.Name)
@@ -106,9 +106,9 @@ func (c *Column) DebugString() string {
 	sb.WriteString(c.Comment)
 	sb.WriteString(", ")
 	sb.WriteString("Default: ")
-	sb.WriteString(DebugString(c.Default))
+	sb.WriteString(DebugString(ctx, c.Default))
 	sb.WriteString("Generated: ")
-	sb.WriteString(DebugString(c.Generated))
+	sb.WriteString(DebugString(ctx, c.Generated))
 	sb.WriteString(", ")
 	sb.WriteString("AutoIncrement: ")
 	sb.WriteString(fmt.Sprintf("%v", c.AutoIncrement))
@@ -128,6 +128,10 @@ func (c Column) Copy() *Column {
 		c.Generated = &(*c.Generated)
 	}
 	return &c
+}
+
+func (c *Column) String() string {
+	return c.Source + "." + c.Name
 }
 
 // TableId is the unique identifier of a table or table alias in a multi-db environment.

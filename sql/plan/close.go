@@ -24,8 +24,8 @@ import (
 
 // Close represents the CLOSE statement, which closes a cursor.
 type Close struct {
-	Name string
 	Pref *expression.ProcedureReference
+	Name string
 }
 
 var _ sql.Node = (*Close)(nil)
@@ -50,7 +50,7 @@ func (c *Close) String() string {
 }
 
 // Schema implements the interface sql.Node.
-func (c *Close) Schema() sql.Schema {
+func (c *Close) Schema(ctx *sql.Context) sql.Schema {
 	return nil
 }
 
@@ -64,13 +64,8 @@ func (c *Close) IsReadOnly() bool {
 }
 
 // WithChildren implements the interface sql.Node.
-func (c *Close) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (c *Close) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return NillaryWithChildren(c, children...)
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (c *Close) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

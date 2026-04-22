@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"encoding/binary"
 	"math"
 	"reflect"
@@ -50,12 +51,12 @@ var (
 )
 
 // Compare implements Type interface.
-func (t PointType) Compare(a interface{}, b interface{}) (int, error) {
-	return GeometryType{}.Compare(a, b)
+func (t PointType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+	return GeometryType{}.Compare(ctx, a, b)
 }
 
 // Convert implements Type interface.
-func (t PointType) Convert(v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t PointType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
 	// Allow null
 	if v == nil {
 		return nil, sql.InRange, nil
@@ -66,27 +67,33 @@ func (t PointType) Convert(v interface{}) (interface{}, sql.ConvertInRange, erro
 		// Parse header
 		srid, isBig, geomType, err := DeserializeEWKBHeader(val)
 		if err != nil {
-			return nil, sql.OutOfRange, err
+			return nil, sql.InRange, err
 		}
 		// Throw error if not marked as point
 		if geomType != WKBPointID {
-			return nil, sql.OutOfRange, sql.ErrInvalidGISData.New("PointType.Convert")
+			return nil, sql.InRange, sql.ErrInvalidGISData.New("PointType.Convert")
 		}
 		// Parse data section
 		point, _, err := DeserializePoint(val[EWKBHeaderSize:], isBig, srid)
 		if err != nil {
-			return nil, sql.OutOfRange, err
+			return nil, sql.InRange, err
 		}
 		return point, sql.InRange, nil
 	case string:
-		return t.Convert([]byte(val))
+		return t.Convert(ctx, []byte(val))
 	case Point:
 		if err := t.MatchSRID(val); err != nil {
-			return nil, sql.OutOfRange, err
+			return nil, sql.InRange, err
 		}
 		return val, sql.InRange, nil
+	case sql.AnyWrapper:
+		unwrapped, err := val.UnwrapAny(ctx)
+		if err != nil {
+			return nil, sql.InRange, err
+		}
+		return t.Convert(ctx, unwrapped)
 	default:
-		return nil, sql.OutOfRange, sql.ErrSpatialTypeConversion.New()
+		return nil, sql.InRange, sql.ErrSpatialTypeConversion.New()
 	}
 }
 
@@ -112,7 +119,7 @@ func (t PointType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.V
 		return sqltypes.NULL, nil
 	}
 
-	v, _, err := t.Convert(v)
+	v, _, err := t.Convert(ctx, v)
 	if err != nil {
 		return sqltypes.Value{}, nil
 	}

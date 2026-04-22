@@ -18,6 +18,7 @@ import (
 	"gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
 var (
@@ -57,7 +58,9 @@ func (d *DropIndex) Resolved() bool { return d.Table.Resolved() }
 func (d *DropIndex) IsReadOnly() bool { return false }
 
 // Schema implements the Node interface.
-func (d *DropIndex) Schema() sql.Schema { return nil }
+func (d *DropIndex) Schema(ctx *sql.Context) sql.Schema {
+	return types.OkResultSchema
+}
 
 // Children implements the Node interface.
 func (d *DropIndex) Children() []sql.Node { return []sql.Node{d.Table} }
@@ -70,7 +73,7 @@ func (d *DropIndex) String() string {
 }
 
 // WithChildren implements the Node interface.
-func (d *DropIndex) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (d *DropIndex) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(d, len(children), 1)
 	}
@@ -78,16 +81,6 @@ func (d *DropIndex) WithChildren(children ...sql.Node) (sql.Node, error) {
 	nd := *d
 	nd.Table = children[0]
 	return &nd, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (d *DropIndex) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{
-		Database: GetDatabaseName(d.Table),
-		Table:    getTableName(d.Table),
-	}
-
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Index))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

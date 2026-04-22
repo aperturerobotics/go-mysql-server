@@ -22,7 +22,6 @@ import (
 
 	"github.com/dolthub/vitess/go/mysql"
 
-	gmstime "github.com/dolthub/go-mysql-server/internal/time"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/types"
@@ -31,46 +30,41 @@ import (
 var _ sql.Node = (*AlterEvent)(nil)
 var _ sql.Expressioner = (*AlterEvent)(nil)
 var _ sql.Databaser = (*AlterEvent)(nil)
-var _ sql.EventSchedulerStatement = (*AlterEvent)(nil)
 
 type AlterEvent struct {
+	DefinitionNode sql.Node
+	scheduler      sql.EventScheduler
+
 	ddlNode
-	EventName string
-	Definer   string
 
-	AlterOnSchedule bool
-	At              *OnScheduleTimestamp
-	Every           *expression.Interval
-	Starts          *OnScheduleTimestamp
-	Ends            *OnScheduleTimestamp
+	Starts *OnScheduleTimestamp
+	Ends   *OnScheduleTimestamp
+	At     *OnScheduleTimestamp
+	Every  *expression.Interval
 
-	AlterOnComp    bool
-	OnCompPreserve bool
-
-	AlterName    bool
-	RenameToDb   string
-	RenameToName string
-
-	AlterStatus bool
-	Status      sql.EventStatus
-
-	AlterComment bool
-	Comment      string
-
-	AlterDefinition  bool
+	RenameToDb       string
+	EventName        string
+	Definer          string
+	RenameToName     string
 	DefinitionString string
-	DefinitionNode   sql.Node
+	Comment          string
 
-	// Event will be set during analysis
-	Event sql.EventDefinition
+	Event  sql.EventDefinition
+	Status sql.EventStatus
 
-	// scheduler is used to notify EventSchedulerStatus of the event update
-	scheduler sql.EventScheduler
+	AlterName       bool
+	AlterStatus     bool
+	AlterComment    bool
+	AlterDefinition bool
+	AlterOnSchedule bool
+	AlterOnComp     bool
+	OnCompPreserve  bool
 }
 
 // NewAlterEvent returns a *AlterEvent node.
 func NewAlterEvent(
 	db sql.Database,
+	es sql.EventScheduler,
 	name, definer string,
 	alterSchedule bool,
 	at, starts, ends *OnScheduleTimestamp,
@@ -89,6 +83,7 @@ func NewAlterEvent(
 ) *AlterEvent {
 	return &AlterEvent{
 		ddlNode:          ddlNode{db},
+		scheduler:        es,
 		EventName:        name,
 		Definer:          definer,
 		AlterOnSchedule:  alterSchedule,
@@ -153,7 +148,10 @@ func (a *AlterEvent) String() string {
 	}
 
 	if a.AlterDefinition {
-		stmt = fmt.Sprintf("%s DO %s", stmt, sql.DebugString(a.DefinitionNode))
+		// To maintain compatibility with fmt.Stringer we have to use an empty context, but this will fail in any case that
+		// requires a context to determine a string (such as an integrator using the context to contain type information).
+		ctx := sql.NewEmptyContext()
+		stmt = fmt.Sprintf("%s DO %s", stmt, sql.DebugString(ctx, a.DefinitionNode))
 	}
 
 	return stmt
@@ -183,7 +181,7 @@ func (a *AlterEvent) Resolved() bool {
 }
 
 // Schema implements the sql.Node interface.
-func (a *AlterEvent) Schema() sql.Schema {
+func (a *AlterEvent) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -200,7 +198,7 @@ func (a *AlterEvent) Children() []sql.Node {
 }
 
 // WithChildren implements the sql.Node interface.
-func (a *AlterEvent) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (a *AlterEvent) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) > 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(a, len(children), "0 or 1")
 	}
@@ -212,18 +210,6 @@ func (a *AlterEvent) WithChildren(children ...sql.Node) (sql.Node, error) {
 	na := *a
 	na.DefinitionNode = children[0]
 	return &na, nil
-}
-
-// CheckPrivileges implements the sql.Node interface.
-func (a *AlterEvent) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	subject := sql.PrivilegeCheckSubject{Database: a.Db.Name()}
-	hasPriv := opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Event))
-
-	if a.AlterName && a.RenameToDb != "" {
-		subject = sql.PrivilegeCheckSubject{Database: a.RenameToDb}
-		hasPriv = hasPriv && opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Event))
-	}
-	return hasPriv
 }
 
 // Database implements the sql.Databaser interface.
@@ -252,7 +238,7 @@ func (a *AlterEvent) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter, error)
 	var err error
 	ed := a.Event
 	eventAlteredTime := ctx.QueryTime()
-	sysTz := gmstime.SystemTimezoneOffset()
+	sysTz := sql.SystemTimezoneOffset()
 	ed.LastAltered = eventAlteredTime
 	ed.Definer = a.Definer
 
@@ -355,9 +341,9 @@ func (a *AlterEvent) Expressions() []sql.Expression {
 }
 
 // WithExpressions implements the sql.Expressioner interface.
-func (a *AlterEvent) WithExpressions(e ...sql.Expression) (sql.Node, error) {
-	if len(e) > 3 {
-		return nil, sql.ErrInvalidChildrenNumber.New(a, len(e), "up to 3")
+func (a *AlterEvent) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
+	if len(exprs) > 3 {
+		return nil, sql.ErrInvalidChildrenNumber.New(a, len(exprs), "up to 3")
 	}
 
 	if !a.AlterOnSchedule {
@@ -366,23 +352,23 @@ func (a *AlterEvent) WithExpressions(e ...sql.Expression) (sql.Node, error) {
 
 	na := *a
 	if a.At != nil {
-		ts, ok := e[0].(*OnScheduleTimestamp)
+		ts, ok := exprs[0].(*OnScheduleTimestamp)
 		if !ok {
-			return nil, fmt.Errorf("expected `*OnScheduleTimestamp` but got `%T`", e[0])
+			return nil, fmt.Errorf("expected `*OnScheduleTimestamp` but got `%T`", exprs[0])
 		}
 		na.At = ts
 	} else {
-		every, ok := e[0].(*expression.Interval)
+		every, ok := exprs[0].(*expression.Interval)
 		if !ok {
-			return nil, fmt.Errorf("expected `*expression.Interval` but got `%T`", e[0])
+			return nil, fmt.Errorf("expected `*expression.Interval` but got `%T`", exprs[0])
 		}
 		na.Every = every
 
 		var ts *OnScheduleTimestamp
-		if len(e) > 1 {
-			ts, ok = e[1].(*OnScheduleTimestamp)
+		if len(exprs) > 1 {
+			ts, ok = exprs[1].(*OnScheduleTimestamp)
 			if !ok {
-				return nil, fmt.Errorf("expected `*OnScheduleTimestamp` but got `%T`", e[1])
+				return nil, fmt.Errorf("expected `*OnScheduleTimestamp` but got `%T`", exprs[1])
 			}
 			if a.Starts != nil {
 				na.Starts = ts
@@ -391,10 +377,10 @@ func (a *AlterEvent) WithExpressions(e ...sql.Expression) (sql.Node, error) {
 			}
 		}
 
-		if len(e) == 3 {
-			ts, ok = e[2].(*OnScheduleTimestamp)
+		if len(exprs) == 3 {
+			ts, ok = exprs[2].(*OnScheduleTimestamp)
 			if !ok {
-				return nil, fmt.Errorf("expected `*OnScheduleTimestamp` but got `%T`", e[2])
+				return nil, fmt.Errorf("expected `*OnScheduleTimestamp` but got `%T`", exprs[2])
 			}
 			na.Ends = ts
 		}
@@ -403,22 +389,15 @@ func (a *AlterEvent) WithExpressions(e ...sql.Expression) (sql.Node, error) {
 	return &na, nil
 }
 
-// WithEventScheduler is used to notify EventSchedulerStatus to update the events list for ALTER EVENT.
-func (a *AlterEvent) WithEventScheduler(scheduler sql.EventScheduler) sql.Node {
-	na := *a
-	na.scheduler = scheduler
-	return &na
-}
-
 // alterEventIter is the row iterator for *CreateEvent.
 type alterEventIter struct {
-	once          sync.Once
-	originalName  string
-	alterSchedule bool
-	alterStatus   bool
-	event         sql.EventDefinition
 	eventDb       sql.EventDatabase
 	scheduler     sql.EventScheduler
+	originalName  string
+	event         sql.EventDefinition
+	once          sync.Once
+	alterSchedule bool
+	alterStatus   bool
 }
 
 // Next implements the sql.RowIter interface.

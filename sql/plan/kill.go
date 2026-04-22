@@ -61,18 +61,11 @@ func (k *Kill) IsReadOnly() bool {
 	return true
 }
 
-func (k *Kill) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (k *Kill) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(k, len(children), 0)
 	}
 	return k, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (k *Kill) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	//TODO: If the user doesn't have the SUPER privilege, they should still be able to kill their own threads
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewPrivilegedOperation(sql.PrivilegeCheckSubject{}, sql.PrivilegeType_Super))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -80,7 +73,7 @@ func (*Kill) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID,
 	return sql.Collation_binary, 7
 }
 
-func (k *Kill) Schema() sql.Schema {
+func (k *Kill) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 

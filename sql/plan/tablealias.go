@@ -21,10 +21,11 @@ import (
 // TableAlias is a node that acts as a table with a given name.
 type TableAlias struct {
 	*UnaryNode
+	cols    sql.ColSet
 	name    string
 	comment string
+	sch     sql.Schema
 	id      sql.TableId
-	cols    sql.ColSet
 }
 
 var _ sql.RenameableNode = (*TableAlias)(nil)
@@ -33,7 +34,10 @@ var _ sql.CollationCoercible = (*TableAlias)(nil)
 
 // NewTableAlias returns a new Table alias node.
 func NewTableAlias(name string, node sql.Node) *TableAlias {
-	ret := &TableAlias{UnaryNode: &UnaryNode{Child: node}, name: name}
+	ret := &TableAlias{
+		UnaryNode: &UnaryNode{Child: node},
+		name:      name,
+	}
 	if tin, ok := node.(TableIdNode); ok {
 		ret.id = tin.Id()
 		ret.cols = tin.Columns()
@@ -86,19 +90,21 @@ func (t *TableAlias) Comment() string {
 
 // Schema implements the Node interface. TableAlias alters the schema of its child element to rename the source of
 // columns to the alias.
-func (t *TableAlias) Schema() sql.Schema {
-	childSchema := t.Child.Schema()
-	copy := make(sql.Schema, len(childSchema))
-	for i, col := range childSchema {
-		colCopy := *col
-		colCopy.Source = t.name
-		copy[i] = &colCopy
+func (t *TableAlias) Schema(ctx *sql.Context) sql.Schema {
+	if t.sch == nil {
+		childSchema := t.Child.Schema(ctx)
+		t.sch = make(sql.Schema, len(childSchema))
+		for i, col := range childSchema {
+			newCol := *col
+			newCol.Source = t.name
+			t.sch[i] = &newCol
+		}
 	}
-	return copy
+	return t.sch
 }
 
 // WithChildren implements the Node interface.
-func (t *TableAlias) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (t *TableAlias) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(t, len(children), 1)
 	}
@@ -110,14 +116,6 @@ func (t *TableAlias) WithChildren(children ...sql.Node) (sql.Node, error) {
 	return ret, nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (t *TableAlias) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	if t.UnaryNode != nil {
-		return t.UnaryNode.Child.CheckPrivileges(ctx, opChecker)
-	}
-	return true
-}
-
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (t *TableAlias) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	if t.UnaryNode != nil {
@@ -126,21 +124,22 @@ func (t *TableAlias) CollationCoercibility(ctx *sql.Context) (collation sql.Coll
 	return sql.Collation_binary, 7
 }
 
-func (t TableAlias) String() string {
+func (t *TableAlias) String() string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("TableAlias(%s)", t.name)
 	_ = pr.WriteChildren(t.Child.String())
 	return pr.String()
 }
 
-func (t TableAlias) DebugString() string {
+func (t *TableAlias) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("TableAlias(%s)", t.name)
-	_ = pr.WriteChildren(sql.DebugString(t.Child))
+	_ = pr.WriteChildren(sql.DebugString(ctx, t.Child))
 	return pr.String()
 }
 
-func (t TableAlias) WithName(name string) sql.Node {
-	t.name = name
-	return &t
+func (t *TableAlias) WithName(name string) sql.Node {
+	nt := *t
+	nt.name = name
+	return &nt
 }

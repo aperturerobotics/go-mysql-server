@@ -16,7 +16,6 @@ package planbuilder
 
 import (
 	"fmt"
-	"reflect"
 
 	ast "github.com/dolthub/vitess/go/vt/sqlparser"
 
@@ -24,11 +23,12 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/transform"
+	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
-func hasRecursiveCte(node sql.Node) bool {
+func hasRecursiveCte(ctx *sql.Context, node sql.Node) bool {
 	hasRCTE := false
-	transform.Inspect(node, func(n sql.Node) bool {
+	transform.InspectWithOpaque(ctx, node, func(ctx *sql.Context, n sql.Node) bool {
 		if _, ok := n.(*plan.RecursiveTable); ok {
 			hasRCTE = true
 			return false
@@ -55,10 +55,10 @@ func (b *Builder) buildSetOp(inScope *scope, u *ast.SetOp) (outScope *scope) {
 	}
 
 	if setOpType != plan.UnionType {
-		if hasRecursiveCte(leftScope.node) {
+		if hasRecursiveCte(b.ctx, leftScope.node) {
 			b.handleErr(sql.ErrRecursiveCTENotUnion.New())
 		}
-		if hasRecursiveCte(rightScope.node) {
+		if hasRecursiveCte(b.ctx, rightScope.node) {
 			b.handleErr(sql.ErrRecursiveCTENotUnion.New())
 		}
 	}
@@ -95,10 +95,10 @@ func (b *Builder) buildSetOp(inScope *scope, u *ast.SetOp) (outScope *scope) {
 		// Unions pass order bys to the top scope, where the original
 		// order by get field may no longer be accessible. Here it is
 		// safe to assume the alias has already been computed.
-		scalar, _, _ = transform.Expr(scalar, func(e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
+		scalar, _, _ = transform.Expr(b.ctx, scalar, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
 			switch e := e.(type) {
 			case *expression.Alias:
-				return expression.NewGetField(int(c.id), e.Type(), e.Name(), e.IsNullable()), transform.NewTree, nil
+				return expression.NewGetField(int(c.id), e.Type(ctx), e.Name(), e.IsNullable(ctx)), transform.NewTree, nil
 			default:
 				return e, transform.SameTree, nil
 			}
@@ -144,19 +144,37 @@ func (b *Builder) buildSetOp(inScope *scope, u *ast.SetOp) (outScope *scope) {
 	tabId := b.tabId
 	ret := plan.NewSetOp(setOpType, leftScope.node, rightScope.node, distinct, limit, offset, sortFields).WithId(tabId).WithColumns(cols)
 	outScope = leftScope
+	outScope.cols = b.mergeSetOpScopeColumns(leftScope.cols, rightScope.cols, tabId)
 	outScope.node = b.mergeSetOpSchemas(ret.(*plan.SetOp))
 	return
 }
 
+func (b *Builder) mergeSetOpScopeColumns(left, right []scopeColumn, tabId sql.TableId) []scopeColumn {
+	merged := make([]scopeColumn, len(left))
+	for i := range left {
+		merged[i] = scopeColumn{
+			tableId:     tabId,
+			db:          left[i].db,
+			table:       left[i].table,
+			col:         left[i].col,
+			originalCol: left[i].originalCol,
+			id:          left[i].id,
+			typ:         types.GeneralizeTypes(left[i].typ, right[i].typ),
+			nullable:    left[i].nullable || right[i].nullable,
+		}
+	}
+	return merged
+}
+
 func (b *Builder) mergeSetOpSchemas(u *plan.SetOp) sql.Node {
-	ls, rs := u.Left().Schema(), u.Right().Schema()
+	ls, rs := u.Left().Schema(b.ctx), u.Right().Schema(b.ctx)
 	if len(ls) != len(rs) {
 		err := ErrUnionSchemasDifferentLength.New(len(ls), len(rs))
 		b.handleErr(err)
 	}
 
-	leftIds := colIdsForRel(u.Left())
-	rightIds := colIdsForRel(u.Right())
+	leftIds := colIdsForRel(b.ctx, u.Left())
+	rightIds := colIdsForRel(b.ctx, u.Right())
 
 	les, res := make([]sql.Expression, len(ls)), make([]sql.Expression, len(rs))
 	hasdiff := false
@@ -165,7 +183,7 @@ func (b *Builder) mergeSetOpSchemas(u *plan.SetOp) sql.Node {
 		// todo: proj col ids should align with input column ids
 		les[i] = expression.NewGetFieldWithTable(int(leftIds[i]), 0, ls[i].Type, ls[i].DatabaseSource, ls[i].Source, ls[i].Name, ls[i].Nullable)
 		res[i] = expression.NewGetFieldWithTable(int(rightIds[i]), 0, rs[i].Type, rs[i].DatabaseSource, rs[i].Source, rs[i].Name, rs[i].Nullable)
-		if reflect.DeepEqual(ls[i].Type, rs[i].Type) {
+		if ls[i].Type.Equals(rs[i].Type) {
 			continue
 		}
 		hasdiff = true
@@ -174,8 +192,8 @@ func (b *Builder) mergeSetOpSchemas(u *plan.SetOp) sql.Node {
 		convertTo := expression.GetConvertToType(ls[i].Type, rs[i].Type)
 
 		// TODO: Principled type coercion...
-		les[i], err = b.f.buildConvert(les[i], convertTo, 0, 0)
-		res[i], err = b.f.buildConvert(res[i], convertTo, 0, 0)
+		les[i], err = b.f.buildConvert(b.ctx, les[i], convertTo, 0, 0)
+		res[i], err = b.f.buildConvert(b.ctx, res[i], convertTo, 0, 0)
 
 		// Preserve schema names across the conversion.
 		les[i] = expression.NewAlias(ls[i].Name, les[i])
@@ -184,6 +202,7 @@ func (b *Builder) mergeSetOpSchemas(u *plan.SetOp) sql.Node {
 	var ret sql.Node = u
 	if hasdiff {
 		ret, err = u.WithChildren(
+			b.ctx,
 			plan.NewProject(les, u.Left()),
 			plan.NewProject(res, u.Right()),
 		)
@@ -196,7 +215,7 @@ func (b *Builder) mergeSetOpSchemas(u *plan.SetOp) sql.Node {
 
 // colIdsForRel returns the padded column set returned by a node,
 // with 0's filled in for non-aliasable columns
-func colIdsForRel(n sql.Node) []sql.ColumnId {
+func colIdsForRel(ctx *sql.Context, n sql.Node) []sql.ColumnId {
 	var ids []sql.ColumnId
 	switch n := n.(type) {
 	case *plan.Project:
@@ -208,13 +227,16 @@ func colIdsForRel(n sql.Node) []sql.ColumnId {
 			}
 		}
 		return ids
+	case *plan.SetOp:
+		// SetOp nodes need to preserve original schema order to avoid column scrambling in nested UNIONs
+		return colIdsForRel(ctx, n.Left())
 	case plan.TableIdNode:
 		cols := n.Columns()
 		if tn, ok := n.(sql.TableNode); ok {
-			if pkt, ok := tn.UnderlyingTable().(sql.PrimaryKeyTable); ok && len(pkt.PrimaryKeySchema().Schema) != len(n.Schema()) {
+			if pkt, ok := tn.UnderlyingTable().(sql.PrimaryKeyTable); ok && len(pkt.PrimaryKeySchema(ctx).Schema) != len(n.Schema(ctx)) {
 				firstcol, _ := cols.Next(1)
-				for _, c := range n.Schema() {
-					ord := pkt.PrimaryKeySchema().IndexOfColName(c.Name)
+				for _, c := range n.Schema(ctx) {
+					ord := pkt.PrimaryKeySchema(ctx).IndexOfColName(c.Name)
 					colId := firstcol + sql.ColumnId(ord)
 					ids = append(ids, colId)
 				}
@@ -226,7 +248,6 @@ func colIdsForRel(n sql.Node) []sql.ColumnId {
 		})
 		return ids
 	default:
-		return colIdsForRel(n.Children()[0])
+		return colIdsForRel(ctx, n.Children()[0])
 	}
-	return nil
 }

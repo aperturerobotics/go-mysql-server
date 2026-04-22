@@ -17,6 +17,7 @@ package variables
 import (
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -24,7 +25,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 
-	gmstime "github.com/dolthub/go-mysql-server/internal/time"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
@@ -34,8 +34,8 @@ import (
 // There's also this page, which shows that a TON of variables are still missing ):
 // https://dev.mysql.com/doc/refman/8.0/en/server-system-variable-reference.html
 
-// serverStartUpTime is needed by uptime status variable
-var serverStartUpTime = time.Now()
+// ServerStartUpTime is needed by uptime status variable
+var ServerStartUpTime = time.Now()
 
 // globalSystemVariables is the underlying type of SystemVariables.
 type globalSystemVariables struct {
@@ -68,15 +68,17 @@ func (sv *globalSystemVariables) AddSystemVariables(sysVars []sql.SystemVariable
 // the value is invalid, then an error is returned. If the values contain any custom system variables, then make sure
 // that they've been added using AddSystemVariables first.
 func (sv *globalSystemVariables) AssignValues(vals map[string]interface{}) error {
+	// TODO: Add context parameter
+	ctx := sql.NewEmptyContext()
 	sv.mutex.Lock()
 	defer sv.mutex.Unlock()
 	for varName, val := range vals {
 		varName = strings.ToLower(varName)
-		sysVar, ok := systemVars[varName]
+		sysVar, ok := getSystemVar(varName)
 		if !ok {
 			return sql.ErrUnknownSystemVariable.New(varName)
 		}
-		svv, err := sysVar.InitValue(val, true)
+		svv, err := sysVar.InitValue(ctx, val, true)
 		if err != nil {
 			return err
 		}
@@ -102,7 +104,7 @@ func (sv *globalSystemVariables) GetGlobal(name string) (sql.SystemVariable, int
 	sv.mutex.RLock()
 	defer sv.mutex.RUnlock()
 	name = strings.ToLower(name)
-	v, ok := systemVars[name]
+	v, ok := getSystemVar(name)
 	if !ok {
 		return nil, nil, false
 	}
@@ -135,15 +137,15 @@ func (sv *globalSystemVariables) GetGlobal(name string) (sql.SystemVariable, int
 // Only global dynamic variables may be set through this function, as it is intended for use through the SET GLOBAL
 // statement. To set session system variables, use the appropriate function on the session context. To set values
 // directly (such as when loading persisted values), use AssignValues. Case-insensitive.
-func (sv *globalSystemVariables) SetGlobal(name string, val interface{}) error {
+func (sv *globalSystemVariables) SetGlobal(ctx *sql.Context, name string, val interface{}) error {
 	sv.mutex.Lock()
 	defer sv.mutex.Unlock()
 	name = strings.ToLower(name)
-	sysVar, ok := systemVars[name]
+	sysVar, ok := getSystemVar(name)
 	if !ok {
 		return sql.ErrUnknownSystemVariable.New(name)
 	}
-	svv, err := sysVar.SetValue(val, true)
+	svv, err := sysVar.SetValue(ctx, val, true)
 	if err != nil {
 		return err
 	}
@@ -164,25 +166,50 @@ func (sv *globalSystemVariables) GetAllGlobalVariables() map[string]interface{} 
 	return m
 }
 
-// InitSystemVariables resets the systemVars singleton in the sql package
+// InitSystemVariables resets the global systemVars singleton in the sql package
 func InitSystemVariables() {
-	vars := &globalSystemVariables{
-		mutex:      &sync.RWMutex{},
-		sysVarVals: make(map[string]sql.SystemVarValue, len(systemVars)),
+	out := &globalSystemVariables{
+		mutex: &sync.RWMutex{},
+		sysVarVals: make(map[string]sql.SystemVarValue,
+			len(systemVars)+len(mariadbSystemVars)),
 	}
-	for _, sysVar := range systemVars {
-		vars.sysVarVals[sysVar.GetName()] = sql.SystemVarValue{
-			Var: sysVar,
-			Val: sysVar.GetDefault(),
+
+	for _, vars := range []map[string]sql.SystemVariable{
+		systemVars,
+		mariadbSystemVars,
+	} {
+		for _, sysVar := range vars {
+			out.sysVarVals[sysVar.GetName()] = sql.SystemVarValue{
+				Var: sysVar,
+				Val: sysVar.GetDefault(),
+			}
 		}
 	}
-	sql.SystemVariables = vars
+	sql.SystemVariables = out
 }
 
 // init initializes SystemVariables as it functions as a global variable.
 // TODO: get rid of me, make this construction the responsibility of the engine
 func init() {
 	InitSystemVariables()
+}
+
+func getHostname() string {
+	hostname, _ := os.Hostname()
+	return hostname
+}
+
+// getSystemVar looks up a system variable by name in both systemVars and mariadbSystemVars.
+// Returns the variable and true if found, or nil and false if not found.
+func getSystemVar(name string) (sql.SystemVariable, bool) {
+	name = strings.ToLower(name)
+	if v, ok := systemVars[name]; ok {
+		return v, true
+	}
+	if v, ok := mariadbSystemVars[name]; ok {
+		return v, true
+	}
+	return nil, false
 }
 
 // systemVars is the internal collection of all MySQL system variables according to the following pages:
@@ -800,8 +827,8 @@ var systemVars = map[string]sql.SystemVariable{
 		SetVarHintApplies: false,
 		Type:              types.NewSystemEnumType("event_scheduler", "ON", "OFF", "DISABLED"),
 		Default:           "ON",
-		NotifyChanged: func(_ sql.SystemVariableScope, value sql.SystemVarValue) error {
-			convertedVal, _, err := value.Var.GetType().Convert(value.Val)
+		NotifyChanged: func(ctx *sql.Context, _ sql.SystemVariableScope, value sql.SystemVarValue) error {
+			convertedVal, _, err := value.Var.GetType().Convert(ctx, value.Val)
 			if err == nil {
 				// TODO: need to update EventScheduler state at runtime if applicable
 				s := strings.ToLower(convertedVal.(string))
@@ -1007,7 +1034,7 @@ var systemVars = map[string]sql.SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              types.NewSystemStringType("hostname"),
-		Default:           "",
+		Default:           getHostname(),
 	},
 	"immediate_server_version": &sql.MysqlSystemVariable{
 		Name:              "immediate_server_version",
@@ -1049,6 +1076,14 @@ var systemVars = map[string]sql.SystemVariable{
 		Type:              types.NewSystemBoolType("inmemory_joins"),
 		Default:           int8(0),
 	},
+	"disable_merge_join": &sql.MysqlSystemVariable{
+		Name:              sql.DisableMergeJoin,
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Both),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemBoolType(sql.DisableMergeJoin),
+		Default:           int8(0),
+	},
 	"innodb_autoinc_lock_mode": &sql.MysqlSystemVariable{
 		Name:              "innodb_autoinc_lock_mode",
 		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Global),
@@ -1057,11 +1092,19 @@ var systemVars = map[string]sql.SystemVariable{
 		Type:              types.NewSystemIntType("innodb_autoinc_lock_mode", 0, 2, false),
 		Default:           int64(2),
 	},
+	"innodb_buffer_pool_size": &sql.MysqlSystemVariable{
+		Name:              "innodb_buffer_pool_size",
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Global),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemIntType("innodb_buffer_pool_size", 5242880, math.MaxInt64, false),
+		Default:           int64(134217728),
+	},
 	// Row locking is currently not supported. This variable is provided for 3p tools, and we always return the
 	// Lowest value allowed by MySQL, which is 1. If you attempt to set this value to anything other than 1, errors ensue.
 	"innodb_lock_wait_timeout": &sql.MysqlSystemVariable{
 		Name:              "innodb_lock_wait_timeout",
-		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Global),
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Both),
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              types.NewSystemIntType("innodb_lock_wait_timeout", 1, 1, false),
@@ -1235,6 +1278,23 @@ var systemVars = map[string]sql.SystemVariable{
 		Type:              types.NewSystemIntType("lock_wait_timeout", 1, 31536000, false),
 		Default:           int64(31536000),
 	},
+	"lock_warnings": &sql.MysqlSystemVariable{
+		Name:              "lock_warnings",
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Session),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemBoolType("lock_warnings"),
+		Default:           int8(0),
+		NotifyChanged: func(ctx *sql.Context, _ sql.SystemVariableScope, value sql.SystemVarValue) error {
+			switch value.Val.(int8) {
+			case 0:
+				ctx.UnlockWarnings()
+			case 1:
+				ctx.LockWarnings()
+			}
+			return nil
+		},
+	},
 	"log_bin": &sql.MysqlSystemVariable{
 		Name:              "log_bin",
 		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Persist),
@@ -1245,6 +1305,24 @@ var systemVars = map[string]sql.SystemVariable{
 		//       to disabled, since binary log support is not available in GMS.
 		//       Integrators who provide binary logging may change this default.
 		Default: int8(0),
+	},
+	"log_replica_updates": &sql.MysqlSystemVariable{
+		Name:              "log_replica_updates",
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Persist),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemBoolType("log_replica_updates"),
+		Default:           int8(1),
+	},
+	"log_slave_updates": &sql.MysqlSystemVariable{
+		// TODO: This var should be an *alias* for log_replica_updates, but
+		//       we don't support system variable aliases yet.
+		Name:              "log_slave_updates",
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Persist),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemBoolType("log_slave_updates"),
+		Default:           int8(1),
 	},
 	"log_error": &sql.MysqlSystemVariable{
 		Name:              "log_error",
@@ -1283,7 +1361,7 @@ var systemVars = map[string]sql.SystemVariable{
 		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Global),
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              types.NewSystemSetType("log_output", "TABLE", "FILE", "NONE"),
+		Type:              types.NewSystemSetType("log_output", sql.Collation_utf8mb4_0900_ai_ci, "TABLE", "FILE", "NONE"),
 		Default:           "FILE",
 	},
 	"log_queries_not_using_indexes": &sql.MysqlSystemVariable{
@@ -1951,7 +2029,7 @@ var systemVars = map[string]sql.SystemVariable{
 		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Global),
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              types.NewSystemSetType("protocol_compression_algorithms", "zlib", "zstd", "uncompressed"),
+		Type:              types.NewSystemSetType("protocol_compression_algorithms", sql.Collation_latin1_swedish_ci, "zlib", "zstd", "uncompressed"),
 		Default:           "zlib,zstd,uncompressed",
 	},
 	"protocol_version": &sql.MysqlSystemVariable{
@@ -2001,7 +2079,7 @@ var systemVars = map[string]sql.SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              types.NewSystemUintType("query_cache_size", 0, 18446744073709551615),
-		Default:           int8(1),
+		Default:           1,
 	},
 	"query_cache_type": &sql.MysqlSystemVariable{
 		Name:              "query_cache_type",
@@ -2430,7 +2508,7 @@ var systemVars = map[string]sql.SystemVariable{
 		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Both),
 		Dynamic:           true,
 		SetVarHintApplies: true,
-		Type:              types.NewSystemSetType("sql_mode", "ALLOW_INVALID_DATES", "ANSI_QUOTES", "ERROR_FOR_DIVISION_BY_ZERO", "HIGH_NOT_PRECEDENCE", "IGNORE_SPACE", "NO_AUTO_VALUE_ON_ZERO", "NO_BACKSLASH_ESCAPES", "NO_DIR_IN_CREATE", "NO_ENGINE_SUBSTITUTION", "NO_UNSIGNED_SUBTRACTION", "NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY", "PAD_CHAR_TO_FULL_LENGTH", "PIPES_AS_CONCAT", "REAL_AS_FLOAT", "STRICT_ALL_TABLES", "STRICT_TRANS_TABLES", "TIME_TRUNCATE_FRACTIONAL", "TRADITIONAL", "ANSI"),
+		Type:              types.NewSystemSetType("sql_mode", sql.Collation_utf8mb4_0900_ai_ci, "ALLOW_INVALID_DATES", "ANSI_QUOTES", "ERROR_FOR_DIVISION_BY_ZERO", "HIGH_NOT_PRECEDENCE", "IGNORE_SPACE", "NO_AUTO_VALUE_ON_ZERO", "NO_AUTO_CREATE_USER", "NO_BACKSLASH_ESCAPES", "NO_DIR_IN_CREATE", "NO_ENGINE_SUBSTITUTION", "NO_UNSIGNED_SUBTRACTION", "NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY", "PAD_CHAR_TO_FULL_LENGTH", "PIPES_AS_CONCAT", "REAL_AS_FLOAT", "STRICT_ALL_TABLES", "STRICT_TRANS_TABLES", "TIME_TRUNCATE_FRACTIONAL", "TRADITIONAL", "ANSI"),
 		Default:           sql.DefaultSqlMode,
 	},
 	"sql_notes": &sql.MysqlSystemVariable{
@@ -2607,7 +2685,7 @@ var systemVars = map[string]sql.SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              types.NewSystemStringType("system_time_zone"),
-		Default:           gmstime.SystemTimezoneName(),
+		Default:           sql.SystemTimezoneName(),
 	},
 	"table_definition_cache": &sql.MysqlSystemVariable{
 		Name:              "table_definition_cache",
@@ -2876,7 +2954,7 @@ var systemVars = map[string]sql.SystemVariable{
 		Type:              types.NewSystemBoolType("updatable_views_with_limit"),
 		Default:           int8(1),
 		ValueFunction: func() (interface{}, error) {
-			return int(time.Now().Sub(serverStartUpTime).Seconds()), nil
+			return int(time.Now().Sub(ServerStartUpTime).Seconds()), nil
 		},
 	},
 	"use_secondary_engine": &sql.MysqlSystemVariable{
@@ -2886,6 +2964,38 @@ var systemVars = map[string]sql.SystemVariable{
 		SetVarHintApplies: true,
 		Type:              types.NewSystemEnumType("use_secondary_engine", "OFF", "ON", "FORCED"),
 		Default:           "ON",
+	},
+	"validate_password.length": &sql.MysqlSystemVariable{
+		Name:              "validate_password.length",
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Global),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemIntType("validate_password.length", 0, 2147483647, false),
+		Default:           8,
+	},
+	"validate_password.number_count": &sql.MysqlSystemVariable{
+		Name:              "validate_password.number_count",
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Global),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemIntType("validate_password.number_count", 0, 2147483647, false),
+		Default:           1,
+	},
+	"validate_password.mixed_case_count": &sql.MysqlSystemVariable{
+		Name:              "validate_password.mixed_case_count",
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Global),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemIntType("validate_password.mixed_case_count", 0, 2147483647, false),
+		Default:           1,
+	},
+	"validate_password.special_char_count": &sql.MysqlSystemVariable{
+		Name:              "validate_password.special_char_count",
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Global),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemIntType("validate_password.special_char_count", 0, 2147483647, false),
+		Default:           1,
 	},
 	"validate_user_plugins": &sql.MysqlSystemVariable{
 		Name:              "validate_user_plugins",
@@ -2901,7 +3011,7 @@ var systemVars = map[string]sql.SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              types.NewSystemStringType("version"),
-		Default:           "8.0.11",
+		Default:           "8.0.31",
 	},
 	"version_comment": &sql.MysqlSystemVariable{
 		Name:              "version_comment",
@@ -2950,6 +3060,67 @@ var systemVars = map[string]sql.SystemVariable{
 		SetVarHintApplies: true,
 		Type:              types.NewSystemBoolType("windowing_use_high_precision"),
 		Default:           int8(1),
+	},
+	"insert_id": &sql.MysqlSystemVariable{
+		Name:              "insert_id",
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Session),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemIntType("insert_id", 0, 9223372036854775807, false),
+		Default:           int64(0),
+	},
+}
+
+// mariadbSystemVars contains MariaDB-specific system variables that are not part of MySQL.
+// These variables are merged into systemVars during initialization.
+var mariadbSystemVars = map[string]sql.SystemVariable{
+	"skip_parallel_replication": &sql.MysqlSystemVariable{
+		Name:              "skip_parallel_replication",
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Session),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemBoolType("skip_parallel_replication"),
+		Default:           int8(0),
+	},
+	"gtid_domain_id": &sql.MysqlSystemVariable{
+		Name:              "gtid_domain_id",
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Both),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemIntType("gtid_domain_id", 0, 4294967295, false),
+		Default:           int64(0),
+	},
+	"gtid_seq_no": &sql.MysqlSystemVariable{
+		Name:              "gtid_seq_no",
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Session),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemIntType("gtid_seq_no", 0, 9223372036854775807, false),
+		Default:           int64(0),
+	},
+	"check_constraint_checks": &sql.MysqlSystemVariable{
+		Name:              "check_constraint_checks",
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Both),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemBoolType("check_constraint_checks"),
+		Default:           int8(1),
+	},
+	"sql_if_exists": &sql.MysqlSystemVariable{
+		Name:              "sql_if_exists",
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Both),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemBoolType("sql_if_exists"),
+		Default:           int8(0),
+	},
+	"system_versioning_insert_history": &sql.MysqlSystemVariable{
+		Name:              "system_versioning_insert_history",
+		Scope:             sql.GetMysqlScope(sql.SystemVariableScope_Both),
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              types.NewSystemBoolType("system_versioning_insert_history"),
+		Default:           int8(0),
 	},
 }
 

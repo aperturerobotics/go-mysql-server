@@ -23,7 +23,7 @@ import (
 
 // IsTrue is an expression that checks if an expression is true.
 type IsTrue struct {
-	UnaryExpression
+	UnaryExpressionStub
 	invert bool
 }
 
@@ -35,16 +35,16 @@ const IsFalseStr = "IS FALSE"
 
 // NewIsTrue creates a new IsTrue expression.
 func NewIsTrue(child sql.Expression) *IsTrue {
-	return &IsTrue{UnaryExpression: UnaryExpression{child}}
+	return &IsTrue{UnaryExpressionStub: UnaryExpressionStub{child}}
 }
 
 // NewIsFalse creates a new IsTrue expression with its boolean sense inverted (IsFalse, effectively).
 func NewIsFalse(child sql.Expression) *IsTrue {
-	return &IsTrue{UnaryExpression: UnaryExpression{child}, invert: true}
+	return &IsTrue{UnaryExpressionStub: UnaryExpressionStub{child}, invert: true}
 }
 
 // Type implements the Expression interface.
-func (*IsTrue) Type() sql.Type {
+func (*IsTrue) Type(ctx *sql.Context) sql.Type {
 	return types.Boolean
 }
 
@@ -54,7 +54,7 @@ func (*IsTrue) CollationCoercibility(ctx *sql.Context) (collation sql.CollationI
 }
 
 // IsNullable implements the Expression interface.
-func (*IsTrue) IsNullable() bool {
+func (*IsTrue) IsNullable(ctx *sql.Context) bool {
 	return false
 }
 
@@ -89,7 +89,7 @@ func (e *IsTrue) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (e *IsTrue) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (e *IsTrue) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, errors.New("incorrect number of children")
 	}

@@ -28,15 +28,15 @@ import (
 // Returns NULL if the argument is NULL.
 // An error occurs if the value starts and ends with double quotes but is not a valid JSON string literal.
 type JSONUnquote struct {
-	expression.UnaryExpression
+	expression.UnaryExpressionStub
 }
 
 var _ sql.FunctionExpression = (*JSONUnquote)(nil)
 var _ sql.CollationCoercible = (*JSONUnquote)(nil)
 
 // NewJSONUnquote creates a new JSONUnquote UDF.
-func NewJSONUnquote(json sql.Expression) sql.Expression {
-	return &JSONUnquote{expression.UnaryExpression{Child: json}}
+func NewJSONUnquote(ctx *sql.Context, json sql.Expression) sql.Expression {
+	return &JSONUnquote{expression.UnaryExpressionStub{Child: json}}
 }
 
 // FunctionName implements sql.FunctionExpression
@@ -59,7 +59,7 @@ func (js *JSONUnquote) String() string {
 }
 
 // Type implements the Expression interface.
-func (*JSONUnquote) Type() sql.Type {
+func (*JSONUnquote) Type(ctx *sql.Context) sql.Type {
 	return types.LongText
 }
 
@@ -69,16 +69,16 @@ func (*JSONUnquote) CollationCoercibility(ctx *sql.Context) (collation sql.Colla
 }
 
 // WithChildren implements the Expression interface.
-func (js *JSONUnquote) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (js *JSONUnquote) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(js, len(children), 1)
 	}
-	return NewJSONUnquote(children[0]), nil
+	return NewJSONUnquote(ctx, children[0]), nil
 }
 
 // Eval implements the Expression interface.
 func (js *JSONUnquote) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
-	typ := js.Child.Type()
+	typ := js.Child.Type(ctx)
 	if typ != types.Null && !types.IsText(typ) && !types.IsJSON(typ) {
 		return nil, sql.ErrInvalidType.New(typ)
 	}
@@ -88,7 +88,7 @@ func (js *JSONUnquote) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) 
 		return json, err
 	}
 
-	ex, _, err := types.LongText.Convert(json)
+	ex, _, err := types.LongText.Convert(ctx, json)
 	if err != nil {
 		return nil, err
 	}

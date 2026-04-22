@@ -15,6 +15,7 @@
 package fulltext
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -48,14 +49,14 @@ const (
 	KeyType_None
 )
 
-// KeyColumns contains all of the information needed to create key columns for each Full-Text table.
+// KeyColumns contains all the information needed to create key columns for each Full-Text table.
 type KeyColumns struct {
-	// Type refers to the type of key that the columns belong to.
-	Type KeyType
 	// Name is the name of the key. Only unique keys will have a name.
 	Name string
 	// Positions represents the schema index positions for primary keys and unique keys.
 	Positions []int
+	// Type refers to the type of key that the columns belong to.
+	Type KeyType
 }
 
 // Database allows a database to return a set of unique names that will be used for the pseudo-index tables with
@@ -95,14 +96,14 @@ const (
 )
 
 // HashRow returns a 64 character lowercase hexadecimal hash of the given row. This is intended for use with keyless tables.
-func HashRow(row sql.Row) (string, error) {
+func HashRow(ctx context.Context, row sql.Row) (string, error) {
 	h := sha256.New()
 	// Since we can't represent a NULL value in binary, we instead append the NULL results to the end, which will
 	// give us a unique representation for representing NULL values.
 	valIsNull := make([]bool, len(row))
 	for i, val := range row {
 		var err error
-		valIsNull[i], err = writeHashedValue(h, val)
+		valIsNull[i], err = writeHashedValue(ctx, h, val)
 		if err != nil {
 			return "", err
 		}
@@ -117,7 +118,11 @@ func HashRow(row sql.Row) (string, error) {
 }
 
 // writeHashedValue writes the given value into the hash.
-func writeHashedValue(h hash.Hash, val interface{}) (valIsNull bool, err error) {
+func writeHashedValue(ctx context.Context, h hash.Hash, val interface{}) (valIsNull bool, err error) {
+	val, err = sql.UnwrapAny(ctx, val)
+	if err != nil {
+		return false, err
+	}
 	switch val := val.(type) {
 	case int:
 		if err := binary.Write(h, binary.LittleEndian, int64(val)); err != nil {
@@ -168,7 +173,7 @@ func writeHashedValue(h hash.Hash, val interface{}) (valIsNull bool, err error) 
 			return false, err
 		}
 	case sql.JSONWrapper:
-		str, err := types.StringifyJSON(val)
+		str, err := types.JsonToMySqlString(ctx, val)
 		if err != nil {
 			return false, err
 		}
@@ -194,7 +199,7 @@ func GetKeyColumns(ctx *sql.Context, parent sql.Table) (KeyColumns, []*sql.Colum
 	// Check for a primary key. We'll only check on tables that implement sql.PrimaryKeyTable as we need to replicate
 	// the declaration order, and there's no guarantee that the order is sequential with a standard sql.Schema.
 	if pkTable, ok := parent.(sql.PrimaryKeyTable); ok {
-		sch := pkTable.PrimaryKeySchema()
+		sch := pkTable.PrimaryKeySchema(ctx)
 		if len(sch.PkOrdinals) > 0 {
 			positions = make([]int, len(sch.PkOrdinals))
 			copy(positions, sch.PkOrdinals)
@@ -224,7 +229,7 @@ func GetKeyColumns(ctx *sql.Context, parent sql.Table) (KeyColumns, []*sql.Colum
 			}
 
 			// Create a map from schema column expression to position
-			parentSch := parent.Schema()
+			parentSch := parent.Schema(ctx)
 			parentColMap := GetParentColumnMap(parentSch)
 
 			// Map from expression to position
@@ -541,7 +546,7 @@ func CreateFulltextIndexes(ctx *sql.Context, database Database, parent sql.Table
 	if _, ok = fulltextAlterable.(sql.StatisticsTable); !ok {
 		return sql.ErrFullTextNotSupported.New()
 	}
-	tblSch := parent.Schema()
+	tblSch := parent.Schema(ctx)
 
 	// Grab the key columns, which we will share among all indexes
 	keyCols, insertCols, err := GetKeyColumns(ctx, fulltextAlterable)

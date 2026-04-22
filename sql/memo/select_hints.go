@@ -32,6 +32,7 @@ const (
 	HintTypeUnknown                  HintType = iota //
 	HintTypeJoinOrder                                // JOIN_ORDER
 	HintTypeJoinFixedOrder                           // JOIN_FIXED_ORDER
+	HintTypeNoMergeJoin                              // NO_MERGE_JOIN
 	HintTypeMergeJoin                                // MERGE_JOIN
 	HintTypeLookupJoin                               // LOOKUP_JOIN
 	HintTypeHashJoin                                 // HASH_JOIN
@@ -44,8 +45,8 @@ const (
 )
 
 type Hint struct {
-	Typ  HintType
 	Args []string
+	Typ  HintType
 }
 
 func (h Hint) String() string {
@@ -81,6 +82,8 @@ func newHint(joinTyp string, args []string) Hint {
 		typ = HintTypeNoIndexConditionPushDown
 	case "left_deep":
 		typ = HintTypeLeftDeep
+	case "no_merge_join":
+		typ = HintTypeNoMergeJoin
 	default:
 		typ = HintTypeUnknown
 	}
@@ -111,6 +114,8 @@ func (h Hint) valid() bool {
 		return len(h.Args) == 0
 	case HintTypeLeftDeep:
 		return len(h.Args) == 0
+	case HintTypeNoMergeJoin:
+		return true
 	case HintTypeUnknown:
 		return false
 	default:
@@ -194,7 +199,7 @@ func (o joinOrderHint) build(grp *ExprGroup) {
 	}
 	o.groups[grp.Id] = s
 
-	for _, g := range grp.children() {
+	for g := range grp.children {
 		if _, ok := o.groups[g.Id]; !ok {
 			// avoid duplicate work
 			o.build(g)
@@ -278,8 +283,9 @@ func (o joinOrderHint) isCompact(s1, s2 vertexSet) bool {
 // joinOpHint encodes a hint for a physical operator between
 // two relations.
 type joinOpHint struct {
-	op   HintType
-	l, r sql.FastIntSet
+	l  sql.FastIntSet
+	r  sql.FastIntSet
+	op HintType
 }
 
 func newjoinOpHint(op HintType, left, right sql.TableId) joinOpHint {
@@ -370,13 +376,15 @@ func (o joinOpHint) typeMatches(n RelExpr) bool {
 // joinHints wraps a collection of join hints. The memo
 // interfaces with this object during costing.
 type joinHints struct {
-	ops      []joinOpHint
-	order    *joinOrderHint
-	leftDeep bool
+	order            *joinOrderHint
+	ops              []joinOpHint
+	leftDeep         bool
+	disableMergeJoin bool
 }
 
+// isEmpty returns true if no hints that affect join planning have been set.
 func (h joinHints) isEmpty() bool {
-	return len(h.ops) == 0 && h.order == nil && !h.leftDeep
+	return len(h.ops) == 0 && h.order == nil && !h.leftDeep && !h.disableMergeJoin
 }
 
 // satisfiedBy returns whether a RelExpr satisfies every join hint. This

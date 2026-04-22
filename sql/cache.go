@@ -17,42 +17,9 @@ package sql
 import (
 	"fmt"
 	"runtime"
-	"sync"
-
-	"github.com/cespare/xxhash/v2"
 
 	lru "github.com/hashicorp/golang-lru"
 )
-
-// HashOf returns a hash of the given value to be used as key in a cache.
-func HashOf(v Row) (uint64, error) {
-	hash := digestPool.Get().(*xxhash.Digest)
-	hash.Reset()
-	defer digestPool.Put(hash)
-	for i, x := range v {
-		if i > 0 {
-			// separate each value in the row with a nil byte
-			if _, err := hash.Write([]byte{0}); err != nil {
-				return 0, err
-			}
-		}
-
-		// TODO: probably much faster to do this with a type switch
-		// TODO: we don't have the type info necessary to appropriately encode the value of a string with a non-standard
-		//  collation, which means that two strings that differ only in their collations will hash to the same value.
-		//  See rowexec/grouping_key()
-		if _, err := fmt.Fprintf(hash, "%v,", x); err != nil {
-			return 0, err
-		}
-	}
-	return hash.Sum64(), nil
-}
-
-var digestPool = sync.Pool{
-	New: func() any {
-		return xxhash.New()
-	},
-}
 
 // ErrKeyNotFound is returned when the key could not be found in the cache.
 var ErrKeyNotFound = fmt.Errorf("memory: key not found in cache")
@@ -60,8 +27,8 @@ var ErrKeyNotFound = fmt.Errorf("memory: key not found in cache")
 type lruCache struct {
 	memory   Freeable
 	reporter Reporter
-	size     int
 	cache    *lru.Cache
+	size     int
 }
 
 func (l *lruCache) Size() int {
@@ -70,7 +37,12 @@ func (l *lruCache) Size() int {
 
 func newLRUCache(memory Freeable, r Reporter, size uint) *lruCache {
 	lru, _ := lru.New(int(size))
-	return &lruCache{memory, r, int(size), lru}
+	return &lruCache{
+		memory:   memory,
+		reporter: r,
+		cache:    lru,
+		size:     int(size),
+	}
 }
 
 func (l *lruCache) Put(k uint64, v interface{}) error {
@@ -93,16 +65,16 @@ func (l *lruCache) Free() {
 	l.cache, _ = lru.New(l.size)
 }
 
-func (l *lruCache) Dispose() {
+func (l *lruCache) Dispose(ctx *Context) {
 	l.memory = nil
 	l.cache = nil
 }
 
 type rowsCache struct {
-	memory   Freeable
-	reporter Reporter
-	rows     []Row
-	rows2    []Row2
+	memory    Freeable
+	reporter  Reporter
+	rows      []Row
+	valueRows []ValueRow
 }
 
 func newRowsCache(memory Freeable, r Reporter) *rowsCache {
@@ -120,20 +92,20 @@ func (c *rowsCache) Add(row Row) error {
 
 func (c *rowsCache) Get() []Row { return c.rows }
 
-func (c *rowsCache) Add2(row2 Row2) error {
+func (c *rowsCache) AddValueRow(row ValueRow) error {
 	if !releaseMemoryIfNeeded(c.reporter, c.memory.Free) {
 		return ErrNoMemoryAvailable.New()
 	}
 
-	c.rows2 = append(c.rows2, row2)
+	c.valueRows = append(c.valueRows, row)
 	return nil
 }
 
-func (c *rowsCache) Get2() []Row2 {
-	return c.rows2
+func (c *rowsCache) GetValueRow() []ValueRow {
+	return c.valueRows
 }
 
-func (c *rowsCache) Dispose() {
+func (c *rowsCache) Dispose(ctx *Context) {
 	c.memory = nil
 	c.rows = nil
 }
@@ -196,7 +168,7 @@ func (h *historyCache) Get(k uint64) (interface{}, error) {
 	return v, nil
 }
 
-func (h *historyCache) Dispose() {
+func (h *historyCache) Dispose(ctx *Context) {
 	h.memory = nil
 	h.cache = nil
 }

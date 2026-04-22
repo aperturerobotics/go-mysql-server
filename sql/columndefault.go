@@ -82,9 +82,15 @@ func (e *ColumnDefaultValue) Eval(ctx *Context, r Row) (interface{}, error) {
 
 	if e.OutType != nil {
 		var inRange ConvertInRange
-		if val, inRange, err = e.OutType.Convert(val); err != nil {
+		if roundType, isRoundType := e.OutType.(RoundingNumberType); isRoundType {
+			val, inRange, err = roundType.ConvertRound(ctx, val)
+		} else {
+			val, inRange, err = e.OutType.Convert(ctx, val)
+		}
+		if err != nil {
 			return nil, ErrIncompatibleDefaultType.New()
-		} else if !inRange {
+		}
+		if inRange != InRange {
 			return nil, ErrValueOutOfRange.New(val, e.OutType)
 		}
 	}
@@ -113,14 +119,14 @@ func (e *ColumnDefaultValue) IsParenthesized() bool {
 }
 
 // IsNullable implements sql.Expression
-func (e *ColumnDefaultValue) IsNullable() bool {
+func (e *ColumnDefaultValue) IsNullable(ctx *Context) bool {
 	if e == nil {
 		return true
 	}
 	if !e.ReturnNil {
 		return false
 	}
-	return e.Expr.IsNullable()
+	return e.Expr.IsNullable(ctx)
 }
 
 // Resolved implements sql.Expression
@@ -168,27 +174,27 @@ func (e *ColumnDefaultValue) String() string {
 	return fmt.Sprintf("(%s)", str)
 }
 
-func (e *ColumnDefaultValue) DebugString() string {
+func (e *ColumnDefaultValue) DebugString(ctx *Context) string {
 	if e == nil {
 		return ""
 	}
 
 	if e.Literal {
-		return DebugString(e.Expr)
+		return DebugString(ctx, e.Expr)
 	} else if e.Parenthesized {
-		return fmt.Sprintf("parenthesized(%s)", DebugString(e.Expr))
+		return fmt.Sprintf("parenthesized(%s)", DebugString(ctx, e.Expr))
 	} else {
-		return fmt.Sprintf("(%s)", DebugString(e.Expr))
+		return fmt.Sprintf("(%s)", DebugString(ctx, e.Expr))
 	}
 }
 
 // Type implements sql.Expression
-func (e *ColumnDefaultValue) Type() Type {
+func (e *ColumnDefaultValue) Type(ctx *Context) Type {
 	if e == nil {
 		return nil
 	}
 	if e.OutType == nil {
-		return e.Expr.Type()
+		return e.Expr.Type(ctx)
 	}
 	return e.OutType
 }
@@ -202,7 +208,7 @@ func (e *ColumnDefaultValue) CollationCoercibility(ctx *Context) (collation Coll
 }
 
 // WithChildren implements sql.Expression
-func (e *ColumnDefaultValue) WithChildren(children ...Expression) (Expression, error) {
+func (e *ColumnDefaultValue) WithChildren(ctx *Context, children ...Expression) (Expression, error) {
 	if e == nil && len(children) == 0 {
 		return e, nil
 	}
@@ -227,13 +233,18 @@ func (e *ColumnDefaultValue) CheckType(ctx *Context) error {
 		if val == nil && !e.ReturnNil {
 			return ErrIncompatibleDefaultType.New()
 		}
-		_, inRange, err := e.OutType.Convert(val)
+		var inRange ConvertInRange
+		if roundType, isRoundType := e.OutType.(RoundingNumberType); isRoundType {
+			val, inRange, err = roundType.ConvertRound(ctx, val)
+		} else {
+			val, inRange, err = e.OutType.Convert(ctx, val)
+		}
 		if err != nil {
 			return ErrIncompatibleDefaultType.Wrap(err)
-		} else if !inRange {
+		}
+		if inRange != InRange {
 			return ErrIncompatibleDefaultType.Wrap(ErrValueOutOfRange.New(val, e.Expr))
 		}
-
 	}
 	return nil
 }
@@ -253,7 +264,7 @@ func (u UnresolvedColumnDefault) String() string {
 	return u.ExprString
 }
 
-func (u UnresolvedColumnDefault) Type() Type {
+func (u UnresolvedColumnDefault) Type(ctx *Context) Type {
 	panic("UnresolvedColumnDefault is a placeholder node, but Type() was called")
 }
 
@@ -262,7 +273,7 @@ func (UnresolvedColumnDefault) CollationCoercibility(ctx *Context) (collation Co
 	return Collation_binary, 7
 }
 
-func (u UnresolvedColumnDefault) IsNullable() bool {
+func (u UnresolvedColumnDefault) IsNullable(ctx *Context) bool {
 	return true
 }
 
@@ -274,7 +285,7 @@ func (u UnresolvedColumnDefault) Children() []Expression {
 	return nil
 }
 
-func (u UnresolvedColumnDefault) WithChildren(children ...Expression) (Expression, error) {
+func (u UnresolvedColumnDefault) WithChildren(ctx *Context, children ...Expression) (Expression, error) {
 	if len(children) != 0 {
 		return nil, ErrInvalidChildrenNumber.New(u, len(children), 0)
 	}

@@ -1,4 +1,4 @@
-// Copyright 2021 Dolthub, Inc.
+// Copyright 2021-2025 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 package function
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -25,21 +26,25 @@ import (
 )
 
 func TestRegexpReplaceInvalidArgNumber(t *testing.T) {
-	_, err := NewRegexpReplace()
+	ctx := sql.NewEmptyContext()
+	_, err := NewRegexpReplace(ctx)
 	require.Error(t, err)
 
 	_, err = NewRegexpReplace(
+		ctx,
 		expression.NewGetField(0, types.LongText, "str", true),
 	)
 	require.Error(t, err)
 
 	_, err = NewRegexpReplace(
+		ctx,
 		expression.NewGetField(0, types.LongText, "str", true),
 		expression.NewGetField(1, types.LongText, "pattern", true),
 	)
 	require.Error(t, err)
 
 	_, err = NewRegexpReplace(
+		ctx,
 		expression.NewGetField(0, types.LongText, "str", true),
 		expression.NewGetField(1, types.LongText, "pattern", true),
 		expression.NewGetField(2, types.LongText, "replaceStr", true),
@@ -52,7 +57,9 @@ func TestRegexpReplaceInvalidArgNumber(t *testing.T) {
 }
 
 func TestRegexpReplace(t *testing.T) {
+	ctx := sql.NewEmptyContext()
 	f, err := NewRegexpReplace(
+		ctx,
 		expression.NewGetField(0, types.LongText, "str", true),
 		expression.NewGetField(1, types.LongText, "pattern", true),
 		expression.NewGetField(2, types.LongText, "replaceStr", true),
@@ -126,7 +133,9 @@ func TestRegexpReplace(t *testing.T) {
 }
 
 func TestRegexpReplaceWithPosition(t *testing.T) {
+	ctx := sql.NewEmptyContext()
 	f, err := NewRegexpReplace(
+		ctx,
 		expression.NewGetField(0, types.LongText, "str", true),
 		expression.NewGetField(1, types.LongText, "pattern", true),
 		expression.NewGetField(2, types.LongText, "replaceStr", true),
@@ -207,7 +216,9 @@ func TestRegexpReplaceWithPosition(t *testing.T) {
 }
 
 func TestRegexpReplaceWithOccurrence(t *testing.T) {
+	ctx := sql.NewEmptyContext()
 	f, err := NewRegexpReplace(
+		ctx,
 		expression.NewGetField(0, types.LongText, "str", true),
 		expression.NewGetField(1, types.LongText, "pattern", true),
 		expression.NewGetField(2, types.LongText, "replaceStr", true),
@@ -289,7 +300,9 @@ func TestRegexpReplaceWithOccurrence(t *testing.T) {
 }
 
 func TestRegexpReplaceWithFlags(t *testing.T) {
+	ctx := sql.NewEmptyContext()
 	f, err := NewRegexpReplace(
+		ctx,
 		expression.NewGetField(0, types.LongText, "str", true),
 		expression.NewGetField(1, types.LongText, "pattern", true),
 		expression.NewGetField(2, types.LongText, "replaceStr", true),
@@ -374,5 +387,41 @@ func TestRegexpReplaceWithFlags(t *testing.T) {
 				require.Equal(tt.expected, val)
 			}
 		})
+	}
+}
+
+// Last Run: 06/17/2025
+// BenchmarkRegexpReplace
+// BenchmarkRegexpReplace-14    	     100	  97385769 ns/op
+// BenchmarkRegexpReplace-14    	   10000	   1012373 ns/op
+func BenchmarkRegexpReplace(b *testing.B) {
+	ctx := sql.NewEmptyContext()
+	// TODO: for some reason large datasets cause this to hang
+	data := make([]sql.Row, 11)
+	for i := range data {
+		data[i] = sql.Row{fmt.Sprintf("test%d", i)}
+	}
+
+	for i := 0; i < b.N; i++ {
+		f, err := NewRegexpReplace(
+			ctx,
+			expression.NewGetField(0, types.LongText, "text", false),
+			expression.NewLiteral("^test[0-9]$", types.LongText),
+			expression.NewLiteral("abc", types.LongText),
+		)
+		require.NoError(b, err)
+		var total int
+		for _, row := range data {
+			res, err := f.Eval(ctx, row)
+			if err != nil {
+				require.NoError(b, err)
+			}
+			require.NoError(b, err)
+			if res.(string)[:3] == "abc" {
+				total++
+			}
+		}
+		require.Equal(b, 10, total)
+		f.(*RegexpReplace).Dispose(ctx)
 	}
 }

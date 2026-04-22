@@ -15,45 +15,78 @@
 package server
 
 import (
+	"crypto/tls"
+	"net"
 	"time"
 
-	"github.com/sirupsen/logrus"
+	"github.com/dolthub/vitess/go/mysql"
 	"go.opentelemetry.io/otel/trace"
 
 	gms "github.com/dolthub/go-mysql-server"
-	sqle "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/vitess/go/mysql"
 )
-
-// Option is an option to customize server.
-type Option func(e *sqle.Engine, sm *SessionManager, handler mysql.Handler)
 
 // Server is a MySQL server for SQLe engines.
 type Server struct {
+	Listener   ProtocolListener
 	handler    mysql.Handler
 	sessionMgr *SessionManager
 	Engine     *gms.Engine
-	le         *logrus.Entry
 }
+
+// An option to customize the server.
+type Option func(e *gms.Engine, sm *SessionManager, handler mysql.Handler) (*gms.Engine, *SessionManager, mysql.Handler)
 
 // Config for the mysql server.
 type Config struct {
+	// Custom listener for the mysql server. Use this if you don't want ports or unix sockets to be opened automatically.
+	// This can be useful in testing by using a pure go net.Conn implementation.
+	Listener net.Listener
+	// Tracer to use in the server. By default, a noop tracer will be used if
+	// no tracer is provided.
+	Tracer trace.Tracer
+	// QueryCounter is a metrics.Counter that counts the number of queries executed.
+	QueryCounter Counter
+	// QueryErrorCounter is a metrics.Counter that counts the number of queries that resulted in an error.
+	QueryErrorCounter Counter
+	// QueryHistogram is a metrics.Histogram that measures the duration of queries executed.
+	QueryHistogram Histogram
+	// Used to get the ProtocolListener on server start.
+	// If unset, defaults to MySQLProtocolListenerFactory.
+	ProtocolListenerFactory ProtocolListenerFunc
+	TLSConfig               *tls.Config
+
 	// Protocol for the connection.
 	Protocol string
 	// Address of the server.
 	Address string
-	// Tracer to use in the server. By default, a noop tracer will be used if
-	// no tracer is provided.
-	Tracer trace.Tracer
+	// Socket is a path to unix socket file
+	Socket string
 	// Version string to advertise in running server
 	Version string
+
+	// Options gets a chance to visit and mutate the GMS *Engine,
+	// *server.SessionManager and the mysql.Handler as the server
+	// is being initialized, before the ProtocolListener is
+	// constructed.
+	Options []Option
 	// ConnReadTimeout is the server's read timeout
 	ConnReadTimeout time.Duration
 	// ConnWriteTimeout is the server's write timeout
 	ConnWriteTimeout time.Duration
+	// MaxWaitConnectionsTimeout is the maximum amount of time that a connection will block waiting for a connection
+	MaxWaitConnectionsTimeout time.Duration
+
+	// MaxLoggedQueryLen sets the length at which queries written to the logs are truncated.  A value of 0 will
+	// result in no truncation. A value less than 0 will result in the queries being omitted from the logs completely
+	MaxLoggedQueryLen int
 	// MaxConnections is the maximum number of simultaneous connections that the server will allow.
 	MaxConnections uint64
+	// MaxWaitConnections is the maximum number of simultaneous connections that the server will allow to block waiting
+	// for a connection before new connections result in immediate rejection.
+	MaxWaitConnections uint32
+	// RequestSecureTransport will require incoming connections to be TLS. Requires non-|nil| TLSConfig.
+	RequireSecureTransport bool
 	// DisableClientMultiStatements will prevent processing of incoming
 	// queries as if they contain more than one query. This processing
 	// currently works in some simple cases, but breaks in the presence of
@@ -64,17 +97,11 @@ type Config struct {
 	DisableClientMultiStatements bool
 	// NoDefaults prevents using persisted configuration for new server sessions
 	NoDefaults bool
-	// Logger is the logger to use, otherwise uses stderr.
-	Logger *logrus.Entry
-	// MaxLoggedQueryLen sets the length at which queries written to the logs are truncated.  A value of 0 will
-	// result in no truncation. A value less than 0 will result in the queries being omitted from the logs completely
-	MaxLoggedQueryLen int
 	// EncodeLoggedQuery determines if logged queries are base64 encoded.
 	// If true, queries will be logged as base64 encoded strings.
 	// If false (default behavior), queries will be logged as strings, but newlines and tabs will be replaced with spaces.
-	EncodeLoggedQuery bool
-	// Options add additional options to customize the server.
-	Options []Option
+	EncodeLoggedQuery        bool
+	AllowClearTextWithoutTLS bool
 }
 
 func (c Config) NewConfig() (Config, error) {
@@ -90,14 +117,14 @@ func (c Config) NewConfig() (Config, error) {
 		if !ok {
 			return Config{}, sql.ErrUnknownSystemVariable.New("net_write_timeout")
 		}
-		c.ConnWriteTimeout = time.Duration(timeout) * time.Millisecond
+		c.ConnWriteTimeout = time.Duration(timeout) * time.Second
 	}
 	if _, val, ok := sql.SystemVariables.GetGlobal("net_read_timeout"); ok {
 		timeout, ok := val.(int64)
 		if !ok {
 			return Config{}, sql.ErrUnknownSystemVariable.New("net_read_timeout")
 		}
-		c.ConnReadTimeout = time.Duration(timeout) * time.Millisecond
+		c.ConnReadTimeout = time.Duration(timeout) * time.Second
 	}
 	return c, nil
 }

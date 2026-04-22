@@ -31,7 +31,7 @@ var _ sql.FunctionExpression = (*Point)(nil)
 var _ sql.CollationCoercible = (*Point)(nil)
 
 // NewPoint creates a new point expression.
-func NewPoint(e1, e2 sql.Expression) sql.Expression {
+func NewPoint(ctx *sql.Context, e1, e2 sql.Expression) sql.Expression {
 	return &Point{e1, e2}
 }
 
@@ -56,12 +56,12 @@ func (p *Point) Resolved() bool {
 }
 
 // IsNullable implements the sql.Expression interface.
-func (p *Point) IsNullable() bool {
-	return p.X.IsNullable() || p.Y.IsNullable()
+func (p *Point) IsNullable(ctx *sql.Context) bool {
+	return p.X.IsNullable(ctx) || p.Y.IsNullable(ctx)
 }
 
 // Type implements the sql.Expression interface.
-func (p *Point) Type() sql.Type {
+func (p *Point) Type(ctx *sql.Context) sql.Type {
 	return types.PointType{}
 }
 
@@ -75,11 +75,11 @@ func (p *Point) String() string {
 }
 
 // WithChildren implements the Expression interface.
-func (p *Point) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (p *Point) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(p, len(children), 2)
 	}
-	return NewPoint(children[0], children[1]), nil
+	return NewPoint(ctx, children[0], children[1]), nil
 }
 
 // Eval implements the sql.Expression interface.
@@ -94,7 +94,7 @@ func (p *Point) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	// Convert to float64
-	_x, _, err := types.Float64.Convert(x)
+	_x, _, err := types.Float64.Convert(ctx, x)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +109,7 @@ func (p *Point) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	// Convert to float64
-	_y, _, err := types.Float64.Convert(y)
+	_y, _, err := types.Float64.Convert(ctx, y)
 	if err != nil {
 		return nil, err
 	}

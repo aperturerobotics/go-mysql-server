@@ -28,10 +28,8 @@ type RuleSelector func(RuleId) bool
 
 // Rule to transform nodes.
 type Rule struct {
-	// Name of the rule.
-	Id RuleId
-	// Apply transforms a node.
 	Apply RuleFunc
+	Id    RuleId
 }
 
 // BatchSelector filters analysis batches by name
@@ -42,8 +40,8 @@ type BatchSelector func(string) bool
 // and ErrMaxAnalysisIters is returned.
 type Batch struct {
 	Desc       string
-	Iterations int
 	Rules      []Rule
+	Iterations int
 }
 
 // Eval executes the rules of the batch. On any error, the partially transformed node is returned along with the error.
@@ -87,10 +85,10 @@ func (b *Batch) evalOnce(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.
 		next, same, err = rule.Apply(ctx, a, prev, scope, sel, qFlags)
 		allSame = same && allSame
 		if next != nil && !same {
-			a.LogNode(next)
+			a.LogNode(ctx, next)
 			// We should only do this if the result has changed, but some rules currently misbehave and falsely report nothing
 			// changed
-			a.LogDiff(prev, next)
+			a.LogDiff(ctx, prev, next)
 		}
 		a.PopDebugContext()
 		if err != nil {

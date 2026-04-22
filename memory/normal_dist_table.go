@@ -29,7 +29,7 @@ func (s NormalDistTable) UnderlyingTable() sql.Table {
 	return s
 }
 
-func (s NormalDistTable) NewInstance(_ *sql.Context, db sql.Database, args []sql.Expression) (sql.Node, error) {
+func (s NormalDistTable) NewInstance(ctx *sql.Context, db sql.Database, args []sql.Expression) (sql.Node, error) {
 	if len(args) != 4 {
 		return nil, fmt.Errorf("normal_dist table expects 4 arguments: (cols, rows, mean, std)")
 	}
@@ -37,32 +37,32 @@ func (s NormalDistTable) NewInstance(_ *sql.Context, db sql.Database, args []sql
 	if !ok {
 		return nil, fmt.Errorf("normal_dist table expects arguments to be literal expressions")
 	}
-	colCnt, inBounds, _ := types.Int64.Convert(colCntLit.Value())
-	if !inBounds {
+	colCnt, inRange, _ := types.Int64.Convert(ctx, colCntLit.Value())
+	if inRange != sql.InRange {
 		return nil, fmt.Errorf("normal_dist table expects 1st argument to be column count")
 	}
 	rowCntLit, ok := args[1].(*expression.Literal)
 	if !ok {
 		return nil, fmt.Errorf("normal_dist table expects arguments to be literal expressions")
 	}
-	rowCnt, inBounds, _ := types.Int64.Convert(rowCntLit.Value())
-	if !inBounds {
+	rowCnt, inRange, _ := types.Int64.Convert(ctx, rowCntLit.Value())
+	if inRange != sql.InRange {
 		return nil, fmt.Errorf("normal_dist table expects 2nd argument to be row count")
 	}
 	meanLit, ok := args[2].(*expression.Literal)
 	if !ok {
 		return nil, fmt.Errorf("normal_dist table expects arguments to be literal expressions")
 	}
-	mean, inBounds, _ := types.Float64.Convert(meanLit.Value())
-	if !inBounds {
+	mean, inRange, _ := types.Float64.Convert(ctx, meanLit.Value())
+	if inRange != sql.InRange {
 		return nil, fmt.Errorf("normal_dist table expects 3rd argument to be row count")
 	}
 	stdLit, ok := args[3].(*expression.Literal)
 	if !ok {
 		return nil, fmt.Errorf("normal_dist table expects arguments to be literal expressions")
 	}
-	std, inBounds, _ := types.Float64.Convert(stdLit.Value())
-	if !inBounds {
+	std, inRange, _ := types.Float64.Convert(ctx, stdLit.Value())
+	if inRange != sql.InRange {
 		return nil, fmt.Errorf("normal_dist table expects 4th argument to be row count")
 	}
 
@@ -81,7 +81,7 @@ func (s NormalDistTable) String() string {
 	return "normal_dist"
 }
 
-func (s NormalDistTable) DebugString() string {
+func (s NormalDistTable) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("normal_dist")
 	children := []string{
@@ -94,7 +94,7 @@ func (s NormalDistTable) DebugString() string {
 	return pr.String()
 }
 
-func (s NormalDistTable) Schema() sql.Schema {
+func (s NormalDistTable) Schema(ctx *sql.Context) sql.Schema {
 	var sch sql.Schema
 	for i := 0; i < s.colCnt+1; i++ {
 		sch = append(sch, &sql.Column{
@@ -115,12 +115,8 @@ func (s NormalDistTable) RowIter(_ *sql.Context, _ sql.Row) (sql.RowIter, error)
 	return stats.NewNormDistIter(s.colCnt, s.rowCnt, s.mean, s.std), nil
 }
 
-func (s NormalDistTable) WithChildren(_ ...sql.Node) (sql.Node, error) {
+func (s NormalDistTable) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	return s, nil
-}
-
-func (s NormalDistTable) CheckPrivileges(_ *sql.Context, _ sql.PrivilegedOperationChecker) bool {
-	return true
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -137,7 +133,7 @@ func (s NormalDistTable) Expressions() []sql.Expression {
 	return []sql.Expression{}
 }
 
-func (s NormalDistTable) WithExpressions(e ...sql.Expression) (sql.Node, error) {
+func (s NormalDistTable) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	return s, nil
 }
 

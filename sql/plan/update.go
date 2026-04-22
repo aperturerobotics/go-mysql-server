@@ -21,6 +21,7 @@ import (
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
+	"github.com/dolthub/go-mysql-server/sql/transform"
 )
 
 var ErrUpdateNotSupported = errors.NewKind("table doesn't support UPDATE")
@@ -30,11 +31,16 @@ var ErrUpdateUnexpectedSetResult = errors.NewKind("attempted to set field but ex
 // Update is a node for updating rows on tables.
 type Update struct {
 	UnaryNode
-	checks       sql.CheckConstraints
-	Ignore       bool
+	checks sql.CheckConstraints
+	// Returning is a list of expressions to return after the update operation. This feature is not
+	// supported in MySQL's syntax, but is exposed through PostgreSQL's syntax.
+	Returning []sql.Expression
+	// IsJoin is true only for explicit UPDATE JOIN queries. It's possible for Update.IsJoin to be false and
+	// Update.Child to be an UpdateJoin since subqueries are optimized as Joins
 	IsJoin       bool
 	HasSingleRel bool
 	IsProcNested bool
+	Ignore       bool
 }
 
 var _ sql.Node = (*Update)(nil)
@@ -43,7 +49,7 @@ var _ sql.CollationCoercible = (*Update)(nil)
 var _ sql.CheckConstraintNode = (*Update)(nil)
 
 // NewUpdate creates an Update node.
-func NewUpdate(n sql.Node, ignore bool, updateExprs []sql.Expression) *Update {
+func NewUpdate(n sql.Node, ignore bool, updateExprs *UpdateExprs) *Update {
 	return &Update{
 		UnaryNode: UnaryNode{NewUpdateSource(
 			n,
@@ -94,22 +100,22 @@ func getUpdatableTable(t sql.Table) (sql.UpdatableTable, error) {
 	}
 }
 
-// GetDatabase returns the first database found in the node tree given
-func GetDatabase(node sql.Node) sql.Database {
-	switch node := node.(type) {
-	case *IndexedTableAccess:
-		return GetDatabase(node.TableNode)
-	case *ResolvedTable:
-		return node.Database()
-	case *UnresolvedTable:
-		return node.Database()
+// Schema implements the sql.Node interface.
+func (u *Update) Schema(ctx *sql.Context) sql.Schema {
+	// Postgres allows the returned values of the update statement to be controlled, so if returning
+	// expressions were specified, then we return a different schema.
+	if u.Returning != nil {
+		// We know that returning exprs are resolved here, because you can't call Schema()
+		// safely until Resolved() is true.
+		returningSchema := sql.Schema{}
+		for _, expr := range u.Returning {
+			returningSchema = append(returningSchema, transform.ExpressionToColumn(ctx, expr, ""))
+		}
+
+		return returningSchema
 	}
 
-	for _, child := range node.Children() {
-		return GetDatabase(child)
-	}
-
-	return nil
+	return u.Child.Schema(ctx)
 }
 
 func (u *Update) Checks() sql.CheckConstraints {
@@ -140,25 +146,33 @@ func (u *Update) Database() string {
 }
 
 func (u *Update) Expressions() []sql.Expression {
-	return u.checks.ToExpressions()
+	return append(u.checks.ToExpressions(), u.Returning...)
 }
 
 func (u *Update) Resolved() bool {
-	return u.Child.Resolved() && expression.ExpressionsResolved(u.checks.ToExpressions()...)
+	return u.Child.Resolved() &&
+		expression.ExpressionsResolved(u.checks.ToExpressions()...) &&
+		expression.ExpressionsResolved(u.Returning...)
+
 }
 
-func (u Update) WithExpressions(newExprs ...sql.Expression) (sql.Node, error) {
-	if len(newExprs) != len(u.checks) {
-		return nil, sql.ErrInvalidChildrenNumber.New(u, len(newExprs), len(u.checks))
+func (u *Update) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
+	numChecks := len(u.checks)
+	expectedLength := numChecks + len(u.Returning)
+	if len(exprs) != expectedLength {
+		return nil, sql.ErrInvalidExpressionNumber.New(u, len(exprs), expectedLength)
 	}
 
 	var err error
-	u.checks, err = u.checks.FromExpressions(newExprs)
+	ret := *u
+	ret.checks, err = u.checks.FromExpressions(exprs[:numChecks])
 	if err != nil {
 		return nil, err
 	}
 
-	return &u, nil
+	ret.Returning = exprs[numChecks:]
+
+	return &ret, nil
 }
 
 // UpdateInfo is the Info for OKResults returned by Update nodes.
@@ -172,26 +186,13 @@ func (ui UpdateInfo) String() string {
 }
 
 // WithChildren implements the Node interface.
-func (u *Update) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (u *Update) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(u, len(children), 1)
 	}
 	np := *u
 	np.Child = children[0]
 	return &np, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (u *Update) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	//TODO: If column values are retrieved then the SELECT privilege is required
-	// For example: "UPDATE table SET x = y + 1 WHERE z > 0"
-	// We would need SELECT privileges on both the "y" and "z" columns as they're retrieving values
-	subject := sql.PrivilegeCheckSubject{
-		Database: CheckPrivilegeNameForDatabase(u.DB()),
-		Table:    getTableName(u.Child),
-	}
-	// TODO: this needs a real database, fix it
-	return opChecker.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Update))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -206,9 +207,78 @@ func (u *Update) String() string {
 	return pr.String()
 }
 
-func (u *Update) DebugString() string {
+func (u *Update) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("Update")
-	_ = pr.WriteChildren(sql.DebugString(u.Child))
+	_ = pr.WriteChildren(sql.DebugString(ctx, u.Child))
 	return pr.String()
+}
+
+type UpdateExprs struct {
+	exprs []sql.Expression
+	// numExplicitExprs is the number of explicit update expressions. Explicit updates are updates that are explicitly
+	// part of a query, as opposed to derived updates, which are derived from the table's column definitions.
+	// numExplicitExprs is used to index into exprs to separate explicit and derived expressions when needed
+	numExplicitExprs int
+}
+
+func NewUpdateExprs(exprs []sql.Expression, numExplicitExprs int) *UpdateExprs {
+	return &UpdateExprs{
+		exprs:            exprs,
+		numExplicitExprs: numExplicitExprs,
+	}
+}
+
+func (ue *UpdateExprs) AllExpressions() []sql.Expression {
+	if ue == nil {
+		return nil
+	}
+	return ue.exprs
+}
+
+func (ue *UpdateExprs) WithExpressions(newExprs []sql.Expression) (*UpdateExprs, error) {
+	length := ue.Length()
+	if len(newExprs) != length {
+		return nil, sql.ErrInvalidExpressionNumber.New(ue, length, 1)
+	}
+	if length == 0 {
+		return ue, nil
+	}
+	ret := *ue
+	ret.exprs = newExprs
+	return &ret, nil
+}
+
+// ExplicitUpdateExprs returns update expressions that are explicitly part of a query.
+func (ue *UpdateExprs) ExplicitUpdateExprs() []sql.Expression {
+	return ue.exprs[:ue.numExplicitExprs]
+}
+
+// DerivedUpdateExprs returns update expressions derived from a table's column definition. This includes
+// updates on generated columns and ON UPDATE columns. Derived update expressions should only be applied when explicit
+// updates actually yield a change in the row's values
+func (ue *UpdateExprs) DerivedUpdateExprs() []sql.Expression {
+	return ue.exprs[ue.numExplicitExprs:]
+}
+
+func (ue *UpdateExprs) Resolved() bool {
+	if ue == nil {
+		return true
+	}
+	return expression.ExpressionsResolved(ue.exprs...)
+}
+
+func (ue *UpdateExprs) Length() int {
+	if ue == nil {
+		return 0
+	}
+	return len(ue.exprs)
+}
+
+func (ue *UpdateExprs) HasUpdates() bool {
+	return ue != nil && len(ue.exprs) > 0
+}
+
+func (ue *UpdateExprs) HasDerivedUpdates() bool {
+	return ue != nil && len(ue.exprs) > ue.numExplicitExprs
 }

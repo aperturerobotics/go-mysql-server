@@ -23,6 +23,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/plan"
+	"github.com/dolthub/go-mysql-server/sql/procedures"
 )
 
 func (b *BaseBuilder) buildCaseStatement(ctx *sql.Context, n *plan.CaseStatement, row sql.Row) (sql.RowIter, error) {
@@ -36,7 +37,7 @@ func (b *BaseBuilder) buildCaseStatement(ctx *sql.Context, n *plan.CaseStatement
 		if err != nil {
 			return nil, err
 		}
-		comparison, err := n.Expr.Type().Compare(caseValue, whenValue)
+		comparison, err := n.Expr.Type(ctx).Compare(ctx, caseValue, whenValue)
 		if err != nil {
 			return nil, err
 		}
@@ -64,7 +65,7 @@ func (b *BaseBuilder) buildCaseIter(ctx *sql.Context, row sql.Row, iterNode sql.
 	}
 	return &ifElseIter{
 		branchIter: branchIter,
-		sch:        bodyNode.Schema(),
+		sch:        bodyNode.Schema(ctx),
 		branchNode: bodyNode,
 	}, nil
 }
@@ -106,7 +107,7 @@ func (b *BaseBuilder) buildIfElseBlock(ctx *sql.Context, n *plan.IfElseBlock, ro
 		}
 		return &ifElseIter{
 			branchIter: branchIter,
-			sch:        ifConditional.Body.Schema(),
+			sch:        ifConditional.Body.Schema(ctx),
 			branchNode: ifConditional.Body,
 		}, nil
 	}
@@ -129,7 +130,7 @@ func (b *BaseBuilder) buildIfElseBlock(ctx *sql.Context, n *plan.IfElseBlock, ro
 	}
 	return &ifElseIter{
 		branchIter: branchIter,
-		sch:        n.Else.Schema(),
+		sch:        n.Else.Schema(ctx),
 		branchNode: n.Else,
 	}, nil
 }
@@ -181,29 +182,95 @@ func (b *BaseBuilder) buildProcedureResolvedTable(ctx *sql.Context, n *plan.Proc
 }
 
 func (b *BaseBuilder) buildCall(ctx *sql.Context, n *plan.Call, row sql.Row) (sql.RowIter, error) {
-	for i, paramExpr := range n.Params {
-		val, err := paramExpr.Eval(ctx, row)
+	if n.Procedure.ExternalProc != nil {
+		for i, paramExpr := range n.Params {
+			val, err := paramExpr.Eval(ctx, row)
+			if err != nil {
+				return nil, err
+			}
+			paramName := n.Procedure.Params[i].Name
+			paramType := n.Procedure.Params[i].Type
+			err = n.Pref.InitializeVariable(ctx, paramName, paramType, val)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		n.Pref.PushScope()
+		defer n.Pref.PopScope(ctx)
+
+		innerIter, err := b.buildNodeExec(ctx, n.Procedure, row)
 		if err != nil {
 			return nil, err
 		}
-		paramName := n.Procedure.Params[i].Name
-		paramType := n.Procedure.Params[i].Type
-		err = n.Pref.InitializeVariable(paramName, paramType, val)
+		return &callIter{
+			call:      n,
+			innerIter: innerIter,
+		}, nil
+	}
+
+	// Initialize parameters
+	for i, paramExpr := range n.Params {
+		param := n.Procedure.Params[i]
+		paramVal, err := paramExpr.Eval(ctx, row)
 		if err != nil {
 			return nil, err
+		}
+		paramVal, _, err = param.Type.Convert(ctx, paramVal)
+		if err != nil {
+			return nil, err
+		}
+		paramName := strings.ToLower(param.Name)
+		for spp := ctx.Session.GetStoredProcParam(paramName); spp != nil; {
+			spp.Value = paramVal
+			if spp.Reference == spp {
+				break
+			}
+			spp = spp.Reference
 		}
 	}
 
-	n.Pref.PushScope()
-	defer n.Pref.PopScope(ctx)
+	// Preserve existing transaction
+	oldTx := ctx.GetTransaction()
+	defer ctx.SetTransaction(oldTx)
+	ctx.SetTransaction(nil)
 
-	innerIter, err := b.buildNodeExec(ctx, n.Procedure, row)
+	rowIter, _, err := procedures.Call(ctx, n)
 	if err != nil {
 		return nil, err
 	}
+
+	for i, param := range n.Params {
+		procParam := n.Procedure.Params[i]
+		if procParam.Direction == plan.ProcedureParamDirection_In {
+			continue
+		}
+		// Set all user and system variables from INOUT and OUT params
+		paramName := strings.ToLower(procParam.Name)
+		spp := ctx.Session.GetStoredProcParam(paramName)
+		if spp == nil {
+			return nil, fmt.Errorf("parameter `%s` not found", paramName)
+		}
+		switch p := param.(type) {
+		case *expression.ProcedureParam:
+			err = p.Set(ctx, spp.Value, spp.Type)
+		case *expression.UserVar:
+			val := spp.Value
+			if procParam.Direction == plan.ProcedureParamDirection_Out && !spp.HasBeenSet {
+				val = nil
+			}
+			err = ctx.SetUserVariable(ctx, p.Name, val, spp.Type)
+		case *expression.SystemVar:
+			err = fmt.Errorf("unable to set `%s` as it is a system variable", p.Name)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &callIter{
 		call:      n,
-		innerIter: innerIter,
+		innerIter: rowIter,
 	}, nil
 }
 
@@ -232,6 +299,7 @@ func (b *BaseBuilder) buildLoop(ctx *sql.Context, n *plan.Loop, row sql.Row) (sq
 
 	var returnRows []sql.Row
 	var returnNode sql.Node
+	var returnIter sql.RowIter
 	var returnSch sql.Schema
 	selectSeen := false
 
@@ -272,30 +340,33 @@ func (b *BaseBuilder) buildLoop(ctx *sql.Context, n *plan.Loop, row sql.Row) (sq
 				return nil, err
 			}
 		}
+		loopBodyIter = withSafepointPeriodicallyIter(loopBodyIter)
 
 		includeResultSet := false
 
 		var subIterNode sql.Node = n.Block
-		subIterSch := n.Block.Schema()
+		subIterSch := n.Block.Schema(ctx)
 		if blockRowIter, ok := loopBodyIter.(plan.BlockRowIter); ok {
 			subIterNode = blockRowIter.RepresentingNode()
-			subIterSch = blockRowIter.Schema()
+			subIterSch = blockRowIter.Schema(ctx)
 
-			if plan.NodeRepresentsSelect(subIterNode) {
+			if plan.NodeRepresentsSelect(ctx, subIterNode) {
 				selectSeen = true
 				includeResultSet = true
 				returnNode = subIterNode
+				returnIter = loopBodyIter
 				returnSch = subIterSch
 			} else if !selectSeen {
 				includeResultSet = true
 				returnNode = subIterNode
+				returnIter = loopBodyIter
 				returnSch = subIterSch
 			}
 		}
 
 		// Wrap the caching code in an inline function so that we can use defer to safely dispose of the cache
 		err = func() error {
-			rowCache, disposeFunc := ctx.Memory.NewRowsCache()
+			rowCache, disposeFunc := ctx.Memory.NewRowsCache(ctx)
 			defer disposeFunc()
 
 			nextRow, err := loopBodyIter.Next(ctx)
@@ -336,7 +407,8 @@ func (b *BaseBuilder) buildLoop(ctx *sql.Context, n *plan.Loop, row sql.Row) (sq
 	return &blockIter{
 		internalIter: sql.RowsToRowIter(returnRows...),
 		repNode:      returnNode,
-		sch:          returnSch,
+		repSch:       returnSch,
+		repIter:      returnIter,
 	}, nil
 }
 

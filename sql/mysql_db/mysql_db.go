@@ -15,12 +15,12 @@
 package mysql_db
 
 import (
-	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -55,21 +55,21 @@ type PlaintextAuthPlugin interface {
 
 // MySQLDb are the collection of tables that are in the MySQL database
 type MySQLDb struct {
-	enabled atomic.Bool
+	persister MySQLDbPersistence
+	*authServer
 
-	user                *in_mem_table.IndexedSetTable[*User]
 	role_edges          *in_mem_table.IndexedSetTable[*RoleEdge]
 	replica_source_info *in_mem_table.IndexedSetTable[*ReplicaSourceInfo]
+	user                *in_mem_table.IndexedSetTable[*User]
+	db                  *in_mem_table.MultiIndexedSetTable[*User]
+	tables_priv         *in_mem_table.MultiIndexedSetTable[*User]
+	procs_priv          *in_mem_table.MultiIndexedSetTable[*User]
+	global_grants       *in_mem_table.MultiIndexedSetTable[*User]
 
+	help_relation *mysqlTable
 	help_topic    *mysqlTable
 	help_keyword  *mysqlTable
 	help_category *mysqlTable
-	help_relation *mysqlTable
-
-	db            *in_mem_table.MultiIndexedSetTable[*User]
-	tables_priv   *in_mem_table.MultiIndexedSetTable[*User]
-	procs_priv    *in_mem_table.MultiIndexedSetTable[*User]
-	global_grants *in_mem_table.MultiIndexedSetTable[*User]
 
 	//TODO: add the rest of these tables
 	//columns_priv     *mysqlTable
@@ -77,11 +77,10 @@ type MySQLDb struct {
 	//default_roles    *mysqlTable
 	//password_history *mysqlTable
 
-	persister MySQLDbPersistence
-	plugins   map[string]PlaintextAuthPlugin
-
-	lock          sync.RWMutex
+	plugins       map[string]PlaintextAuthPlugin
 	updateCounter atomic.Uint64
+	lock          sync.RWMutex
+	enabled       atomic.Bool
 }
 
 var _ sql.Database = (*MySQLDb)(nil)
@@ -91,6 +90,8 @@ var _ mysql.AuthServer = (*MySQLDb)(nil)
 func CreateEmptyMySQLDb() *MySQLDb {
 	// original tables
 	mysqlDb := &MySQLDb{}
+
+	mysqlDb.authServer = newAuthServer(mysqlDb)
 
 	lock, rlock := &mysqlDb.lock, mysqlDb.lock.RLocker()
 
@@ -130,11 +131,10 @@ func CreateEmptyMySQLDb() *MySQLDb {
 }
 
 type Reader struct {
+	close             func()
 	users             in_mem_table.IndexedSet[*User]
 	roleEdges         in_mem_table.IndexedSet[*RoleEdge]
 	replicaSourceInfo in_mem_table.IndexedSet[*ReplicaSourceInfo]
-
-	close func()
 }
 
 type UserFetcher interface {
@@ -285,20 +285,19 @@ func (ed *Editor) Close() {
 
 func (db *MySQLDb) unlockedReader() *Reader {
 	return &Reader{
-		db.user.Set(),
-		db.role_edges.Set(),
-		db.replica_source_info.Set(),
-		nil,
+		users:             db.user.Set(),
+		roleEdges:         db.role_edges.Set(),
+		replicaSourceInfo: db.replica_source_info.Set(),
 	}
 }
 
 func (db *MySQLDb) Reader() *Reader {
 	db.lock.RLock()
 	return &Reader{
-		db.user.Set(),
-		db.role_edges.Set(),
-		db.replica_source_info.Set(),
-		func() {
+		users:             db.user.Set(),
+		roleEdges:         db.role_edges.Set(),
+		replicaSourceInfo: db.replica_source_info.Set(),
+		close: func() {
 			db.lock.RUnlock()
 		},
 	}
@@ -410,6 +409,15 @@ func (db *MySQLDb) LoadData(ctx *sql.Context, buf []byte) (err error) {
 		ed.PutReplicaSourceInfo(replicaSourceInfo)
 	}
 
+	// Load superusers
+	for i := 0; i < serialMySQLDb.SuperUserLength(); i++ {
+		serialUser := new(serial.User)
+		if !serialMySQLDb.SuperUser(serialUser, i) {
+			continue
+		}
+		ed.PutUser(LoadUser(serialUser))
+	}
+
 	// TODO: fill in other tables when they exist
 	return
 }
@@ -505,11 +513,12 @@ func (db *MySQLDb) AddRootAccount() {
 	db.AddSuperUser(ed, "root", "localhost", "")
 }
 
-// AddSuperUser adds the given username and password to the list of accounts. This is a temporary function, which is
-// meant to replace the "auth.New..." functions while the remaining functions are added.
-func (db *MySQLDb) AddSuperUser(ed *Editor, username string, host string, password string) {
-	//TODO: remove this function and the called function
+// AddEphemeralSuperUser adds a new temporary superuser account for the specified username, host,
+// and password. The superuser account will only exist for the lifetime of the server process; once
+// the server is restarted, this superuser account will not be present.
+func (db *MySQLDb) AddEphemeralSuperUser(ed *Editor, username string, host string, password string) {
 	db.SetEnabled(true)
+
 	if len(password) > 0 {
 		hash := sha1.New()
 		hash.Write([]byte(password))
@@ -524,8 +533,74 @@ func (db *MySQLDb) AddSuperUser(ed *Editor, username string, host string, passwo
 		Host: host,
 		User: username,
 	}); !ok {
-		addSuperUser(ed, username, host, password)
+		addSuperUser(ed, username, host, password, true)
 	}
+}
+
+// AddSuperUser adds the given username and password to the list of accounts. This is a temporary function, which is
+// meant to replace the "auth.New..." functions while the remaining functions are added.
+func (db *MySQLDb) AddSuperUser(ed *Editor, username string, host string, password string) {
+	//TODO: remove this function and the called function
+	db.SetEnabled(true)
+
+	if len(password) > 0 {
+		hash := sha1.New()
+		hash.Write([]byte(password))
+		s1 := hash.Sum(nil)
+		hash.Reset()
+		hash.Write(s1)
+		s2 := hash.Sum(nil)
+		password = "*" + strings.ToUpper(hex.EncodeToString(s2))
+	}
+
+	if _, ok := ed.GetUser(UserPrimaryKey{
+		Host: host,
+		User: username,
+	}); !ok {
+		addSuperUser(ed, username, host, password, false)
+	}
+}
+
+// AddLockedSuperUser adds a new superuser with the specified |username|, |host|, and |password|
+// and sets the account to be locked so that it cannot be used to log in.
+func (db *MySQLDb) AddLockedSuperUser(ed *Editor, username string, host string, password string) {
+	user := db.GetUser(ed, username, host, false)
+
+	// If the user doesn't exist yet, create it and lock it
+	if user == nil {
+		db.AddSuperUser(ed, username, host, password)
+		user = db.GetUser(ed, username, host, false)
+		if user == nil {
+			panic("unable to load newly created superuser: " + username)
+		}
+
+		// Lock the account to prevent it being used to log in
+		user.Locked = true
+		ed.PutUser(user)
+	}
+
+	// If the user exists, but isn't a superuser or locked, fix it
+	if user.IsSuperUser == false || user.Locked == false {
+		user.IsSuperUser = true
+		user.Locked = true
+		ed.PutUser(user)
+	}
+}
+
+// matchesHostPattern checks if a host matches a host pattern with wildcards.
+func matchesHostPattern(host, pattern string) bool {
+	// No wildcard, not a pattern
+	if !strings.Contains(pattern, "%") {
+		return false
+	}
+
+	// Escape regex metacharacters, then replace % with .*
+	regexPattern := regexp.QuoteMeta(pattern)
+	regexPattern = strings.ReplaceAll(regexPattern, "%", ".*")
+	regexPattern = "^" + regexPattern + "$"
+
+	matched, err := regexp.MatchString(regexPattern, host)
+	return err == nil && matched
 }
 
 // GetUser returns a user matching the given user and host if it exists. Due to the slight difference between users and
@@ -543,6 +618,9 @@ func (db *MySQLDb) GetUser(fetcher UserFetcher, user string, host string, roleSe
 	//TODO: Hostnames representing IPs can use masks, such as 'abc'@'54.244.85.0/255.255.255.0'
 	//TODO: Allow for CIDR notation in hostnames
 	//TODO: Which user do we choose when multiple host names match (e.g. host name with most characters matched, etc.)
+
+	// Store the original host for pattern matching against IP patterns
+	originalHost := host
 
 	if "127.0.0.1" == host || "::1" == host {
 		host = "localhost"
@@ -563,7 +641,9 @@ func (db *MySQLDb) GetUser(fetcher UserFetcher, user string, host string, roleSe
 			if host == user.Host ||
 				(host == "localhost" && user.Host == "::1") ||
 				(host == "localhost" && user.Host == "127.0.0.1") ||
-				(user.Host == "%" && (!roleSearch || host == "")) {
+				(user.Host == "%" && (!roleSearch || host == "")) ||
+				matchesHostPattern(host, user.Host) ||
+				(originalHost != host && matchesHostPattern(originalHost, user.Host)) {
 				return user
 			}
 		}
@@ -756,62 +836,14 @@ func (db *MySQLDb) GetTableNames(ctx *sql.Context) ([]string, error) {
 	}, nil
 }
 
-// AuthMethod implements the interface mysql.AuthServer.
-func (db *MySQLDb) AuthMethod(user, addr string) (string, error) {
-	if !db.Enabled() {
-		return "mysql_native_password", nil
-	}
-	var host string
-	// TODO : need to check for network type instead of addr string if it's unix socket network,
-	//  macOS passes empty addr, but ubuntu returns "@" as addr for `localhost`
-	if addr == "@" || addr == "" {
-		host = "localhost"
-	} else {
-		splitHost, _, err := net.SplitHostPort(addr)
-		if err != nil {
-			if err.(*net.AddrError).Err == "missing port in address" {
-				host = addr
-			} else {
-				return "", err
-			}
-		} else {
-			host = splitHost
-		}
-	}
-
-	rd := db.Reader()
-	defer rd.Close()
-
-	u := db.GetUser(rd, user, host, false)
-	if u == nil {
-		return "", mysql.NewSQLError(mysql.ERAccessDeniedError, mysql.SSAccessDeniedError, "User not found '%v'", user)
-	}
-	if _, ok := db.plugins[u.Plugin]; ok {
-		return "mysql_clear_password", nil
-	}
-	return u.Plugin, nil
-}
-
-// Salt implements the interface mysql.AuthServer.
-func (db *MySQLDb) Salt() ([]byte, error) {
-	return mysql.NewSalt()
-}
-
-// ValidateHash implements the interface mysql.AuthServer. This is called when the method used is "mysql_native_password".
+// ValidateHash was previously used as part of authentication, but is no longer used by the Vitess authentication
+// logic. This method is still used by the sql util class in Dolt to authenticate a user connecting to a local
+// Dolt sql-server by running a "dolt sql" command.
+// TODO: The dolt sql utils.go code should be refactored to use a different API, so that we can delete this method.
 func (db *MySQLDb) ValidateHash(salt []byte, user string, authResponse []byte, addr net.Addr) (mysql.Getter, error) {
-	var host string
-	var err error
-	if addr.Network() == "unix" {
-		host = "localhost"
-	} else {
-		host, _, err = net.SplitHostPort(addr.String())
-		if err != nil {
-			if err.(*net.AddrError).Err == "missing port in address" {
-				host = addr.String()
-			} else {
-				return nil, err
-			}
-		}
+	host, err := extractHostAddress(addr)
+	if err != nil {
+		return nil, err
 	}
 
 	rd := db.Reader()
@@ -825,8 +857,8 @@ func (db *MySQLDb) ValidateHash(salt []byte, user string, authResponse []byte, a
 	if userEntry == nil || userEntry.Locked {
 		return nil, mysql.NewSQLError(mysql.ERAccessDeniedError, mysql.SSAccessDeniedError, "Access denied for user '%v'", user)
 	}
-	if len(userEntry.Password) > 0 {
-		if !validateMysqlNativePassword(authResponse, salt, userEntry.Password) {
+	if len(userEntry.AuthString) > 0 {
+		if !validateMysqlNativePassword(authResponse, salt, userEntry.AuthString) {
 			return nil, mysql.NewSQLError(mysql.ERAccessDeniedError, mysql.SSAccessDeniedError, "Access denied for user '%v'", user)
 		}
 	} else if len(authResponse) > 0 { // password is nil or empty, therefore no password is set
@@ -835,53 +867,6 @@ func (db *MySQLDb) ValidateHash(salt []byte, user string, authResponse []byte, a
 	}
 
 	return sql.MysqlConnectionUser{User: userEntry.User, Host: userEntry.Host}, nil
-}
-
-// Negotiate implements the interface mysql.AuthServer. This is called when the method used is not "mysql_native_password".
-func (db *MySQLDb) Negotiate(c *mysql.Conn, user string, addr net.Addr) (mysql.Getter, error) {
-	var host string
-	var err error
-	if addr.Network() == "unix" {
-		host = "localhost"
-	} else {
-		host, _, err = net.SplitHostPort(addr.String())
-		if err != nil {
-			if err.(*net.AddrError).Err == "missing port in address" {
-				host = addr.String()
-			} else {
-				return nil, err
-			}
-		}
-	}
-
-	rd := db.Reader()
-	defer rd.Close()
-
-	connUser := sql.MysqlConnectionUser{User: user, Host: host}
-	if !db.Enabled() {
-		return connUser, nil
-	}
-	userEntry := db.GetUser(rd, user, host, false)
-
-	if userEntry.Plugin != "" {
-		authplugin, ok := db.plugins[userEntry.Plugin]
-		if !ok {
-			return nil, mysql.NewSQLError(mysql.ERAccessDeniedError, mysql.SSAccessDeniedError, "Access denied for user '%v'; auth plugin %s not registered with server", user, userEntry.Plugin)
-		}
-		pass, err := mysql.AuthServerReadPacketString(c)
-		if err != nil {
-			return nil, err
-		}
-		authed, err := authplugin.Authenticate(db, user, userEntry, pass)
-		if err != nil {
-			return nil, mysql.NewSQLError(mysql.ERAccessDeniedError, mysql.SSAccessDeniedError, "Access denied for user '%v': %v", user, err)
-		}
-		if !authed {
-			return nil, mysql.NewSQLError(mysql.ERAccessDeniedError, mysql.SSAccessDeniedError, "Access denied for user '%v'", user)
-		}
-		return connUser, nil
-	}
-	return nil, fmt.Errorf(`the only user login interface currently supported is "mysql_native_password"`)
 }
 
 // Persist passes along all changes to the integrator.
@@ -895,10 +880,12 @@ func (db *MySQLDb) Persist(ctx *sql.Context, ed *Editor) error {
 	var users []*User
 	var superUsers []*User
 	ed.VisitUsers(func(u *User) {
-		if !u.IsSuperUser {
-			users = append(users, u)
-		} else {
-			superUsers = append(superUsers, u)
+		if !u.IsEphemeral {
+			if !u.IsSuperUser {
+				users = append(users, u)
+			} else {
+				superUsers = append(superUsers, u)
+			}
 		}
 	})
 	sort.Slice(users, func(i, j int) bool {
@@ -982,42 +969,6 @@ func columnTemplate(name string, source string, isPk bool, template *sql.Column)
 	newCol.Source = source
 	newCol.PrimaryKey = isPk
 	return &newCol
-}
-
-// validateMysqlNativePassword was taken directly from vitess and validates the password hash for "mysql_native_password".
-func validateMysqlNativePassword(authResponse, salt []byte, mysqlNativePassword string) bool {
-	// SERVER: recv(authResponse)
-	// 		   hash_stage1=xor(authResponse, sha1(salt,hash))
-	// 		   candidate_hash2=sha1(hash_stage1)
-	// 		   check(candidate_hash2==hash)
-	if len(authResponse) == 0 || len(mysqlNativePassword) == 0 {
-		return false
-	}
-	if mysqlNativePassword[0] == '*' {
-		mysqlNativePassword = mysqlNativePassword[1:]
-	}
-
-	hash, err := hex.DecodeString(mysqlNativePassword)
-	if err != nil {
-		return false
-	}
-
-	// scramble = SHA1(salt+hash)
-	crypt := sha1.New()
-	crypt.Write(salt)
-	crypt.Write(hash)
-	scramble := crypt.Sum(nil)
-
-	// token = scramble XOR stage1Hash
-	for i := range scramble {
-		scramble[i] ^= authResponse[i]
-	}
-	stage1Hash := scramble
-	crypt.Reset()
-	crypt.Write(stage1Hash)
-	candidateHash2 := crypt.Sum(nil)
-
-	return bytes.Equal(candidateHash2, hash)
 }
 
 // mustDefault enforces that no error occurred when constructing the column default value.

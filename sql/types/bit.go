@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"reflect"
@@ -78,16 +79,16 @@ func (t BitType_) MaxTextResponseByteLength(*sql.Context) uint32 {
 }
 
 // Compare implements Type interface.
-func (t BitType_) Compare(a interface{}, b interface{}) (int, error) {
+func (t BitType_) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
 
-	ac, _, err := t.Convert(a)
+	ac, _, err := t.Convert(ctx, a)
 	if err != nil {
 		return 0, err
 	}
-	bc, _, err := t.Convert(b)
+	bc, _, err := t.Convert(ctx, b)
 	if err != nil {
 		return 0, err
 	}
@@ -102,8 +103,33 @@ func (t BitType_) Compare(a interface{}, b interface{}) (int, error) {
 	return 0, nil
 }
 
+// CompareValue implements the ValueType interface
+func (t BitType_) CompareValue(ctx *sql.Context, a, b sql.Value) (int, error) {
+	if hasNulls, res := CompareNullValues(a, b); hasNulls {
+		return res, nil
+	}
+
+	av, _, err := convertValueToUint64(ctx, a)
+	if err != nil {
+		return 0, err
+	}
+	bv, _, err := convertValueToUint64(ctx, b)
+	if err != nil {
+		return 0, err
+	}
+
+	switch {
+	case av < bv:
+		return -1, nil
+	case av > bv:
+		return 1, nil
+	default:
+		return 0, nil
+	}
+}
+
 // Convert implements Type interface.
-func (t BitType_) Convert(v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t BitType_) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
 	if v == nil {
 		return nil, sql.InRange, nil
 	}
@@ -137,7 +163,7 @@ func (t BitType_) Convert(v interface{}) (interface{}, sql.ConvertInRange, error
 	case uint64:
 		value = val
 	case float32:
-		return t.Convert(float64(val))
+		return t.Convert(ctx, float64(val))
 	case float64:
 		if val < 0 {
 			return nil, sql.InRange, fmt.Errorf(`negative floats cannot become bit values`)
@@ -147,40 +173,31 @@ func (t BitType_) Convert(v interface{}) (interface{}, sql.ConvertInRange, error
 		if !val.Valid {
 			return nil, sql.InRange, nil
 		}
-		return t.Convert(val.Decimal)
+		return t.Convert(ctx, val.Decimal)
 	case decimal.Decimal:
 		val = val.Round(0)
 		if val.GreaterThan(dec_uint64_max) {
-			return nil, sql.OutOfRange, errBeyondMaxBit.New(val.String(), t.numOfBits)
+			return nil, sql.Overflow, errBeyondMaxBit.New(val.String(), t.numOfBits)
 		}
 		if val.LessThan(dec_int64_min) {
-			return nil, sql.OutOfRange, errBeyondMaxBit.New(val.String(), t.numOfBits)
+			return nil, sql.Underflow, errBeyondMaxBit.New(val.String(), t.numOfBits)
 		}
 		value = uint64(val.IntPart())
 	case string:
-		return t.Convert([]byte(val))
+		return t.Convert(ctx, []byte(val))
 	case []byte:
 		if len(val) > 8 {
-			return nil, sql.OutOfRange, errBeyondMaxBit.New(value, t.numOfBits)
+			return nil, sql.Overflow, errBeyondMaxBit.New(value, t.numOfBits)
 		}
 		value = binary.BigEndian.Uint64(append(make([]byte, 8-len(val)), val...))
 	default:
-		return nil, sql.OutOfRange, sql.ErrInvalidType.New(t)
+		return nil, sql.Overflow, sql.ErrInvalidType.New(t)
 	}
 
 	if value > uint64(1<<t.numOfBits-1) {
-		return nil, sql.OutOfRange, errBeyondMaxBit.New(value, t.numOfBits)
+		return nil, sql.Overflow, errBeyondMaxBit.New(value, t.numOfBits)
 	}
 	return value, sql.InRange, nil
-}
-
-// MustConvert implements the Type interface.
-func (t BitType_) MustConvert(v interface{}) interface{} {
-	value, _, err := t.Convert(v)
-	if err != nil {
-		panic(err)
-	}
-	return value
 }
 
 // Equals implements the Type interface.
@@ -201,7 +218,7 @@ func (t BitType_) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Va
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
-	value, _, err := t.Convert(v)
+	value, _, err := t.Convert(ctx, v)
 	if err != nil {
 		return sqltypes.Value{}, err
 	}
@@ -214,9 +231,33 @@ func (t BitType_) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Va
 	for i, j := 0, len(data)-1; i < j; i, j = i+1, j-1 {
 		data[i], data[j] = data[j], data[i]
 	}
-	val := AppendAndSliceBytes(dest, data)
+	val := data
 
 	return sqltypes.MakeTrusted(sqltypes.Bit, val), nil
+}
+
+// SQLValue implements ValueType interface.
+func (t BitType_) SQLValue(ctx *sql.Context, v sql.Value, dest []byte) (sqltypes.Value, error) {
+	if v.IsNull() {
+		return sqltypes.NULL, nil
+	}
+
+	// Trim/Pad result to the appropriate length
+	numBytes := t.numOfBits / 8
+	if t.numOfBits%8 != 0 {
+		numBytes += 1
+	}
+	for i := uint8(len(v.Val)); i < numBytes; i++ {
+		v.Val = append(v.Val, 0)
+	}
+	v.Val = v.Val[:numBytes]
+
+	// want the results in big endian
+	dest = append(dest, v.Val...)
+	for i, j := 0, len(dest)-1; i < j; i, j = i+1, j-1 {
+		dest[i], dest[j] = dest[j], dest[i]
+	}
+	return sqltypes.MakeTrusted(sqltypes.Bit, dest), nil
 }
 
 // String implements Type interface.

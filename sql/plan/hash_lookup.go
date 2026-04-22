@@ -18,9 +18,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/dolthub/go-mysql-server/sql/types"
-
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/hash"
+	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
 // NewHashLookup returns a node that performs an indexed hash lookup
@@ -32,13 +32,17 @@ import (
 // available, it fulfills the RowIter call by performing a hash lookup
 // on the projected results. If cached results are not available, it
 // simply delegates to the child.
-func NewHashLookup(n sql.Node, rightEntryKey sql.Expression, leftProbeKey sql.Expression, joinType JoinType) *HashLookup {
+func NewHashLookup(ctx *sql.Context, n sql.Node, rightEntryKey sql.Expression, leftProbeKey sql.Expression, joinType JoinType) *HashLookup {
+	leftKeySch := hash.ExprsToSchema(ctx, leftProbeKey)
+	compareType := types.GetCompareType(leftProbeKey.Type(ctx), rightEntryKey.Type(ctx))
 	return &HashLookup{
 		UnaryNode:     UnaryNode{n},
 		RightEntryKey: rightEntryKey,
 		LeftProbeKey:  leftProbeKey,
+		CompareType:   compareType,
 		Mutex:         new(sync.Mutex),
 		JoinType:      joinType,
+		leftKeySch:    leftKeySch,
 	}
 }
 
@@ -46,14 +50,17 @@ type HashLookup struct {
 	UnaryNode
 	RightEntryKey sql.Expression
 	LeftProbeKey  sql.Expression
+	CompareType   sql.Type
 	Mutex         *sync.Mutex
 	Lookup        *map[interface{}][]sql.Row
+	leftKeySch    sql.Schema
 	JoinType      JoinType
 }
 
 var _ sql.Node = (*HashLookup)(nil)
 var _ sql.Expressioner = (*HashLookup)(nil)
 var _ sql.CollationCoercible = (*HashLookup)(nil)
+var _ sql.Describable = (*HashLookup)(nil)
 
 func (n *HashLookup) Expressions() []sql.Expression {
 	return []sql.Expression{n.RightEntryKey, n.LeftProbeKey}
@@ -63,13 +70,14 @@ func (n *HashLookup) IsReadOnly() bool {
 	return n.Child.IsReadOnly()
 }
 
-func (n *HashLookup) WithExpressions(exprs ...sql.Expression) (sql.Node, error) {
+func (n *HashLookup) WithExpressions(ctx *sql.Context, exprs ...sql.Expression) (sql.Node, error) {
 	if len(exprs) != 2 {
 		return nil, sql.ErrInvalidChildrenNumber.New(n, len(exprs), 2)
 	}
 	ret := *n
 	ret.RightEntryKey = exprs[0]
 	ret.LeftProbeKey = exprs[1]
+	ret.leftKeySch = hash.ExprsToSchema(ctx, ret.LeftProbeKey)
 	return &ret, nil
 }
 
@@ -84,18 +92,29 @@ func (n *HashLookup) String() string {
 	return pr.String()
 }
 
-func (n *HashLookup) DebugString() string {
+func (n *HashLookup) DebugString(ctx *sql.Context) string {
 	pr := sql.NewTreePrinter()
 	_ = pr.WriteNode("HashLookup")
 	children := make([]string, 3)
-	children[0] = fmt.Sprintf("left-key: %s", sql.DebugString(n.LeftProbeKey))
-	children[1] = fmt.Sprintf("right-key: %s", sql.DebugString(n.RightEntryKey))
-	children[2] = sql.DebugString(n.Child)
+	children[0] = fmt.Sprintf("left-key: %s", sql.DebugString(ctx, n.LeftProbeKey))
+	children[1] = fmt.Sprintf("right-key: %s", sql.DebugString(ctx, n.RightEntryKey))
+	children[2] = sql.DebugString(ctx, n.Child)
 	_ = pr.WriteChildren(children...)
 	return pr.String()
 }
 
-func (n *HashLookup) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (n *HashLookup) Describe(ctx *sql.Context, options sql.DescribeOptions) string {
+	pr := sql.NewTreePrinter()
+	_ = pr.WriteNode("HashLookup")
+	children := make([]string, 3)
+	children[0] = fmt.Sprintf("left-key: %s", sql.Describe(ctx, n.LeftProbeKey, options))
+	children[1] = fmt.Sprintf("right-key: %s", sql.Describe(ctx, n.RightEntryKey, options))
+	children[2] = sql.Describe(ctx, n.Child, options)
+	_ = pr.WriteChildren(children...)
+	return pr.String()
+}
+
+func (n *HashLookup) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(n, len(children), 1)
 	}
@@ -104,43 +123,40 @@ func (n *HashLookup) WithChildren(children ...sql.Node) (sql.Node, error) {
 	return &nn, nil
 }
 
-// CheckPrivileges implements the interface sql.Node.
-func (n *HashLookup) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return n.Child.CheckPrivileges(ctx, opChecker)
-}
-
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (n *HashLookup) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
 	return sql.GetCoercibility(ctx, n.Child)
 }
 
-// Convert a tuple expression returning []interface{} into something comparable.
+// GetHashKey converts a tuple expression returning []interface{} into something comparable.
 // Fast paths a few smaller slices into fixed size arrays, puts everything else
 // through string serialization and a hash for now. It is OK to hash lossy here
 // as the join condition is still evaluated after the matching rows are returned.
-func (n *HashLookup) GetHashKey(ctx *sql.Context, e sql.Expression, row sql.Row) (interface{}, error) {
+func (n *HashLookup) GetHashKey(ctx *sql.Context, e sql.Expression, row sql.Row) (any, sql.ConvertInRange, error) {
 	key, err := e.Eval(ctx, row)
 	if err != nil {
-		return nil, err
+		return nil, sql.InRange, err
 	}
-	key, _, err = n.LeftProbeKey.Type().Convert(key)
+	key, _, err = n.CompareType.Convert(ctx, key)
 	if types.ErrValueNotNil.Is(err) {
 		// The LHS expression was NullType. This is allowed.
-		return nil, nil
+		return nil, sql.InRange, nil
 	}
-	if err != nil {
-		return nil, err
+	if err != nil && !sql.ErrTruncatedIncorrect.Is(err) {
+		// Truncated warning is already thrown elsewhere.
+		return nil, sql.InRange, err
 	}
-	if s, ok := key.([]interface{}); ok {
-		return sql.HashOf(s)
+	if s, ok := key.([]any); ok {
+		h, err := hash.HashOf(ctx, n.leftKeySch, s)
+		return h, sql.InRange, err
 	}
 	// byte slices are not hashable
 	if k, ok := key.([]byte); ok {
-		key = string(k)
+		return string(k), sql.InRange, nil
 	}
-	return key, nil
+	return hash.HashOfSimple(ctx, key, n.CompareType)
 }
 
-func (n *HashLookup) Dispose() {
+func (n *HashLookup) Dispose(ctx *sql.Context) {
 	n.Lookup = nil
 }

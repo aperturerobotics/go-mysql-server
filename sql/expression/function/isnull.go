@@ -24,15 +24,15 @@ import (
 
 // IsNull is a function that returns whether a value is null or not.
 type IsNull struct {
-	expression.UnaryExpression
+	expression.UnaryExpressionStub
 }
 
 var _ sql.FunctionExpression = (*IsNull)(nil)
 var _ sql.CollationCoercible = (*IsNull)(nil)
 
 // NewIsNull creates a new IsNull expression.
-func NewIsNull(e sql.Expression) sql.Expression {
-	return &IsNull{expression.UnaryExpression{Child: e}}
+func NewIsNull(ctx *sql.Context, e sql.Expression) sql.Expression {
+	return &IsNull{expression.UnaryExpressionStub{Child: e}}
 }
 
 // FunctionName implements sql.FunctionExpression
@@ -59,20 +59,25 @@ func (ib *IsNull) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	return true, nil
 }
 
+// IsNullable implements sql.Expression
+func (ib *IsNull) IsNullable(ctx *sql.Context) bool {
+	return false
+}
+
 func (ib *IsNull) String() string {
 	return fmt.Sprintf("isnull(%s)", ib.Child)
 }
 
 // WithChildren implements the Expression interface.
-func (ib *IsNull) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (ib *IsNull) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(ib, len(children), 1)
 	}
-	return NewIsNull(children[0]), nil
+	return NewIsNull(ctx, children[0]), nil
 }
 
 // Type implements the Expression interface.
-func (ib *IsNull) Type() sql.Type {
+func (ib *IsNull) Type(ctx *sql.Context) sql.Type {
 	return types.Boolean
 }
 

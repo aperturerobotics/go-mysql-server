@@ -16,7 +16,7 @@ package sql
 
 import (
 	"fmt"
-	"strings"
+	"io"
 
 	"github.com/dolthub/vitess/go/mysql"
 	"gopkg.in/src-d/go-errors.v1"
@@ -41,6 +41,9 @@ var (
 	// ErrInvalidType is thrown when there is an unexpected type at some part of
 	// the execution tree.
 	ErrInvalidType = errors.NewKind("invalid type: %s")
+
+	// ErrInvalidTimeZone is thrown when an invalid time zone is found
+	ErrInvalidTimeZone = errors.NewKind("Unknown or incorrect time zone: %s")
 
 	// ErrTableAlreadyExists is thrown when someone tries to create a
 	// table with a name of an existing one
@@ -146,6 +149,9 @@ var (
 	// ErrInvalidColumnDefaultValue is returned when column default function value is not wrapped in parentheses for column types excluding datetime and timestamp
 	ErrInvalidColumnDefaultValue = errors.NewKind("Invalid default value for '%s'")
 
+	// ErrColumnDefaultUserVariable is returned when a column default expression contains user or system variables
+	ErrColumnDefaultUserVariable = errors.NewKind("Default value expression of column '%s' cannot refer user or system variables.")
+
 	// ErrInvalidDefaultValueOrder is returned when a default value references a column that comes after it and contains a default expression.
 	ErrInvalidDefaultValueOrder = errors.NewKind(`default value of column "%s" cannot refer to a column defined after it if those columns have an expression default value`)
 
@@ -236,6 +242,9 @@ var (
 
 	// ErrEventDoesNotExist is returned when an event does not exist.
 	ErrEventDoesNotExist = errors.NewKind("Event '%s' does not exist")
+
+	// ErrUndceclaredVariable is return when a variable is undeclared.
+	ErrUndeclaredVariable = errors.NewKind("Undeclared variable: %s")
 
 	// ErrUnknownEvent is returned when a query references an event that doesn't exist
 	ErrUnknownEvent = errors.NewKind("Unknown event '%s'")
@@ -400,6 +409,9 @@ var (
 	// ErrAlterTableCollationNotSupported is thrown when the table doesn't support ALTER TABLE COLLATE statements
 	ErrAlterTableCollationNotSupported = errors.NewKind("table %s cannot have its collation altered")
 
+	// ErrAlterTableCommentNotSupported is thrown when the table doesn't support ALTER TABLE COMMENT statements
+	ErrAlterTableCommentNotSupported = errors.NewKind("table %s cannot have its comment altered")
+
 	// ErrCollationNotSupportedOnUniqueTextIndex is thrown when a unique index is created on a TEXT column, with no
 	// prefix length specified, and the collation is case-insensitive or accent-insensitive, meaning we can't
 	// reliably use a content-hashed field to detect uniqueness.
@@ -481,6 +493,7 @@ var (
 	// ErrDuplicateKey is returned when a duplicate key is defined on a table.
 	ErrDuplicateKey = errors.NewKind("Duplicate key name '%s'")
 
+	// TODO: This is not actually how this error Kind is used. It's currently only used when creating a Set type
 	// ErrDuplicateEntry is returns when a duplicate entry is placed on an index such as a UNIQUE or a Primary Key.
 	ErrDuplicateEntry = errors.NewKind("Duplicate entry for key '%s'")
 
@@ -489,6 +502,9 @@ var (
 
 	// ErrInvalidIdentifier is returned when an identifier is invalid
 	ErrInvalidIdentifier = errors.NewKind("invalid identifier: `%s`")
+
+	// ErrIdentifierIsTooLong is returned when creating a resource, but the identifier is longer than a name limit
+	ErrIdentifierIsTooLong = errors.NewKind("Identifier name '%s' is too long")
 
 	// ErrInvalidArgument is returned when an argument to a function is invalid.
 	ErrInvalidArgument = errors.NewKind("Invalid argument to %s")
@@ -544,6 +560,8 @@ var (
 	// ErrFunctionNotFound is thrown when a function is not found
 	ErrFunctionNotFound = errors.NewKind("function: '%s' not found")
 
+	ErrTableFunctionNotInFrom = errors.NewKind("function: '%s' is a table function and must be used in a FROM clause")
+
 	// ErrConflictingExternalQuery is thrown when a scope's parent has a conflicting sort or limit node
 	ErrConflictingExternalQuery = errors.NewKind("found external scope with conflicting ORDER BY/LIMIT")
 
@@ -595,6 +613,9 @@ var (
 	// are automatically rolled back. Clients receiving this error must retry the transaction.
 	ErrLockDeadlock = errors.NewKind("serialization failure: %s, try restarting transaction.")
 
+	// ErrViewCreateStatementInvalid is returned when a ViewDatabase returns a CREATE VIEW statement that is invalid
+	ErrViewCreateStatementInvalid = errors.NewKind(`Invalid CREATE VIEW statement: %s`)
+
 	// ErrViewsNotSupported is returned when attempting to access a view on a database that doesn't support them.
 	ErrViewsNotSupported = errors.NewKind("database '%s' doesn't support views")
 
@@ -631,6 +652,9 @@ var (
 	// ErrNullableSpatialIdx is thrown when creating a SPATIAL index with a nullable column
 	ErrNullableSpatialIdx = errors.NewKind("All parts of a SPATIAL index must be NOT NULL")
 
+	// ErrNullableVectorIdx is thrown when creating a VECTOR index with a nullable column
+	ErrNullableVectorIdx = errors.NewKind("All parts of a VECTOR index must be NOT NULL")
+
 	// ErrBadSpatialIdxCol is thrown when attempting to define a SPATIAL index over a non-geometry column
 	ErrBadSpatialIdxCol = errors.NewKind("a SPATIAL index may only contain a geometrical type column")
 
@@ -661,6 +685,9 @@ var (
 
 	// ErrInvalidAutoIncCols is returned when an auto_increment column cannot be applied
 	ErrInvalidAutoIncCols = errors.NewKind("there can be only one auto_increment column and it must be defined as a key")
+
+	// ErrInvalidColumnSpecifier is returned when an invalid column specifier is used
+	ErrInvalidColumnSpecifier = errors.NewKind("Incorrect column specifier for column '%s'")
 
 	// ErrUnknownConstraintDefinition is returned when an unknown constraint type is used
 	ErrUnknownConstraintDefinition = errors.NewKind("unknown constraint definition: %s, %T")
@@ -773,17 +800,21 @@ var (
 	// ErrUnsupportedIndexPrefix is returned for an index on a string column with a prefix
 	ErrUnsupportedIndexPrefix = errors.NewKind("prefix index on string column '%s' unsupported")
 
-	// ErrInvalidIndexPrefix is returned for an index prefix on a non-string column, or the prefix is longer than string itself, or just unsupported
-	ErrInvalidIndexPrefix = errors.NewKind("incorrect prefix key '%s'; the used key part isn't a string, the used length is longer than the key part, or the storage engine doesn't support unique prefix keys")
+	// ErrInvalidIndexPrefix is returned when a prefix index is not valid for the column type,
+	// or the prefix length exceeds the column's character length.
+	ErrInvalidIndexPrefix = newMySQLKind("incorrect prefix key '%s'; the used key part isn't a string, the used length is longer than the key part, or the storage engine doesn't support unique prefix keys", mysql.ERWrongSubKey)
 
-	// ErrInvalidBlobTextKey is returned for an index on a blob or text column with no key length specified
-	ErrInvalidBlobTextKey = errors.NewKind("blob/text column '%s' used in key specification without a key length")
+	// ErrInvalidBlobTextKey is returned when a BLOB or TEXT column is included in an index
+	// without a prefix length.
+	ErrInvalidBlobTextKey = newMySQLKind("blob/text column '%s' used in key specification without a key length", mysql.ERBlobKeyWithoutLength)
 
-	// ErrKeyTooLong is returned for an index on a blob or text column that is longer than 3072 bytes
-	ErrKeyTooLong = errors.NewKind("specified key was too long; max key length is 3072 bytes")
+	// ErrKeyTooLong is returned when a prefix index key exceeds the maximum allowed byte length.
+	// See [analyzer.MaxBytePrefix] for the limit.
+	ErrKeyTooLong = newMySQLKind("specified key was too long; max key length is 3072 bytes", mysql.ERTooLongKey)
 
-	// ErrKeyZero is returned for an index on a blob or text column that is 0 in length
-	ErrKeyZero = errors.NewKind("key part '%s' length cannot be 0")
+	// ErrKeyZero is returned when a column is given a prefix index length of zero.
+	// The corresponding MySQL error code is 1391 (ER_KEY_PART_0), which is not yet defined in vitess.
+	ErrKeyZero = newMySQLKind("key part '%s' length cannot be 0", 1391)
 
 	// ErrDatabaseWriteLocked is returned when a database is locked in read-only mode to avoid
 	// conflicts with an active server
@@ -902,6 +933,9 @@ var (
 	// ErrFullTextInvalidColumnType is returned when a Full-Text index is declared on a non-text column.
 	ErrFullTextInvalidColumnType = errors.NewKind("all Full-Text columns must be declared on a non-binary text type")
 
+	// ErrVectorInvalidColumnType is returned when a Vector index is declared on a non-vector column.
+	ErrVectorInvalidColumnType = errors.NewKind("a vector index colum must be a vector or JSON")
+
 	// ErrGeneratedColumnValue is returned when a value is provided for a generated column
 	ErrGeneratedColumnValue = errors.NewKind("The value specified for generated column %q in table %q is not allowed.")
 
@@ -921,6 +955,29 @@ var (
 	ErrInvalidTypeForLimit = errors.NewKind("invalid limit. expected %T, found %T")
 
 	ErrColumnSpecifiedTwice = errors.NewKind("column '%v' specified twice")
+
+	ErrEnumTypeTruncated = errors.NewKind("new enum type change truncates value")
+
+	// ErrTruncatedIncorrect is thrown when converting a value results in portions of the data to be trimmed.
+	ErrTruncatedIncorrect = errors.NewKind("Truncated incorrect %s value: %v")
+
+	// ErrUnresolvedTableLock is returned when a FOR UPDATE OF clause references a table that doesn't exist in the query context.
+	ErrUnresolvedTableLock = errors.NewKind("unresolved table name `%s` in locking clause.")
+
+	// ErrBase64DecodeError is returned when decoding a base64 string fails.
+	ErrBase64DecodeError = errors.NewKind("Decoding of base64 string failed")
+
+	// ErrNoFormatDescriptionEventBeforeBinlogStatement is returned when a BINLOG statement is not preceded by a format description event.
+	ErrNoFormatDescriptionEventBeforeBinlogStatement = errors.NewKind("The BINLOG statement of type `%s` was not preceded by a format description BINLOG statement.")
+
+	// ErrOnlyFDAndRBREventsAllowedInBinlogStatement is returned when an unsupported event type is used in a BINLOG statement.
+	ErrOnlyFDAndRBREventsAllowedInBinlogStatement = errors.NewKind("Only Format_description_log_event and row events are allowed in BINLOG statements (but %s was provided)")
+
+	// ErrDistinctOnMatchOrderBy is returned when DISTINCT ON does not match the initial ORDER BY expressions
+	ErrDistinctOnMatchOrderBy = errors.NewKind("SELECT DISTINCT ON expressions must match initial ORDER BY expressions")
+
+	// ErrWrongDBName is returned for illegal database names with the [mysql.ERWrongDbName] error code and [mysql.SSClientError] SQLSTATE.
+	ErrWrongDBName = newMySQLKind("Incorrect database name '%s'", mysql.ERWrongDbName, mysql.SSClientError)
 )
 
 // CastSQLError returns a *mysql.SQLError with the error code and in some cases, also a SQL state, populated for the
@@ -934,16 +991,20 @@ func CastSQLError(err error) *mysql.SQLError {
 	if mysqlErr, ok := err.(*mysql.SQLError); ok {
 		return mysqlErr
 	}
-
 	var code int
-	var sqlState string = ""
-
+	var sqlState = ""
 	if w, ok := err.(WrappedInsertError); ok {
 		return CastSQLError(w.Cause)
 	}
 
 	if wm, ok := err.(WrappedTypeConversionError); ok {
 		return CastSQLError(wm.Err)
+	}
+
+	for _, mySQLErr := range mySQLErrors {
+		if mySQLErr.Kind.Is(err) {
+			return mysql.NewSQLError(mySQLErr.Code, mySQLErr.SQLState, "%s", err.Error())
+		}
 	}
 
 	switch {
@@ -1002,12 +1063,46 @@ func CastSQLError(err error) *mysql.SQLError {
 		// 	https://en.wikipedia.org/wiki/SQLSTATE
 		code = mysql.ERLockDeadlock
 		sqlState = mysql.SSLockDeadlock
+	case ErrBase64DecodeError.Is(err):
+		code = mysql.ERBase64DecodeError
+	case ErrNoFormatDescriptionEventBeforeBinlogStatement.Is(err):
+		code = mysql.ERNoFormatDescriptionEventBeforeBinlogStatement
+	case ErrOnlyFDAndRBREventsAllowedInBinlogStatement.Is(err):
+		code = mysql.EROnlyFDAndRBREventsAllowedInBinlogStatement
 	default:
 		code = mysql.ERUnknownError
 	}
 
-	// This uses the given error as a format string, so we have to escape any percentage signs else they'll show up as "%!(MISSING)"
-	return mysql.NewSQLError(code, sqlState, strings.Replace(err.Error(), `%`, `%%`, -1))
+	return mysql.NewSQLError(code, sqlState, "%s", err.Error())
+}
+
+// mySQLErrors contain MySQL-specific [sql.SQLError] with their other metadata.
+var mySQLErrors []SQLError
+
+// newMySQLKind creates [sql.SQLError] specifically for mySQLErrors that is automatically interpreted by
+// [sql.CastSQLError]. If |SQLState| is omitted, an empty string takes its place.
+func newMySQLKind(msg string, code int, sqlState ...string) *errors.Kind {
+	err := errors.NewKind(msg)
+	state := ""
+	if len(sqlState) > 0 {
+		state = sqlState[0]
+	}
+	mySQLErrors = append(mySQLErrors, SQLError{
+		Kind:     err,
+		Code:     code,
+		SQLState: state,
+	})
+	return err
+}
+
+// SQLError identifies the error family and other metadata for SQL errors.
+type SQLError struct {
+	// Kind identifies the engine error family.
+	Kind *errors.Kind
+	// Code is the numeric error code, and is implementation specific (e.g., MySQL error codes are not cross-platform).
+	Code int
+	// SQLState is the five-character string taken from ANSI SQL and ODBC.
+	SQLState string
 }
 
 // UnwrapError removes any wrapping errors (e.g. WrappedInsertError) around the specified error and
@@ -1025,8 +1120,8 @@ func UnwrapError(err error) error {
 
 type UniqueKeyError struct {
 	keyStr   string
-	IsPK     bool
 	Existing Row
+	IsPK     bool
 }
 
 func NewUniqueKeyErr(keyStr string, isPK bool, existing Row) error {
@@ -1048,8 +1143,8 @@ func (ue UniqueKeyError) Error() string {
 }
 
 type WrappedInsertError struct {
-	OffendingRow Row
 	Cause        error
+	OffendingRow Row
 }
 
 func NewWrappedInsertError(r Row, err error) WrappedInsertError {
@@ -1061,6 +1156,15 @@ func NewWrappedInsertError(r Row, err error) WrappedInsertError {
 
 func (w WrappedInsertError) Error() string {
 	return w.Cause.Error()
+}
+
+// Format implements fmt.Formatter
+func (w WrappedInsertError) Format(s fmt.State, verb rune) {
+	if fmtErr, ok := w.Cause.(fmt.Formatter); ok {
+		fmtErr.Format(s, verb)
+		return
+	}
+	_, _ = io.WriteString(s, w.Error())
 }
 
 // IgnorableError is used propagate information about an error that needs to be ignored and does not interfere with
@@ -1079,8 +1183,8 @@ func (e IgnorableError) Error() string {
 
 type WrappedTypeConversionError struct {
 	OffendingVal interface{}
-	OffendingIdx int
 	Err          error
+	OffendingIdx int
 }
 
 func NewWrappedTypeConversionError(offendingVal interface{}, idx int, err error) WrappedTypeConversionError {

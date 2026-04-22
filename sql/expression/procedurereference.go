@@ -37,24 +37,24 @@ type procedureScope struct {
 }
 
 type procedureVariableReferenceValue struct {
-	Name       string
 	Value      interface{}
 	SqlType    sql.Type
+	Name       string
 	HasBeenSet bool
 }
 
 type procedureCursorReferenceValue struct {
-	Name       string
 	SelectStmt sql.Node
 	RowIter    sql.RowIter
+	Name       string
 }
 
 type procedureHandlerReferenceValue struct {
 	Stmt        sql.Node
-	IsExit      bool
-	Action      DeclareHandlerAction
 	Cond        HandlerCondition
 	ScopeHeight int
+	IsExit      bool
+	Action      DeclareHandlerAction
 }
 
 // ProcedureReferencable indicates that a sql.Node takes a *ProcedureReference returns a new copy with the reference set.
@@ -63,12 +63,15 @@ type ProcedureReferencable interface {
 }
 
 // InitializeVariable sets the initial value for the variable.
-func (ppr *ProcedureReference) InitializeVariable(name string, sqlType sql.Type, val interface{}) error {
+func (ppr *ProcedureReference) InitializeVariable(ctx *sql.Context, name string, sqlType sql.Type, val interface{}) error {
 	if ppr == nil || ppr.InnermostScope == nil {
 		return fmt.Errorf("cannot initialize variable `%s` in an empty procedure reference", name)
 	}
-	convertedVal, _, err := sqlType.Convert(val)
+	convertedVal, _, err := sqlType.Convert(ctx, val)
 	if err != nil {
+		if sql.ErrTruncatedIncorrect.Is(err) {
+			return sql.ErrInvalidValue.New(val, sqlType)
+		}
 		return err
 	}
 	lowerName := strings.ToLower(name)
@@ -142,7 +145,7 @@ func (ppr *ProcedureReference) GetVariableType(name string) sql.Type {
 }
 
 // SetVariable updates the value of the given parameter.
-func (ppr *ProcedureReference) SetVariable(name string, val interface{}, valType sql.Type) error {
+func (ppr *ProcedureReference) SetVariable(ctx *sql.Context, name string, val interface{}, valType sql.Type) error {
 	if ppr == nil {
 		return fmt.Errorf("cannot find value for parameter `%s`", name)
 	}
@@ -151,7 +154,7 @@ func (ppr *ProcedureReference) SetVariable(name string, val interface{}, valType
 	for scope != nil {
 		if varRefVal, ok := scope.variables[lowerName]; ok {
 			//TODO: do some actual type checking using the given value's type
-			val, _, err := varRefVal.SqlType.Convert(val)
+			val, _, err := varRefVal.SqlType.Convert(ctx, val)
 			if err != nil {
 				return err
 			}
@@ -214,7 +217,7 @@ func (ppr *ProcedureReference) FetchCursor(ctx *sql.Context, name string) (sql.R
 				return nil, nil, sql.ErrCursorNotOpen.New(name)
 			}
 			row, err := cursorRefVal.RowIter.Next(ctx)
-			return row, cursorRefVal.SelectStmt.Schema(), err
+			return row, cursorRefVal.SelectStmt.Schema(ctx), err
 		}
 		scope = scope.Parent
 	}
@@ -299,9 +302,9 @@ func NewProcedureReference() *ProcedureReference {
 
 // ProcedureParam represents the parameter of a stored procedure or stored function.
 type ProcedureParam struct {
-	name       string
-	pRef       *ProcedureReference
 	typ        sql.Type
+	pRef       *ProcedureReference
+	name       string
 	hasBeenSet bool
 }
 
@@ -327,12 +330,12 @@ func (*ProcedureParam) Resolved() bool {
 }
 
 // IsNullable implements the sql.Expression interface.
-func (*ProcedureParam) IsNullable() bool {
+func (*ProcedureParam) IsNullable(ctx *sql.Context) bool {
 	return false
 }
 
 // Type implements the sql.Expression interface.
-func (pp *ProcedureParam) Type() sql.Type {
+func (pp *ProcedureParam) Type(ctx *sql.Context) sql.Type {
 	return pp.typ
 }
 
@@ -358,7 +361,7 @@ func (pp *ProcedureParam) Eval(ctx *sql.Context, r sql.Row) (interface{}, error)
 }
 
 // WithChildren implements the sql.Expression interface.
-func (pp *ProcedureParam) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (pp *ProcedureParam) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(pp, len(children), 0)
 	}
@@ -373,8 +376,8 @@ func (pp *ProcedureParam) WithParamReference(pRef *ProcedureReference) *Procedur
 }
 
 // Set sets the value of this procedure parameter to the given value.
-func (pp *ProcedureParam) Set(val interface{}, valType sql.Type) error {
-	return pp.pRef.SetVariable(pp.name, val, valType)
+func (pp *ProcedureParam) Set(ctx *sql.Context, val interface{}, valType sql.Type) error {
+	return pp.pRef.SetVariable(ctx, pp.name, val, valType)
 }
 
 // UnresolvedProcedureParam represents an unresolved parameter of a stored procedure or stored function.
@@ -401,12 +404,12 @@ func (*UnresolvedProcedureParam) Resolved() bool {
 }
 
 // IsNullable implements the sql.Expression interface.
-func (*UnresolvedProcedureParam) IsNullable() bool {
+func (*UnresolvedProcedureParam) IsNullable(ctx *sql.Context) bool {
 	return false
 }
 
 // Type implements the sql.Expression interface.
-func (*UnresolvedProcedureParam) Type() sql.Type {
+func (*UnresolvedProcedureParam) Type(ctx *sql.Context) sql.Type {
 	return types.Null
 }
 
@@ -431,7 +434,7 @@ func (upp *UnresolvedProcedureParam) Eval(ctx *sql.Context, r sql.Row) (interfac
 }
 
 // WithChildren implements the sql.Expression interface.
-func (upp *UnresolvedProcedureParam) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (upp *UnresolvedProcedureParam) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(upp, len(children), 0)
 	}

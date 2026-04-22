@@ -24,15 +24,15 @@ import (
 
 // CreateUser represents the statement CREATE USER.
 type CreateUser struct {
-	IfNotExists     bool
-	Users           []AuthenticatedUser
-	DefaultRoles    []UserName
+	MySQLDb         sql.Database
 	TLSOptions      *TLSOptions
 	AccountLimits   *AccountLimits
 	PasswordOptions *PasswordOptions
-	Locked          bool
 	Attribute       string
-	MySQLDb         sql.Database
+	Users           []AuthenticatedUser
+	DefaultRoles    []UserName
+	IfNotExists     bool
+	Locked          bool
 }
 
 var _ sql.Node = (*CreateUser)(nil)
@@ -40,7 +40,7 @@ var _ sql.Databaser = (*CreateUser)(nil)
 var _ sql.CollationCoercible = (*CreateUser)(nil)
 
 // Schema implements the interface sql.Node.
-func (n *CreateUser) Schema() sql.Schema {
+func (n *CreateUser) Schema(ctx *sql.Context) sql.Schema {
 	return types.OkResultSchema
 }
 
@@ -85,17 +85,11 @@ func (n *CreateUser) Children() []sql.Node {
 }
 
 // WithChildren implements the interface sql.Node.
-func (n *CreateUser) WithChildren(children ...sql.Node) (sql.Node, error) {
+func (n *CreateUser) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
 	if len(children) != 0 {
 		return nil, sql.ErrInvalidChildrenNumber.New(n, len(children), 0)
 	}
 	return n, nil
-}
-
-// CheckPrivileges implements the interface sql.Node.
-func (n *CreateUser) CheckPrivileges(ctx *sql.Context, opChecker sql.PrivilegedOperationChecker) bool {
-	return opChecker.UserHasPrivileges(ctx,
-		sql.NewPrivilegedOperation(sql.PrivilegeCheckSubject{}, sql.PrivilegeType_CreateUser))
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
