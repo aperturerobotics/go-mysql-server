@@ -408,7 +408,7 @@ func (j *JoinNode) Schema(ctx *sql.Context) sql.Schema {
 // will be turned into nullable columns.
 func makeNullable(cols []*sql.Column) []*sql.Column {
 	var result = make([]*sql.Column, len(cols))
-	for i := 0; i < len(cols); i++ {
+	for i := range cols {
 		col := *cols[i]
 		col.Nullable = true
 		result[i] = &col

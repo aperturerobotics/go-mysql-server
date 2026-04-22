@@ -76,6 +76,6 @@ func (s *StrExpr) IsNullable(ctx *sql.Context) bool {
 	panic("StrExpr.IsNullable should never be called")
 }
 
-func (s *StrExpr) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *StrExpr) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	panic("StrExpr.Eval should never be called")
 }

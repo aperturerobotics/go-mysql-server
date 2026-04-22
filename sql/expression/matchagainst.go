@@ -114,7 +114,7 @@ func (expr *MatchAgainst) colOffset(ctx *sql.Context) int {
 }
 
 // Eval implements sql.Expression
-func (expr *MatchAgainst) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (expr *MatchAgainst) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// KeyCols.Positions are offsets into the parent table's schema, so the row must be
 	// sliced to the parent table's columns before the search mode functions use those positions.
 	offset := expr.colOffset(ctx)

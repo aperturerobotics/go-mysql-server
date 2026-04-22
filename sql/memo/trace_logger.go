@@ -53,11 +53,11 @@ func (a *TraceLogger) PopDebugContext() {
 
 // Log prints an INFO message to stdout with the given message and args
 // if the analyzer is in debug mode.
-func (a *TraceLogger) Log(msg string, args ...interface{}) {
+func (a *TraceLogger) Log(msg string, args ...any) {
 	if a != nil && a.TraceEnabled {
 		if len(a.contextStack) > 0 {
 			ctx := strings.Join(a.contextStack, "/")
-			fmt.Printf("%s: "+msg+"\n", append([]interface{}{ctx}, args...)...)
+			fmt.Printf("%s: "+msg+"\n", append([]any{ctx}, args...)...)
 		} else {
 			fmt.Printf(msg+"\n", args...)
 		}

@@ -214,7 +214,7 @@ func (c *comparison) IsValueExpression(ctx *sql.Context) bool {
 	return l.IsValueExpression(ctx) && r.IsValueExpression(ctx)
 }
 
-func (c *comparison) evalLeftAndRight(ctx *sql.Context, row sql.Row) (interface{}, interface{}, error) {
+func (c *comparison) evalLeftAndRight(ctx *sql.Context, row sql.Row) (any, any, error) {
 	left, err := c.Left().Eval(ctx, row)
 	if err != nil {
 		return nil, nil, err
@@ -423,7 +423,7 @@ func (e *Equals) CollationCoercibility(ctx *sql.Context) (collation sql.Collatio
 }
 
 // Eval implements the Expression interface.
-func (e *Equals) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (e *Equals) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	result, err := e.Compare(ctx, row)
 	if err != nil {
 		if ErrNilOperand.Is(err) {
@@ -531,7 +531,7 @@ func (e *NullSafeEquals) Compare(ctx *sql.Context, row sql.Row) (int, error) {
 }
 
 // Eval implements the Expression interface.
-func (e *NullSafeEquals) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (e *NullSafeEquals) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	result, err := e.Compare(ctx, row)
 	if err != nil {
 		return nil, err
@@ -581,7 +581,7 @@ func (gt *GreaterThan) CollationCoercibility(ctx *sql.Context) (collation sql.Co
 }
 
 // Eval implements the Expression interface.
-func (gt *GreaterThan) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (gt *GreaterThan) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	result, err := gt.Compare(ctx, row)
 	if err != nil {
 		if ErrNilOperand.Is(err) {
@@ -650,7 +650,7 @@ func (lt *LessThan) CollationCoercibility(ctx *sql.Context) (collation sql.Colla
 }
 
 // Eval implements the expression interface.
-func (lt *LessThan) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (lt *LessThan) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	result, err := lt.Compare(ctx, row)
 	if err != nil {
 		if ErrNilOperand.Is(err) {
@@ -718,7 +718,7 @@ func (gte *GreaterThanOrEqual) CollationCoercibility(ctx *sql.Context) (collatio
 }
 
 // Eval implements the Expression interface.
-func (gte *GreaterThanOrEqual) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (gte *GreaterThanOrEqual) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	result, err := gte.Compare(ctx, row)
 	if err != nil {
 		if ErrNilOperand.Is(err) {
@@ -786,7 +786,7 @@ func (lte *LessThanOrEqual) CollationCoercibility(ctx *sql.Context) (collation s
 }
 
 // Eval implements the Expression interface.
-func (lte *LessThanOrEqual) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (lte *LessThanOrEqual) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	result, err := lte.Compare(ctx, row)
 	if err != nil {
 		if ErrNilOperand.Is(err) {

@@ -56,7 +56,7 @@ func (e *EnumToString) Children() []sql.Expression {
 }
 
 // Eval implements the sql.Expression interface.
-func (e *EnumToString) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (e *EnumToString) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	span, ctx := ctx.Span("expression.EnumToString")
 	defer span.End()
 

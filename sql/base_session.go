@@ -17,6 +17,7 @@ package sql
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"sync/atomic"
 
@@ -102,8 +103,8 @@ func (s *BaseSession) SetClient(c Client) {
 }
 
 // GetAllSessionVariables implements the Session interface.
-func (s *BaseSession) GetAllSessionVariables() map[string]interface{} {
-	m := make(map[string]interface{})
+func (s *BaseSession) GetAllSessionVariables() map[string]any {
+	m := make(map[string]any)
 
 	for k, v := range s.systemVars {
 		if sysType, ok := v.Var.GetType().(SetType); ok {
@@ -120,7 +121,7 @@ func (s *BaseSession) GetAllSessionVariables() map[string]interface{} {
 }
 
 // SetSessionVariable implements the Session interface.
-func (s *BaseSession) SetSessionVariable(ctx *Context, sysVarName string, value interface{}) error {
+func (s *BaseSession) SetSessionVariable(ctx *Context, sysVarName string, value any) error {
 	sysVarName = strings.ToLower(sysVarName)
 	sysVar, ok := s.systemVars[sysVarName]
 
@@ -146,7 +147,7 @@ func (s *BaseSession) SetSessionVariable(ctx *Context, sysVarName string, value 
 }
 
 // InitSessionVariable implements the Session interface and is used to initialize variables (Including read-only variables)
-func (s *BaseSession) InitSessionVariable(ctx *Context, sysVarName string, value interface{}) error {
+func (s *BaseSession) InitSessionVariable(ctx *Context, sysVarName string, value any) error {
 	sysVar, _, ok := SystemVariables.GetGlobal(sysVarName)
 	if !ok {
 		return ErrUnknownSystemVariable.New(sysVarName)
@@ -162,7 +163,7 @@ func (s *BaseSession) InitSessionVariable(ctx *Context, sysVarName string, value
 }
 
 // InitSessionVariableDefault implements the Session interface and is used to initialize variables (Including read-only variables)
-func (s *BaseSession) InitSessionVariableDefault(ctx *Context, sysVarName string, value interface{}) error {
+func (s *BaseSession) InitSessionVariableDefault(ctx *Context, sysVarName string, value any) error {
 	sysVar, _, ok := SystemVariables.GetGlobal(sysVarName)
 	if !ok {
 		return ErrUnknownSystemVariable.New(sysVarName)
@@ -182,7 +183,7 @@ func (s *BaseSession) InitSessionVariableDefault(ctx *Context, sysVarName string
 	return nil
 }
 
-func (s *BaseSession) setSessVar(ctx *Context, sysVar SystemVariable, val interface{}, init bool) error {
+func (s *BaseSession) setSessVar(ctx *Context, sysVar SystemVariable, val any, init bool) error {
 	var svv SystemVarValue
 	var err error
 	if init {
@@ -205,12 +206,12 @@ func (s *BaseSession) setSessVar(ctx *Context, sysVar SystemVariable, val interf
 }
 
 // SetUserVariable implements the Session interface.
-func (s *BaseSession) SetUserVariable(ctx *Context, varName string, value interface{}, typ Type) error {
+func (s *BaseSession) SetUserVariable(ctx *Context, varName string, value any, typ Type) error {
 	return s.userVars.SetUserVariable(ctx, varName, value, typ)
 }
 
 // GetSessionVariable implements the Session interface.
-func (s *BaseSession) GetSessionVariable(ctx *Context, sysVarName string) (interface{}, error) {
+func (s *BaseSession) GetSessionVariable(ctx *Context, sysVarName string) (any, error) {
 	sysVarName = strings.ToLower(sysVarName)
 	sysVar, ok := s.systemVars[sysVarName]
 	if !ok {
@@ -226,7 +227,7 @@ func (s *BaseSession) GetSessionVariable(ctx *Context, sysVarName string) (inter
 }
 
 // GetSessionVariableDefault implements the Session interface.
-func (s *BaseSession) GetSessionVariableDefault(ctx *Context, sysVarName string) (interface{}, error) {
+func (s *BaseSession) GetSessionVariableDefault(ctx *Context, sysVarName string) (any, error) {
 	sysVarName = strings.ToLower(sysVarName)
 	sysVar, ok := s.systemVars[sysVarName]
 	if !ok {
@@ -242,12 +243,12 @@ func (s *BaseSession) GetSessionVariableDefault(ctx *Context, sysVarName string)
 }
 
 // GetUserVariable implements the Session interface.
-func (s *BaseSession) GetUserVariable(ctx *Context, varName string) (Type, interface{}, error) {
+func (s *BaseSession) GetUserVariable(ctx *Context, varName string) (Type, any, error) {
 	return s.userVars.GetUserVariable(ctx, varName)
 }
 
 // GetStatusVariable implements the Session interface.
-func (s *BaseSession) GetStatusVariable(_ *Context, statVarName string) (interface{}, error) {
+func (s *BaseSession) GetStatusVariable(_ *Context, statVarName string) (any, error) {
 	statVar, ok := s.statusVars[statVarName]
 	if !ok {
 		return nil, ErrUnknownSystemVariable.New(statVarName)
@@ -256,7 +257,7 @@ func (s *BaseSession) GetStatusVariable(_ *Context, statVarName string) (interfa
 }
 
 // SetStatusVariable implements the Session interface.
-func (s *BaseSession) SetStatusVariable(_ *Context, statVarName string, val interface{}) error {
+func (s *BaseSession) SetStatusVariable(_ *Context, statVarName string, val any) error {
 	statVar, ok := s.statusVars[statVarName]
 	if !ok {
 		return ErrUnknownSystemVariable.New(statVarName)
@@ -269,9 +270,7 @@ func (s *BaseSession) SetStatusVariable(_ *Context, statVarName string, val inte
 // GetAllStatusVariables implements the Session interface.
 func (s *BaseSession) GetAllStatusVariables(_ *Context) map[string]StatusVarValue {
 	m := make(map[string]StatusVarValue)
-	for k, v := range s.statusVars {
-		m[k] = v
-	}
+	maps.Copy(m, s.statusVars)
 	return m
 }
 
@@ -412,7 +411,7 @@ func (s *BaseSession) Warn(warn *Warning) {
 func (s *BaseSession) Warnings() []*Warning {
 	n := len(s.warnings)
 	warns := make([]*Warning, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		warns[i] = s.warnings[n-i-1]
 	}
 	return warns

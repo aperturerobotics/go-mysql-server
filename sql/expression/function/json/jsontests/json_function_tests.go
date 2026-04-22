@@ -28,7 +28,7 @@ import (
 
 var sqlCtx = sql.NewEmptyContext()
 
-type prepareJsonValue = func(*testing.T, interface{}) interface{}
+type prepareJsonValue = func(*testing.T, any) any
 
 type jsonFormatTest struct {
 	name        string
@@ -38,7 +38,7 @@ type jsonFormatTest struct {
 var jsonFormatTests = []jsonFormatTest{
 	{
 		name: "string",
-		prepareFunc: func(t *testing.T, js interface{}) interface{} {
+		prepareFunc: func(t *testing.T, js any) any {
 			jsonString, _, err := types.Text.Convert(sqlCtx, js)
 			require.NoError(t, err)
 			return jsonString
@@ -46,7 +46,7 @@ var jsonFormatTests = []jsonFormatTest{
 	},
 	{
 		name: "JsonDocument",
-		prepareFunc: func(t *testing.T, js interface{}) interface{} {
+		prepareFunc: func(t *testing.T, js any) any {
 			doc, _, err := types.JSON.Convert(sqlCtx, js)
 			require.NoError(t, err)
 			val, err := doc.(sql.JSONWrapper).ToInterface(t.Context())
@@ -56,7 +56,7 @@ var jsonFormatTests = []jsonFormatTest{
 	},
 	{
 		name: "LazyJsonDocument",
-		prepareFunc: func(t *testing.T, js interface{}) interface{} {
+		prepareFunc: func(t *testing.T, js any) any {
 			doc, _, err := types.JSON.Convert(sqlCtx, js)
 			require.NoError(t, err)
 			bytes, err := types.MarshallJson(sqlCtx, doc.(sql.JSONWrapper))
@@ -69,14 +69,14 @@ var jsonFormatTests = []jsonFormatTest{
 type testCase struct {
 	f        sql.Expression
 	row      sql.Row
-	expected interface{}
+	expected any
 	err      error
 	name     string
 }
 
 func buildGetFieldExpressions(t *testing.T, construct func(*sql.Context, ...sql.Expression) (sql.Expression, error), argCount int) sql.Expression {
 	expressions := make([]sql.Expression, 0, argCount)
-	for i := 0; i < argCount; i++ {
+	for i := range argCount {
 		expressions = append(expressions, expression.NewGetField(i, types.LongText, "arg"+strconv.Itoa(i), false))
 	}
 
@@ -101,7 +101,7 @@ func RunJsonTests(t *testing.T, testCases []testCase) {
 			if tstC.err == nil {
 				req.NoError(err)
 
-				var expect interface{}
+				var expect any
 				if tstC.expected != nil {
 					expect, _, err = types.JSON.Convert(sqlCtx, tstC.expected)
 					if err != nil {

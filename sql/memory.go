@@ -32,7 +32,7 @@ type Disposable interface {
 	Dispose(ctx *Context)
 }
 
-func Dispose(ctx *Context, i interface{}) {
+func Dispose(ctx *Context, i any) {
 	if d, ok := i.(Disposable); ok {
 		d.Dispose(ctx)
 	}
@@ -47,9 +47,9 @@ type Freeable interface {
 // KeyValueCache is a cache of key value pairs.
 type KeyValueCache interface {
 	// Put a new value in the cache.
-	Put(uint64, interface{}) error
+	Put(uint64, any) error
 	// Get the value with the given key. An error is returned if the specified key does not exist.
-	Get(uint64) (interface{}, error)
+	Get(uint64) (any, error)
 	// Size returns the number of elements in the cache.
 	Size() int
 }

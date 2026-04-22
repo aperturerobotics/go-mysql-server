@@ -36,7 +36,7 @@ func TestJSONType(t *testing.T) {
 	testCases := []struct {
 		f   sql.Expression
 		row sql.Row
-		exp interface{}
+		exp any
 		err error
 	}{
 		{
@@ -151,12 +151,12 @@ func TestJSONType(t *testing.T) {
 		},
 		{
 			f:   f1,
-			row: sql.Row{types.JSONDocument{Val: []interface{}{}}},
+			row: sql.Row{types.JSONDocument{Val: []any{}}},
 			exp: "ARRAY",
 		},
 		{
 			f:   f1,
-			row: sql.Row{types.JSONDocument{Val: map[string]interface{}{}}},
+			row: sql.Row{types.JSONDocument{Val: map[string]any{}}},
 			exp: "OBJECT",
 		},
 	}

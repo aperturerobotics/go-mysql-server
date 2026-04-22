@@ -670,7 +670,7 @@ func (lb *LookupBuilder) GetLookup(ctx *sql.Context, key lookupBuilderKey) (sql.
 }
 
 // convertLookupKey converts the value in keyCol to the type colType
-func convertLookupKey(ctx *sql.Context, colType sql.Type, keyCol lookupBuilderKeyElement) (interface{}, sql.ConvertInRange, error) {
+func convertLookupKey(ctx *sql.Context, colType sql.Type, keyCol lookupBuilderKeyElement) (any, sql.ConvertInRange, error) {
 	srcType := keyCol.typ
 	destType := colType
 

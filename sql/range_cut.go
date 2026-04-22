@@ -47,7 +47,7 @@ func (bt MySQLRangeBoundType) Inclusive() bool {
 }
 
 // GetMySQLRangeCutKey returns the inner value from the given MySQLRangeCut.
-func GetMySQLRangeCutKey(c MySQLRangeCut) interface{} {
+func GetMySQLRangeCutKey(c MySQLRangeCut) any {
 	switch c := c.(type) {
 	case Below:
 		return c.Key
@@ -123,7 +123,7 @@ func GetMySQLRangeCutMin(typ Type, cuts ...MySQLRangeCut) (MySQLRangeCut, error)
 
 // Above represents the position immediately above the contained key.
 type Above struct {
-	Key interface{}
+	Key any
 	Typ Type
 }
 
@@ -201,7 +201,7 @@ func (AboveAll) TypeAsUpperBound() MySQLRangeBoundType {
 
 // Below represents the position immediately below the contained key.
 type Below struct {
-	Key interface{}
+	Key any
 	Typ Type
 }
 

@@ -119,7 +119,7 @@ func calcPointDist(a, b types.Point) float64 {
 }
 
 // calcDist finds the minimum distance from a Point in g1 to a Point g2
-func calcDist(g1, g2 types.GeometryValue) interface{} {
+func calcDist(g1, g2 types.GeometryValue) any {
 	points1, points2 := map[types.Point]bool{}, map[types.Point]bool{}
 	flattenGeometry(g1, points1)
 	flattenGeometry(g2, points2)
@@ -139,7 +139,7 @@ func calcDist(g1, g2 types.GeometryValue) interface{} {
 }
 
 // Eval implements the sql.Expression interface.
-func (d *Distance) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (d *Distance) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	g1, err := d.ChildExpressions[0].Eval(ctx, row)
 	if err != nil {
 		return nil, err

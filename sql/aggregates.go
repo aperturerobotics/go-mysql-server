@@ -49,7 +49,7 @@ type WindowFunction interface {
 	// TODO: implement sliding window interface in aggregation functions and windowBlockIter
 	// NewSlidingFrameInterval(added, dropped WindowInterval)
 	// Compute returns an aggregation result for a given interval and buffer
-	Compute(*Context, WindowInterval, WindowBuffer) (interface{}, error)
+	Compute(*Context, WindowInterval, WindowBuffer) (any, error)
 }
 
 // WindowAdaptableExpression is an Expression that can be executed as a window aggregation
@@ -123,7 +123,7 @@ type AggregationBuffer interface {
 	Disposable
 
 	// Eval the given buffer.
-	Eval(*Context) (interface{}, error)
+	Eval(*Context) (any, error)
 	// Update the given buffer with the given row.
 	Update(ctx *Context, row Row) error
 }

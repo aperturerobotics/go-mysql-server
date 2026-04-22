@@ -72,7 +72,7 @@ func startPoint(l types.LineString) types.Point {
 }
 
 // Eval implements the sql.Expression interface.
-func (s *StartPoint) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *StartPoint) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	g, err := s.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -145,7 +145,7 @@ func endPoint(l types.LineString) types.Point {
 }
 
 // Eval implements the sql.Expression interface.
-func (e *EndPoint) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (e *EndPoint) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	g, err := e.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -222,7 +222,7 @@ func isClosed(l types.LineString) bool {
 }
 
 // Eval implements the sql.Expression interface.
-func (i *IsClosed) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *IsClosed) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	g, err := i.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

@@ -419,10 +419,7 @@ func (f *rangeFramerBase) Next(ctx *sql.Context, buf sql.WindowBuffer) (sql.Wind
 		}
 	}
 
-	newEnd := f.frameEnd
-	if newStart > newEnd {
-		newEnd = newStart
-	}
+	newEnd := max(newStart, f.frameEnd)
 	switch {
 	case newEnd > f.partitionEnd, f.unboundedFollowing, f.endCurrentRow && f.orderBy == nil:
 		newEnd = f.partitionEnd

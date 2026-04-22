@@ -68,7 +68,7 @@ func (b *Between) Resolved() bool {
 }
 
 // Eval implements the Expression interface.
-func (b *Between) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (b *Between) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// TODO: Delete Between expression entirely?
 	// Reuse type conversion logic in comparison expressions by creating a logically equivalent expression
 	return NewAnd(NewLessThanOrEqual(b.Lower, b.Val), NewGreaterThanOrEqual(b.Upper, b.Val)).Eval(ctx, row)

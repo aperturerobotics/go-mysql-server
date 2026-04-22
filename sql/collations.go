@@ -863,7 +863,7 @@ func (c CollationID) Collation() Collation {
 }
 
 var weightBuffers = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return new([]byte)
 	},
 }

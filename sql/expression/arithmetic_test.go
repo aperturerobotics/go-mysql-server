@@ -36,7 +36,7 @@ func TestPlus(t *testing.T) {
 		name  string
 		left  sql.Expression
 		right sql.Expression
-		exp   interface{}
+		exp   any
 		skip  bool
 	}{
 		{
@@ -200,7 +200,7 @@ func TestMinus(t *testing.T) {
 		name  string
 		left  sql.Expression
 		right sql.Expression
-		exp   interface{}
+		exp   any
 		skip  bool
 	}{
 		{
@@ -359,7 +359,7 @@ func TestMult(t *testing.T) {
 		name  string
 		left  sql.Expression
 		right sql.Expression
-		exp   interface{}
+		exp   any
 		err   *errors.Kind
 		skip  bool
 	}{
@@ -568,9 +568,9 @@ func TestMod(t *testing.T) {
 func TestUnaryMinus(t *testing.T) {
 	testCases := []struct {
 		name     string
-		input    interface{}
+		input    any
 		typ      sql.Type
-		expected interface{}
+		expected any
 	}{
 		{"int8", int8(1), types.Int8, int64(-1)},
 		{"int16", int16(1), types.Int16, int64(-1)},

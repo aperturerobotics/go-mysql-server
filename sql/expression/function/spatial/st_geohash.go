@@ -124,7 +124,7 @@ func encodeGeoHash(lon, lat float64, length int) string {
 }
 
 // Eval implements the sql.Expression interface.
-func (g *GeoHash) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (g *GeoHash) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	var lon, lat float64
 	var maxLen int
 
@@ -314,7 +314,7 @@ func decodeGeoHash(hash string) (lon, lat float64, err error) {
 }
 
 // Eval implements the sql.Expression interface.
-func (p *PointFromGeoHash) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *PointFromGeoHash) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	hashVal, err := p.LeftChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -401,7 +401,7 @@ func (l *LatFromGeoHash) WithChildren(ctx *sql.Context, children ...sql.Expressi
 }
 
 // Eval implements the sql.Expression interface.
-func (l *LatFromGeoHash) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (l *LatFromGeoHash) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := l.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -473,7 +473,7 @@ func (l *LongFromGeoHash) WithChildren(ctx *sql.Context, children ...sql.Express
 }
 
 // Eval implements the sql.Expression interface.
-func (l *LongFromGeoHash) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (l *LongFromGeoHash) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := l.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

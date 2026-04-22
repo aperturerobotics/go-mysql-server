@@ -16,7 +16,7 @@ package sql
 
 import "net"
 
-func MustConvert(val interface{}, _ ConvertInRange, err error) interface{} {
+func MustConvert(val any, _ ConvertInRange, err error) any {
 	if err != nil {
 		panic(err)
 	}

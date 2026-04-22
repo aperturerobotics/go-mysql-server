@@ -25,7 +25,7 @@ import (
 // and returns them as a set
 func loadPrivilegeTypes(n int, f func(j int) int32) map[sql.PrivilegeType]struct{} {
 	privs := make(map[sql.PrivilegeType]struct{}, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		privs[sql.PrivilegeType(f(i))] = struct{}{}
 	}
 	return privs

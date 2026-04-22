@@ -104,7 +104,7 @@ func (p *PercentRank) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements sql.Expression
-func (p *PercentRank) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *PercentRank) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return nil, sql.ErrWindowUnsupported.New(p.FunctionName())
 }
 

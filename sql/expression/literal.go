@@ -29,7 +29,7 @@ import (
 
 // Literal represents a literal expression (string, number, bool, ...).
 type Literal struct {
-	Val  interface{}
+	Val  any
 	Typ  sql.Type
 	val2 sql.Value
 }
@@ -40,7 +40,7 @@ var _ sql.CollationCoercible = &Literal{}
 var _ sqlparser.Injectable = &Literal{}
 
 // NewLiteral creates a new Literal expression.
-func NewLiteral(value interface{}, fieldType sql.Type) *Literal {
+func NewLiteral(value any, fieldType sql.Type) *Literal {
 	val2, _ := sql.ConvertToValue(value)
 	return &Literal{
 		Val:  value,
@@ -86,7 +86,7 @@ func (lit *Literal) CollationCoercibility(ctx *sql.Context) (collation sql.Colla
 }
 
 // Eval implements the Expression interface.
-func (lit *Literal) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (lit *Literal) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return lit.Val, nil
 }
 
@@ -160,7 +160,7 @@ func (lit *Literal) IsValueExpression(ctx *sql.Context) bool {
 }
 
 // Value returns the literal value.
-func (lit *Literal) Value() interface{} {
+func (lit *Literal) Value() any {
 	return lit.Val
 }
 

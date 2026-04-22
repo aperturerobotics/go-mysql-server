@@ -26,7 +26,7 @@ func NewDistinctExpression(e sql.Expression) *DistinctExpression {
 	}
 }
 
-func (de *DistinctExpression) seenValue(ctx *sql.Context, value interface{}) (bool, error) {
+func (de *DistinctExpression) seenValue(ctx *sql.Context, value any) (bool, error) {
 	if de.seen == nil {
 		cache, dispose := ctx.Memory.NewHistoryCache(ctx)
 		de.seen = cache
@@ -102,7 +102,7 @@ func (de *DistinctExpression) IsNullable(ctx *sql.Context) bool {
 
 // Returns the child value if the cache hasn't seen the value before otherwise returns nil.
 // Since NULLs are ignored in aggregate expressions that use DISTINCT this is a valid return scheme.
-func (de *DistinctExpression) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (de *DistinctExpression) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := de.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

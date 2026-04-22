@@ -54,7 +54,7 @@ func (*Interval) CollationCoercibility(ctx *sql.Context) (collation sql.Collatio
 func (i *Interval) IsNullable(ctx *sql.Context) bool { return i.Child.IsNullable(ctx) }
 
 // Eval implements the sql.Expression interface.
-func (i *Interval) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *Interval) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	panic("Interval.Eval is just a placeholder method and should not be called directly")
 }
 
@@ -283,10 +283,7 @@ func (td TimeDelta) apply(t time.Time, sign int64) time.Time {
 		originalDay := t.Day()
 		maxDaysInTargetMonth := daysInMonth(targetYear, targetMonth)
 
-		targetDay := originalDay
-		if originalDay > maxDaysInTargetMonth {
-			targetDay = maxDaysInTargetMonth
-		}
+		targetDay := min(originalDay, maxDaysInTargetMonth)
 
 		t = time.Date(targetYear, targetMonth, targetDay,
 			t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())

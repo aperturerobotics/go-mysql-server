@@ -247,8 +247,8 @@ func ResolveForeignKey(ctx *sql.Context, tbl sql.ForeignKeyTable, refTbl sql.For
 			fkNamePrefix := fmt.Sprintf("%s_ibfk_", strings.ToLower(tbl.Name()))
 			var highest uint32
 			for _, existingFk := range existingFks {
-				if strings.HasPrefix(existingFk.Name, fkNamePrefix) {
-					numStr := strings.TrimPrefix(existingFk.Name, fkNamePrefix)
+				if after, ok := strings.CutPrefix(existingFk.Name, fkNamePrefix); ok {
+					numStr := after
 					num, err := strconv.Atoi(numStr)
 					if err != nil {
 						continue
@@ -639,7 +639,7 @@ func FindFKIndexWithPrefix(ctx *sql.Context, tbl sql.IndexAddressableTable, pref
 		}
 	})
 	sortedIndexes := make([]sql.Index, len(indexesWithLen))
-	for i := 0; i < len(sortedIndexes); i++ {
+	for i := range sortedIndexes {
 		sortedIndexes[i] = indexesWithLen[i].Index
 	}
 	return sortedIndexes[0], true, nil
@@ -695,7 +695,7 @@ func exprsAreIndexPrefix(exprs, indexExprs []string) bool {
 		return false
 	}
 
-	for i := 0; i < len(exprs); i++ {
+	for i := range exprs {
 		if exprs[i] != indexExprs[i] {
 			return false
 		}

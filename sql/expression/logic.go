@@ -146,7 +146,7 @@ func (*And) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, 
 }
 
 // Eval implements the Expression interface.
-func (a *And) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (a *And) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	lval, err := a.LeftChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -241,7 +241,7 @@ func (*Or) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, c
 }
 
 // Eval implements the Expression interface.
-func (o *Or) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (o *Or) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	lval, err := o.LeftChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -311,7 +311,7 @@ func (*Xor) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, 
 }
 
 // Eval implements the Expression interface.
-func (x *Xor) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (x *Xor) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	lval, err := x.LeftChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err

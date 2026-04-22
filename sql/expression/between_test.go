@@ -33,7 +33,7 @@ func TestBetween(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"val is null", sql.NewRow(nil, 1, 2), nil, false},
@@ -178,7 +178,7 @@ func TestNotBetween(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"val is null", sql.NewRow(nil, 1, 2), nil, false},

@@ -50,9 +50,9 @@ func TestPersistVariable(t *testing.T) {
 	persistTests := []struct {
 		title       string
 		name        string
-		value       interface{}
+		value       any
 		err         *errors.Kind
-		expectedCmp interface{}
+		expectedCmp any
 	}{
 		{"set variable", "max_connections", int64(10), nil, int64(10)},
 		{"set bad variable", "nonexistent_var", int64(10), sql.ErrUnknownSystemVariable, nil},

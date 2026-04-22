@@ -37,7 +37,7 @@ func TestJSONKeys(t *testing.T) {
 	testCases := []struct {
 		f   sql.Expression
 		row sql.Row
-		exp interface{}
+		exp any
 		err error
 	}{
 		{

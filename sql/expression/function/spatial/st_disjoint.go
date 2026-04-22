@@ -80,7 +80,7 @@ func (d *Disjoint) WithChildren(ctx *sql.Context, children ...sql.Expression) (s
 
 // Eval implements the sql.Expression interface.
 // ST_Disjoint is the inverse of ST_Intersects.
-func (d *Disjoint) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (d *Disjoint) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	geom1, err := d.LeftChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err

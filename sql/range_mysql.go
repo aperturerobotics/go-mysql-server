@@ -233,7 +233,7 @@ func (rang MySQLRange) TryMerge(otherRange MySQLRange) (MySQLRange, bool, error)
 
 	indexToMerge := -1
 	// The superset checks will cover if every column expr is equivalent
-	for i := 0; i < len(rang); i++ {
+	for i := range rang {
 		if ok, err := rang[i].Equals(otherRange[i]); err != nil {
 			return nil, false, err
 		} else if !ok {

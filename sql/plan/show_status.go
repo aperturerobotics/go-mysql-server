@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"maps"
 	"sort"
 
 	"github.com/dolthub/vitess/go/sqltypes"
@@ -88,9 +89,7 @@ func (s *ShowStatus) RowIter(ctx *sql.Context, _ sql.Row) (sql.RowIter, error) {
 	if !s.isGlobal {
 		// Variables with both GLOBAL and SESSION scope are overridden by SESSION scope.
 		sessVars := ctx.Session.GetAllStatusVariables(ctx)
-		for name, v := range sessVars {
-			vars[name] = v
-		}
+		maps.Copy(vars, sessVars)
 	}
 
 	names := make([]string, 0, len(vars))

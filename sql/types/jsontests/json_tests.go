@@ -28,7 +28,7 @@ import (
 
 var sqlCtx = sql.NewEmptyContext()
 
-func ConvertToJson(t *testing.T, val interface{}) types.MutableJSON {
+func ConvertToJson(t *testing.T, val any) types.MutableJSON {
 	if val == nil {
 		return nil
 	}
@@ -41,12 +41,12 @@ func ConvertToJson(t *testing.T, val interface{}) types.MutableJSON {
 	return types.JSONDocument{Val: val}
 }
 
-type prepareJsonCompareValues = func(t *testing.T, left, right interface{}) (interface{}, interface{})
+type prepareJsonCompareValues = func(t *testing.T, left, right any) (any, any)
 
 type JsonCompareTest struct {
 	Name  string
-	Left  interface{}
-	Right interface{}
+	Left  any
+	Right any
 	Cmp   int
 }
 
@@ -977,7 +977,7 @@ var JsonArrayInsertTests = []JsonMutationTest{
 	},
 }
 
-type PrepareJsonMutationValue = func(t *testing.T, doc, val, result interface{}) (types.MutableJSON, sql.JSONWrapper, types.MutableJSON)
+type PrepareJsonMutationValue = func(t *testing.T, doc, val, result any) (types.MutableJSON, sql.JSONWrapper, types.MutableJSON)
 
 func RunJsonMutationTests(ctx context.Context, t *testing.T, tests []JsonMutationTest, prepare PrepareJsonMutationValue, op string) {
 	for _, test := range tests {

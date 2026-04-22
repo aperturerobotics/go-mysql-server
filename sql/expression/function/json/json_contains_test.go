@@ -75,7 +75,7 @@ func TestJSONContains(t *testing.T) {
 	testCases := []struct {
 		f        sql.Expression
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      error
 	}{
 		// JSON Array Tests

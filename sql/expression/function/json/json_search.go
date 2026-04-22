@@ -165,14 +165,14 @@ func (j *JSONSearch) IsNullable(ctx *sql.Context) bool {
 
 // jsonSearch recursively searches a JSON object for a string that matches the given matcher. It returns the path to the
 // matched string. If once is true, it will only return the first match, breaking out of the recursion early.
-func jsonSearch(json interface{}, matcher *expression.LikeMatcher, currPath string, once bool) ([]string, bool) {
+func jsonSearch(json any, matcher *expression.LikeMatcher, currPath string, once bool) ([]string, bool) {
 	switch js := json.(type) {
 	case string:
 		if matcher.Match(js) {
 			return []string{currPath}, once
 		}
 		return nil, false
-	case []interface{}:
+	case []any:
 		var results []string
 		for i, v := range js {
 			path := fmt.Sprintf("%s[%d]", currPath, i)
@@ -183,7 +183,7 @@ func jsonSearch(json interface{}, matcher *expression.LikeMatcher, currPath stri
 			results = append(results, res...)
 		}
 		return results, false
-	case map[string]interface{}:
+	case map[string]any:
 		var results []string
 		for k, v := range js {
 			path := fmt.Sprintf("%s.%s", currPath, k)
@@ -200,7 +200,7 @@ func jsonSearch(json interface{}, matcher *expression.LikeMatcher, currPath stri
 }
 
 // Eval implements sql.Expression
-func (j *JSONSearch) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (j *JSONSearch) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	span, ctx := ctx.Span(fmt.Sprintf("function.%s", j.FunctionName()))
 	defer span.End()
 
@@ -328,7 +328,7 @@ func (j *JSONSearch) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	// Need to format single results as JSON strings, and multiple results as JSON arrays of strings
-	var finalResults interface{}
+	var finalResults any
 	if len(results) == 1 {
 		finalResults = fmt.Sprintf(`"%s"`, results[0])
 	} else {

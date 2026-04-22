@@ -31,7 +31,7 @@ import (
 type AnyWrapper interface {
 
 	// UnwrapAny "unwraps" an AnyWrapper into a simple type.
-	UnwrapAny(ctx context.Context) (interface{}, error)
+	UnwrapAny(ctx context.Context) (any, error)
 
 	// IsExactLength returns whether the byte length of the wrapped value can be known without unwrapping it.
 	// If IsExactLength is true, then the wrapped value is exactly MaxByteLength bytes.
@@ -45,11 +45,11 @@ type AnyWrapper interface {
 	// Compare allows a wrapper to compare itself to another value, potentially without needing to be unwrapped.
 	// Setting |comparable| to true means that the wrapper was able to compare them and store the result in |cmp|.
 	// Setting |comparable| to false means that the wrapper wasn't able to compare them.
-	Compare(ctx context.Context, other interface{}) (cmp int, comparable bool, err error)
+	Compare(ctx context.Context, other any) (cmp int, comparable bool, err error)
 
 	// Hash is a value that can be compared to check if two wrapper values are equal. Equality of the hashes implies
 	// equality of the wrappers.
-	Hash() interface{}
+	Hash() any
 }
 
 // Wrapper is an interface for types that encapsulate a SQL value of a specific type.
@@ -62,7 +62,7 @@ type StringWrapper = Wrapper[string]
 type BytesWrapper = Wrapper[[]byte]
 
 // UnwrapAny takes a possibly-wrapped value and unwraps it. If the input isn't a wrapper, the input is returned unmodified.
-func UnwrapAny(ctx context.Context, v interface{}) (result interface{}, err error) {
+func UnwrapAny(ctx context.Context, v any) (result any, err error) {
 	switch vv := v.(type) {
 	case AnyWrapper:
 		return vv.UnwrapAny(ctx)
@@ -72,7 +72,7 @@ func UnwrapAny(ctx context.Context, v interface{}) (result interface{}, err erro
 
 // Unwrap takes a possibly-wrapped value and attempts to unwrap it into the requested type.
 // If the input isn't a wrapper for the specified type, |ok| is set to false.
-func Unwrap[T any](ctx context.Context, v interface{}) (result T, ok bool, err error) {
+func Unwrap[T any](ctx context.Context, v any) (result T, ok bool, err error) {
 	switch vv := v.(type) {
 	case Wrapper[T]:
 		result, err = vv.Unwrap(ctx)
@@ -91,5 +91,5 @@ type JSONWrapper interface {
 	// Clone creates a new value that can be mutated without affecting the original.
 	Clone(ctx context.Context) JSONWrapper
 	// ToInterface converts a JSONWrapper to an interface{} of simple types
-	ToInterface(ctx context.Context) (interface{}, error)
+	ToInterface(ctx context.Context) (any, error)
 }

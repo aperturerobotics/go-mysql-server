@@ -101,7 +101,7 @@ func (g *GroupConcat) NewWindowFunction(ctx *sql.Context) (sql.WindowFunction, e
 }
 
 // Eval implements the Expression interface.
-func (g *GroupConcat) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (g *GroupConcat) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return nil, ErrEvalUnsupportedOnAggregation.New("GroupConcat")
 }
 
@@ -264,7 +264,7 @@ func (g *groupConcatBuffer) Update(ctx *sql.Context, originalRow sql.Row) error 
 		return nil
 	}
 
-	var v interface{}
+	var v any
 	var vs string
 	if types.IsBlobType(retType) {
 		v, _, err = types.Blob.Convert(ctx, evalRow[0])
@@ -324,7 +324,7 @@ func (g *groupConcatBuffer) Update(ctx *sql.Context, originalRow sql.Row) error 
 
 // Eval implements the AggregationBuffer interface.
 // cc: https://dev.mysql.com/doc/refman/8.0/en/aggregate-functions.html#function_group-concat
-func (g *groupConcatBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (g *groupConcatBuffer) Eval(ctx *sql.Context) (any, error) {
 	rows := g.rows
 
 	if len(rows) == 0 {

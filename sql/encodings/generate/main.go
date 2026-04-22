@@ -342,10 +342,7 @@ func SortedMapKeys[K cmp.Ordered, V any](m map[K]V) []K {
 }
 
 func CommonPrefix(str1 string, str2 string) string {
-	minLen := len(str1)
-	if len(str2) < minLen {
-		minLen = len(str2)
-	}
+	minLen := min(len(str2), len(str1))
 	i := 0
 	for ; i < minLen; i++ {
 		if str1[i] != str2[i] {

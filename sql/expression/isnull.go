@@ -55,7 +55,7 @@ func (e *IsNull) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements the Expression interface.
-func (e *IsNull) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (e *IsNull) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	v, err := e.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

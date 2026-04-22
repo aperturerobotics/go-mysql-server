@@ -60,7 +60,7 @@ func NewInTuple(left sql.Expression, right sql.Expression) *InTuple {
 }
 
 // Eval implements the Expression interface.
-func (in *InTuple) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (in *InTuple) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	lVal, err := in.Left().Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -250,7 +250,7 @@ func newInMap(ctx *sql.Context, lType sql.Type, right Tuple) (map[uint64]struct{
 }
 
 // Eval implements the Expression interface.
-func (hit *HashInTuple) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (hit *HashInTuple) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	leftVal, err := hit.in.Left().Eval(ctx, row)
 	if err != nil {
 		return nil, err

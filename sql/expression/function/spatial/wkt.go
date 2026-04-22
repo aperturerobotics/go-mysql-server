@@ -160,7 +160,7 @@ func GeomCollToWKT(g types.GeomColl, order bool) string {
 }
 
 // Eval implements the sql.Expression interface.
-func (p *AsWKT) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *AsWKT) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate child
 	val, err := p.Child.Eval(ctx, row)
 	if err != nil {
@@ -681,7 +681,7 @@ func WKTToGeom(ctx *sql.Context, row sql.Row, exprs []sql.Expression, expectedGe
 }
 
 // Eval implements the sql.Expression interface.
-func (g *GeomFromText) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (g *GeomFromText) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	geom, err := WKTToGeom(ctx, row, g.ChildExpressions, "")
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(g.FunctionName())
@@ -739,7 +739,7 @@ func (p *PointFromText) WithChildren(ctx *sql.Context, children ...sql.Expressio
 }
 
 // Eval implements the sql.Expression interface.
-func (p *PointFromText) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *PointFromText) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	point, err := WKTToGeom(ctx, row, p.ChildExpressions, "point")
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(p.FunctionName())
@@ -797,7 +797,7 @@ func (l *LineFromText) WithChildren(ctx *sql.Context, children ...sql.Expression
 }
 
 // Eval implements the sql.Expression interface.
-func (l *LineFromText) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (l *LineFromText) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	line, err := WKTToGeom(ctx, row, l.ChildExpressions, "linestring")
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(l.FunctionName())
@@ -855,7 +855,7 @@ func (p *PolyFromText) WithChildren(ctx *sql.Context, children ...sql.Expression
 }
 
 // Eval implements the sql.Expression interface.
-func (p *PolyFromText) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *PolyFromText) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	poly, err := WKTToGeom(ctx, row, p.ChildExpressions, "polygon")
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(p.FunctionName())
@@ -913,7 +913,7 @@ func (p *MPointFromText) WithChildren(ctx *sql.Context, children ...sql.Expressi
 }
 
 // Eval implements the sql.Expression interface.
-func (p *MPointFromText) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *MPointFromText) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	line, err := WKTToGeom(ctx, row, p.ChildExpressions, "multipoint")
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(p.FunctionName())
@@ -971,7 +971,7 @@ func (l *MLineFromText) WithChildren(ctx *sql.Context, children ...sql.Expressio
 }
 
 // Eval implements the sql.Expression interface.
-func (l *MLineFromText) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (l *MLineFromText) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	mline, err := WKTToGeom(ctx, row, l.ChildExpressions, "multilinestring")
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(l.FunctionName())
@@ -1029,7 +1029,7 @@ func (p *MPolyFromText) WithChildren(ctx *sql.Context, children ...sql.Expressio
 }
 
 // Eval implements the sql.Expression interface.
-func (p *MPolyFromText) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *MPolyFromText) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	mpoly, err := WKTToGeom(ctx, row, p.ChildExpressions, "multipolygon")
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(p.FunctionName())
@@ -1087,7 +1087,7 @@ func (p *GeomCollFromText) WithChildren(ctx *sql.Context, children ...sql.Expres
 }
 
 // Eval implements the sql.Expression interface.
-func (p *GeomCollFromText) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *GeomCollFromText) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	geom, err := WKTToGeom(ctx, row, p.ChildExpressions, "geometrycollection")
 	if sql.ErrInvalidGISData.Is(err) {
 		return nil, sql.ErrInvalidGISData.New(p.FunctionName())

@@ -128,7 +128,7 @@ func (s TableFunc) Description() string {
 var _ sql.RowIter = (*TableFunctionRowIter)(nil)
 
 type TableFunctionRowIter struct {
-	val  interface{}
+	val  any
 	done bool
 }
 

@@ -209,7 +209,7 @@ func (d Distance) WithChildren(ctx *sql.Context, children ...sql.Expression) (sq
 }
 
 // Eval implements the Expression interface.
-func (d Distance) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (d Distance) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	lval, err := d.LeftChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -228,7 +228,7 @@ func (d Distance) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	return MeasureDistance(ctx, lval, rval, d.DistanceType)
 }
 
-func MeasureDistance(ctx context.Context, left, right interface{}, distanceType DistanceType) (interface{}, error) {
+func MeasureDistance(ctx context.Context, left, right any, distanceType DistanceType) (any, error) {
 	leftVec, err := sql.ConvertToVector(ctx, left)
 	if err != nil {
 		return nil, err
@@ -292,7 +292,7 @@ func (g *GenericDistance) WithChildren(ctx *sql.Context, children ...sql.Express
 	return newDist, err
 }
 
-func (g *GenericDistance) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (g *GenericDistance) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	children := g.Children()
 
 	lval, err := children[0].Eval(ctx, row)

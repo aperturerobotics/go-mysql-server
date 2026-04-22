@@ -66,7 +66,7 @@ func (e *ColumnDefaultValue) Children() []Expression {
 }
 
 // Eval implements sql.Expression
-func (e *ColumnDefaultValue) Eval(ctx *Context, r Row) (interface{}, error) {
+func (e *ColumnDefaultValue) Eval(ctx *Context, r Row) (any, error) {
 	if e == nil {
 		return nil, nil
 	}
@@ -277,7 +277,7 @@ func (u UnresolvedColumnDefault) IsNullable(ctx *Context) bool {
 	return true
 }
 
-func (u UnresolvedColumnDefault) Eval(ctx *Context, row Row) (interface{}, error) {
+func (u UnresolvedColumnDefault) Eval(ctx *Context, row Row) (any, error) {
 	panic("UnresolvedColumnDefault is a placeholder node, but Eval() was called")
 }
 

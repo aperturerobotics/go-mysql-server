@@ -15,6 +15,7 @@
 package mysql_db
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -362,9 +363,7 @@ func (ps PrivilegeSet) ToSlice() []sql.PrivilegeType {
 	for priv := range ps.globalStatic {
 		privs = append(privs, priv)
 	}
-	sort.Slice(privs, func(i, j int) bool {
-		return privs[i] < privs[j]
-	})
+	slices.Sort(privs)
 	return privs
 }
 
@@ -377,9 +376,7 @@ func (ps PrivilegeSet) ToSliceDynamic(withGrantOption bool) []string {
 			privs = append(privs, strings.ToUpper(priv))
 		}
 	}
-	sort.Slice(privs, func(i, j int) bool {
-		return privs[i] < privs[j]
-	})
+	slices.Sort(privs)
 	return privs
 }
 
@@ -580,9 +577,7 @@ func (ps PrivilegeSetDatabase) ToSlice() []sql.PrivilegeType {
 	for priv := range ps.privs {
 		privs = append(privs, priv)
 	}
-	sort.Slice(privs, func(i, j int) bool {
-		return privs[i] < privs[j]
-	})
+	slices.Sort(privs)
 	return privs
 }
 
@@ -747,9 +742,7 @@ func (ps PrivilegeSetTable) ToSlice() []sql.PrivilegeType {
 	for priv := range ps.privs {
 		privs = append(privs, priv)
 	}
-	sort.Slice(privs, func(i, j int) bool {
-		return privs[i] < privs[j]
-	})
+	slices.Sort(privs)
 	return privs
 }
 
@@ -840,9 +833,7 @@ func (ps PrivilegeSetColumn) ToSlice() []sql.PrivilegeType {
 	for priv := range ps.privs {
 		privs = append(privs, priv)
 	}
-	sort.Slice(privs, func(i, j int) bool {
-		return privs[i] < privs[j]
-	})
+	slices.Sort(privs)
 	return privs
 }
 
@@ -922,9 +913,7 @@ func (ps PrivilegeSetRoutine) ToSlice() []sql.PrivilegeType {
 	for priv := range ps.privs {
 		privs = append(privs, priv)
 	}
-	sort.Slice(privs, func(i, j int) bool {
-		return privs[i] < privs[j]
-	})
+	slices.Sort(privs)
 	return privs
 }
 

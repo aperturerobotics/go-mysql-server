@@ -263,7 +263,7 @@ func (editor TableEditor) Insert(ctx *sql.Context, row sql.Row) error {
 
 	for _, index := range editor.Indexes {
 		// Grab the source columns
-		sourceCols := make([]interface{}, len(index.SourceCols))
+		sourceCols := make([]any, len(index.SourceCols))
 		for i, sourceCol := range index.SourceCols {
 			sourceCols[i] = row[sourceCol]
 		}
@@ -310,14 +310,14 @@ func (editor TableEditor) Insert(ctx *sql.Context, row sql.Row) error {
 		}
 
 		// Construct the values for the key columns
-		var keyCols []interface{}
+		var keyCols []any
 		if index.KeyCols.Type != KeyType_None {
-			keyCols = make([]interface{}, len(index.KeyCols.Positions))
+			keyCols = make([]any, len(index.KeyCols.Positions))
 			for i, refCol := range index.KeyCols.Positions {
 				keyCols[i] = row[refCol]
 			}
 		} else {
-			keyCols = []interface{}{hash}
+			keyCols = []any{hash}
 		}
 
 		// Iterate over the words to write their positions
@@ -390,7 +390,7 @@ func (editor TableEditor) Delete(ctx *sql.Context, row sql.Row) error {
 
 	for _, index := range editor.Indexes {
 		// Grab the source columns
-		sourceCols := make([]interface{}, len(index.SourceCols))
+		sourceCols := make([]any, len(index.SourceCols))
 		for i, sourceCol := range index.SourceCols {
 			if sourceCol >= len(row) {
 				panic(fmt.Sprintf("%v", row))
@@ -438,14 +438,14 @@ func (editor TableEditor) Delete(ctx *sql.Context, row sql.Row) error {
 		}
 
 		// Construct the values for the key columns
-		var keyCols []interface{}
+		var keyCols []any
 		if index.KeyCols.Type != KeyType_None {
-			keyCols = make([]interface{}, len(index.KeyCols.Positions))
+			keyCols = make([]any, len(index.KeyCols.Positions))
 			for i, refCol := range index.KeyCols.Positions {
 				keyCols[i] = row[refCol]
 			}
 		} else {
-			keyCols = []interface{}{hash}
+			keyCols = []any{hash}
 		}
 
 		// Iterate over the words to write their positions

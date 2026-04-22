@@ -1182,12 +1182,12 @@ func (e IgnorableError) Error() string {
 }
 
 type WrappedTypeConversionError struct {
-	OffendingVal interface{}
+	OffendingVal any
 	Err          error
 	OffendingIdx int
 }
 
-func NewWrappedTypeConversionError(offendingVal interface{}, idx int, err error) WrappedTypeConversionError {
+func NewWrappedTypeConversionError(offendingVal any, idx int, err error) WrappedTypeConversionError {
 	return WrappedTypeConversionError{OffendingVal: offendingVal, OffendingIdx: idx, Err: err}
 }
 

@@ -67,7 +67,7 @@ type ExternalStoredProcedureDetails struct {
 	// overloaded functions, the largest function is used (which in this case will be the variadic function). Also, due
 	// to the usage of the integer-max for the parameter count, only one variadic function is allowed per function name.
 	// The type of the variadic parameter may not have a pointer type.
-	Function interface{}
+	Function any
 	// Name is the name of the external stored procedure. If two external stored procedures share a name, then they're
 	// considered overloaded. Standard stored procedures do not support overloading.
 	Name string

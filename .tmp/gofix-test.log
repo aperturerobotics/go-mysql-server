@@ -1,0 +1,38 @@
+# github.com/dolthub/go-icu-regex/internal/icu
+file.cpp:3:10: fatal error: 'unicode/regex.h' file not found
+ok  	github.com/dolthub/go-mysql-server/sql	0.562s
+FAIL	github.com/dolthub/go-mysql-server/sql/analyzer [build failed]
+?   	github.com/dolthub/go-mysql-server/sql/analyzer/analyzererrors	[no test files]
+?   	github.com/dolthub/go-mysql-server/sql/binlogreplication	[no test files]
+?   	github.com/dolthub/go-mysql-server/sql/encodings	[no test files]
+?   	github.com/dolthub/go-mysql-server/sql/encodings/generate	[no test files]
+FAIL	github.com/dolthub/go-mysql-server/sql/expression [build failed]
+FAIL	github.com/dolthub/go-mysql-server/sql/expression/function [build failed]
+ok  	github.com/dolthub/go-mysql-server/sql/expression/function/aggregation	1.156s
+?   	github.com/dolthub/go-mysql-server/sql/expression/function/aggregation/window	[no test files]
+ok  	github.com/dolthub/go-mysql-server/sql/expression/function/json	0.399s
+ok  	github.com/dolthub/go-mysql-server/sql/expression/function/json/jsontests	2.612s
+ok  	github.com/dolthub/go-mysql-server/sql/expression/function/spatial	0.754s
+ok  	github.com/dolthub/go-mysql-server/sql/expression/function/vector	1.506s
+?   	github.com/dolthub/go-mysql-server/sql/expression/tablefunction	[no test files]
+?   	github.com/dolthub/go-mysql-server/sql/fulltext	[no test files]
+ok  	github.com/dolthub/go-mysql-server/sql/hash	3.604s [no tests to run]
+ok  	github.com/dolthub/go-mysql-server/sql/in_mem_table	3.254s
+FAIL	github.com/dolthub/go-mysql-server/sql/information_schema [build failed]
+?   	github.com/dolthub/go-mysql-server/sql/iters	[no test files]
+ok  	github.com/dolthub/go-mysql-server/sql/memo	1.884s
+ok  	github.com/dolthub/go-mysql-server/sql/mysql_db	2.929s
+?   	github.com/dolthub/go-mysql-server/sql/mysql_db/serial	[no test files]
+?   	github.com/dolthub/go-mysql-server/sql/plan	[no test files]
+FAIL	github.com/dolthub/go-mysql-server/sql/planbuilder [build failed]
+ok  	github.com/dolthub/go-mysql-server/sql/planbuilder/dateparse	4.078s
+?   	github.com/dolthub/go-mysql-server/sql/procedures	[no test files]
+FAIL	github.com/dolthub/go-mysql-server/sql/rowexec [build failed]
+ok  	github.com/dolthub/go-mysql-server/sql/stats	2.186s
+ok  	github.com/dolthub/go-mysql-server/sql/transform	3.947s
+ok  	github.com/dolthub/go-mysql-server/sql/types	4.027s
+ok  	github.com/dolthub/go-mysql-server/sql/types/jsontests	3.981s
+?   	github.com/dolthub/go-mysql-server/sql/values	[no test files]
+ok  	github.com/dolthub/go-mysql-server/sql/variables	3.908s
+FAIL	github.com/dolthub/go-mysql-server/memory [build failed]
+FAIL

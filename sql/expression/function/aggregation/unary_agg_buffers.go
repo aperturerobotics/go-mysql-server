@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strings"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/shopspring/decimal"
@@ -14,7 +15,7 @@ import (
 )
 
 type anyValueBuffer struct {
-	res  interface{}
+	res  any
 	expr sql.Expression
 }
 
@@ -42,7 +43,7 @@ func (a *anyValueBuffer) Update(ctx *sql.Context, row sql.Row) error {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (a *anyValueBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (a *anyValueBuffer) Eval(ctx *sql.Context) (any, error) {
 	return a.res, nil
 }
 
@@ -52,7 +53,7 @@ func (a *anyValueBuffer) Dispose(ctx *sql.Context) {
 }
 
 type sumBuffer struct {
-	sum   interface{} // sum is either decimal.Decimal or float64
+	sum   any // sum is either decimal.Decimal or float64
 	expr  sql.Expression
 	isnil bool
 }
@@ -81,7 +82,7 @@ func (m *sumBuffer) Update(ctx *sql.Context, row sql.Row) error {
 	return nil
 }
 
-func (m *sumBuffer) PerformSum(ctx *sql.Context, v interface{}) {
+func (m *sumBuffer) PerformSum(ctx *sql.Context, v any) {
 	// decimal.Decimal values are evaluated to string value even though the Literal expr type is Decimal type,
 	// so convert it to appropriate Decimal type
 	if s, isStr := v.(string); isStr && types.IsDecimal(m.expr.Type(ctx)) {
@@ -149,7 +150,7 @@ func (m *sumBuffer) PerformSum(ctx *sql.Context, v interface{}) {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (m *sumBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (m *sumBuffer) Eval(ctx *sql.Context) (any, error) {
 	if m.isnil {
 		return nil, nil
 	}
@@ -162,7 +163,7 @@ func (m *sumBuffer) Dispose(ctx *sql.Context) {
 }
 
 type lastBuffer struct {
-	val  interface{}
+	val  any
 	expr sql.Expression
 }
 
@@ -192,7 +193,7 @@ func (l *lastBuffer) Update(ctx *sql.Context, row sql.Row) error {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (l *lastBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (l *lastBuffer) Eval(ctx *sql.Context) (any, error) {
 	return l.val, nil
 }
 
@@ -237,7 +238,7 @@ func (a *avgBuffer) Update(ctx *sql.Context, row sql.Row) error {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (a *avgBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (a *avgBuffer) Eval(ctx *sql.Context) (any, error) {
 	sum, err := a.sum.Eval(ctx)
 	if err != nil {
 		return nil, err
@@ -314,7 +315,7 @@ func (b *bitAndBuffer) Update(ctx *sql.Context, row sql.Row) error {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (b *bitAndBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (b *bitAndBuffer) Eval(ctx *sql.Context) (any, error) {
 	return b.res, nil
 }
 
@@ -365,7 +366,7 @@ func (b *bitOrBuffer) Update(ctx *sql.Context, row sql.Row) error {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (b *bitOrBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (b *bitOrBuffer) Eval(ctx *sql.Context) (any, error) {
 	return b.res, nil
 }
 
@@ -416,7 +417,7 @@ func (b *bitXorBuffer) Update(ctx *sql.Context, row sql.Row) error {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (b *bitXorBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (b *bitXorBuffer) Eval(ctx *sql.Context) (any, error) {
 	// This case is triggered when no rows exist.
 	if b.res == 0 && b.rows == 0 {
 		return uint64(0), nil
@@ -445,7 +446,7 @@ func NewCountDistinctBuffer(children []sql.Expression) *countDistinctBuffer {
 
 // Update implements the AggregationBuffer interface.
 func (c *countDistinctBuffer) Update(ctx *sql.Context, row sql.Row) error {
-	var value interface{}
+	var value any
 	if len(c.exprs) == 0 {
 		return fmt.Errorf("no expressions")
 	}
@@ -467,7 +468,7 @@ func (c *countDistinctBuffer) Update(ctx *sql.Context, row sql.Row) error {
 		value = val
 	}
 
-	var str string
+	var str strings.Builder
 	for _, val := range value.(sql.Row) {
 		// skip nil values
 		if val == nil {
@@ -481,11 +482,11 @@ func (c *countDistinctBuffer) Update(ctx *sql.Context, row sql.Row) error {
 		if !ok {
 			return fmt.Errorf("count distinct unable to hash value: %s", err)
 		}
-		str += vv + ","
+		str.WriteString(vv + ",")
 	}
 
 	hash := xxhash.New()
-	_, err := hash.WriteString(str)
+	_, err := hash.WriteString(str.String())
 	if err != nil {
 		return err
 	}
@@ -496,7 +497,7 @@ func (c *countDistinctBuffer) Update(ctx *sql.Context, row sql.Row) error {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (c *countDistinctBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (c *countDistinctBuffer) Eval(ctx *sql.Context) (any, error) {
 	return int64(len(c.seen)), nil
 }
 
@@ -541,7 +542,7 @@ func (c *countBuffer) Update(ctx *sql.Context, row sql.Row) error {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (c *countBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (c *countBuffer) Eval(ctx *sql.Context) (any, error) {
 	return c.cnt, nil
 }
 
@@ -551,7 +552,7 @@ func (c *countBuffer) Dispose(ctx *sql.Context) {
 }
 
 type firstBuffer struct {
-	val        interface{}
+	val        any
 	expr       sql.Expression
 	writtenNil bool
 }
@@ -584,7 +585,7 @@ func (f *firstBuffer) Update(ctx *sql.Context, row sql.Row) error {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (f *firstBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (f *firstBuffer) Eval(ctx *sql.Context) (any, error) {
 	return f.val, nil
 }
 
@@ -594,7 +595,7 @@ func (f *firstBuffer) Dispose(ctx *sql.Context) {
 }
 
 type maxBuffer struct {
-	val  interface{}
+	val  any
 	expr sql.Expression
 }
 
@@ -630,7 +631,7 @@ func (m *maxBuffer) Update(ctx *sql.Context, row sql.Row) error {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (m *maxBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (m *maxBuffer) Eval(ctx *sql.Context) (any, error) {
 	return m.val, nil
 }
 
@@ -640,7 +641,7 @@ func (m *maxBuffer) Dispose(ctx *sql.Context) {
 }
 
 type minBuffer struct {
-	val  interface{}
+	val  any
 	expr sql.Expression
 }
 
@@ -676,7 +677,7 @@ func (m *minBuffer) Update(ctx *sql.Context, row sql.Row) error {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (m *minBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (m *minBuffer) Eval(ctx *sql.Context) (any, error) {
 	return m.val, nil
 }
 
@@ -687,7 +688,7 @@ func (m *minBuffer) Dispose(ctx *sql.Context) {
 
 type jsonArrayBuffer struct {
 	expr sql.Expression
-	vals []interface{}
+	vals []any
 }
 
 func NewJsonArrayBuffer(child sql.Expression) *jsonArrayBuffer {
@@ -721,7 +722,7 @@ func (j *jsonArrayBuffer) Update(ctx *sql.Context, row sql.Row) error {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (j *jsonArrayBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (j *jsonArrayBuffer) Eval(ctx *sql.Context) (any, error) {
 	return types.JSONDocument{Val: j.vals}, nil
 }
 
@@ -731,7 +732,7 @@ func (j *jsonArrayBuffer) Dispose(ctx *sql.Context) {
 
 type varBaseBuffer struct {
 	expr  sql.Expression
-	vals  []interface{}
+	vals  []any
 	count uint64
 	mean  float64
 	std2  float64
@@ -782,7 +783,7 @@ func NewStdDevPopBuffer(child sql.Expression) *stdDevPopBuffer {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (s *stdDevPopBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (s *stdDevPopBuffer) Eval(ctx *sql.Context) (any, error) {
 	if s.count == 0 {
 		return nil, nil
 	}
@@ -802,7 +803,7 @@ func NewStdDevSampBuffer(child sql.Expression) *stdDevSampBuffer {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (s *stdDevSampBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (s *stdDevSampBuffer) Eval(ctx *sql.Context) (any, error) {
 	if s.count <= 1 {
 		return nil, nil
 	}
@@ -822,7 +823,7 @@ func NewVarPopBuffer(child sql.Expression) *varPopBuffer {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (vp *varPopBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (vp *varPopBuffer) Eval(ctx *sql.Context) (any, error) {
 	if vp.count == 0 {
 		return nil, nil
 	}
@@ -842,7 +843,7 @@ func NewVarSampBuffer(child sql.Expression) *varSampBuffer {
 }
 
 // Eval implements the AggregationBuffer interface.
-func (vp *varSampBuffer) Eval(ctx *sql.Context) (interface{}, error) {
+func (vp *varSampBuffer) Eval(ctx *sql.Context) (any, error) {
 	if vp.count <= 1 {
 		return nil, nil
 	}

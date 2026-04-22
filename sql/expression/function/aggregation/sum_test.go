@@ -29,7 +29,7 @@ func TestSum(t *testing.T) {
 	testCases := []struct {
 		name     string
 		rows     []sql.Row
-		expected interface{}
+		expected any
 	}{
 		{
 			"string int values",
@@ -107,7 +107,7 @@ func TestSumWithDistinct(t *testing.T) {
 	testCases := []struct {
 		name     string
 		rows     []sql.Row
-		expected interface{}
+		expected any
 	}{
 		{
 			"string int values",

@@ -51,7 +51,7 @@ func TestGroupConcat_PastMaxLen(t *testing.T) {
 	var rows []sql.Row
 	ctx := sql.NewEmptyContext()
 
-	for i := 0; i < 2000; i++ {
+	for i := range 2000 {
 		rows = append(rows, sql.Row{int64(i)})
 	}
 

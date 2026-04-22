@@ -26,8 +26,8 @@ import (
 func TestAnd(t *testing.T) {
 	var testCases = []struct {
 		name        string
-		left, right interface{}
-		expected    interface{}
+		left, right any
+		expected    any
 	}{
 		{"left is true, right is false", true, false, false},
 		{"left is true, right is null", true, nil, nil},
@@ -67,8 +67,8 @@ func TestAnd(t *testing.T) {
 func TestOr(t *testing.T) {
 	var testCases = []struct {
 		name        string
-		left, right interface{}
-		expected    interface{}
+		left, right any
+		expected    any
 	}{
 		{"left is true, right is false", true, false, true},
 		{"left is null, right is true", nil, true, true},
@@ -109,8 +109,8 @@ func TestOr(t *testing.T) {
 func TestXor(t *testing.T) {
 	var testCases = []struct {
 		name        string
-		left, right interface{}
-		expected    interface{}
+		left, right any
+		expected    any
 	}{
 		{"left is true, right is false", true, false, true},
 		{"left is null, right is true", nil, true, nil},

@@ -80,7 +80,7 @@ func (g *GeometryN) WithChildren(ctx *sql.Context, children ...sql.Expression) (
 }
 
 // Eval implements the sql.Expression interface.
-func (g *GeometryN) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (g *GeometryN) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := g.LeftChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err

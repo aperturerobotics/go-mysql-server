@@ -605,19 +605,19 @@ func TestComplexRange(t *testing.T) {
 	}
 }
 
-func setup() (x, y, z sql.Expression, values2, values3, valuesNull [][]interface{}) {
-	values2 = make([][]interface{}, 0, 100)
-	values3 = make([][]interface{}, 0, 1000)
+func setup() (x, y, z sql.Expression, values2, values3, valuesNull [][]any) {
+	values2 = make([][]any, 0, 100)
+	values3 = make([][]any, 0, 1000)
 	for i := byte(1); i <= 10; i++ {
 		for j := byte(1); j <= 10; j++ {
 			for k := byte(1); k <= 10; k++ {
-				values3 = append(values3, []interface{}{i, j, k})
+				values3 = append(values3, []any{i, j, k})
 			}
-			values2 = append(values2, []interface{}{i, j})
+			values2 = append(values2, []any{i, j})
 			if i%2 == 0 {
-				valuesNull = append(valuesNull, []interface{}{nil, j})
+				valuesNull = append(valuesNull, []any{nil, j})
 			} else {
-				valuesNull = append(valuesNull, []interface{}{i, j})
+				valuesNull = append(valuesNull, []any{i, j})
 			}
 		}
 	}
@@ -627,7 +627,7 @@ func setup() (x, y, z sql.Expression, values2, values3, valuesNull [][]interface
 	return
 }
 
-func evalRanges(t *testing.T, ranges []sql.MySQLRange, row []interface{}) bool {
+func evalRanges(t *testing.T, ranges []sql.MySQLRange, row []any) bool {
 	found := false
 	for _, rang := range ranges {
 		if evalRange(t, rang, row) {
@@ -641,7 +641,7 @@ func evalRanges(t *testing.T, ranges []sql.MySQLRange, row []interface{}) bool {
 	return found
 }
 
-func evalRange(t *testing.T, rang sql.MySQLRange, row []interface{}) bool {
+func evalRange(t *testing.T, rang sql.MySQLRange, row []any) bool {
 	rowRange := make(sql.MySQLRange, len(rang))
 	for i, val := range row {
 		if val == nil {
@@ -794,7 +794,7 @@ func roo(lowerbound, upperbound byte) sql.MySQLRangeColumnExpr {
 }
 
 // CustomRangeColumnExpr returns a MySQLRangeColumnExpr defined by the bounds given.
-func newRangeColumnExpr(lower, upper interface{}, lowerBound, upperBound sql.MySQLRangeBoundType, typ sql.Type) sql.MySQLRangeColumnExpr {
+func newRangeColumnExpr(lower, upper any, lowerBound, upperBound sql.MySQLRangeBoundType, typ sql.Type) sql.MySQLRangeColumnExpr {
 	if lower == nil || upper == nil {
 		return sql.EmptyRangeColumnExpr(typ)
 	}

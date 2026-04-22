@@ -73,7 +73,7 @@ func (e *ExteriorRing) WithChildren(ctx *sql.Context, children ...sql.Expression
 }
 
 // Eval implements the sql.Expression interface.
-func (e *ExteriorRing) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (e *ExteriorRing) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := e.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
