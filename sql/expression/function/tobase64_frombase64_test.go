@@ -32,7 +32,7 @@ func TestBase64(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		// Use a MySQL server to get expected values if updating/adding to this!

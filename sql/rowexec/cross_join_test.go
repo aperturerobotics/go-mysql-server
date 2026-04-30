@@ -103,7 +103,7 @@ func TestCrossJoin(t *testing.T) {
 	require.Equal(int32(3), row[6])
 	require.Equal(int64(4), row[7])
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		row, err = iter.Next(ctx)
 		require.NoError(err)
 		require.NotNil(row)

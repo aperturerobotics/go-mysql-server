@@ -174,12 +174,6 @@ func (pr *privateRegex) Replace(ctx context.Context, replacement string, start i
 	}
 	ret = fmt.Append(ret, pr.str[pos:])
 	return string(ret), nil
-
-	loc := pr.location(occurrence)
-	if loc == nil {
-		return pr.str, nil
-	}
-	return pr.str[:loc[0]+pr.start-1] + replacement + pr.str[loc[1]+pr.start-1:], nil
 }
 
 func (pr *privateRegex) Substring(ctx context.Context, start int, occurrence int) (string, bool, error) {

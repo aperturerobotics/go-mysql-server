@@ -75,7 +75,7 @@ func applyLimit(ctx *sql.Context, n sql.Node, limit sql.Expression) (sql.Node, t
 	return n, transform.SameTree
 }
 
-func mustCastNumToInt64(x interface{}) int64 {
+func mustCastNumToInt64(x any) int64 {
 	switch v := x.(type) {
 	case int8:
 		return int64(v)

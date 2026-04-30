@@ -54,7 +54,7 @@ func TestInSubquery(t *testing.T) {
 		left   sql.Expression
 		right  sql.Node
 		row    sql.Row
-		result interface{}
+		result any
 		err    *errors.Kind
 	}{
 		{
@@ -166,7 +166,7 @@ func TestNotInSubquery(t *testing.T) {
 		left   sql.Expression
 		right  sql.Node
 		row    sql.Row
-		result interface{}
+		result any
 		err    *errors.Kind
 	}{
 		{

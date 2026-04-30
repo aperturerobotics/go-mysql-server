@@ -31,7 +31,7 @@ func TestTruncate(t *testing.T) {
 		name  string
 		xExpr sql.Expression
 		dExpr sql.Expression
-		exp   interface{}
+		exp   any
 		err   *errors.Kind
 	}{
 		// https://github.com/dolthub/dolt/issues/9916

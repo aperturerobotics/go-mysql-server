@@ -278,7 +278,7 @@ func NewDateFormat(ctx *sql.Context, ex, value sql.Expression) sql.Expression {
 }
 
 // Eval implements the Expression interface.
-func (f *DateFormat) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (f *DateFormat) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if f.LeftChild == nil || f.RightChild == nil {
 		return nil, nil
 	}

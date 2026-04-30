@@ -72,7 +72,7 @@ func TestTableInsert(t *testing.T) {
 	testCases := []struct {
 		name    string
 		colType sql.Type
-		value   interface{}
+		value   any
 		err     bool
 	}{
 		{

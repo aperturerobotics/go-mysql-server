@@ -34,7 +34,7 @@ func TestLn(t *testing.T) {
 		name     string
 		rowType  sql.Type
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      *errors.Kind
 	}{
 		{"Input value is null", types.Float64, sql.NewRow(nil), nil, nil},
@@ -79,7 +79,7 @@ func TestLog2(t *testing.T) {
 		name     string
 		rowType  sql.Type
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      *errors.Kind
 	}{
 		{"Input value is null", types.Float64, sql.NewRow(nil), nil, nil},
@@ -124,7 +124,7 @@ func TestLog10(t *testing.T) {
 		name     string
 		rowType  sql.Type
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      *errors.Kind
 	}{
 		{"Input value is null", types.Float64, sql.NewRow(0), nil, nil},
@@ -182,7 +182,7 @@ func TestLog(t *testing.T) {
 	var testCases = []struct {
 		name     string
 		input    []sql.Expression
-		expected interface{}
+		expected any
 		err      *errors.Kind
 	}{
 		{"Input base is 1", []sql.Expression{expression.NewLiteral(float64(1), types.Float64), expression.NewLiteral(float64(10), types.Float64)}, nil, nil},

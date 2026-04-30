@@ -111,7 +111,7 @@ func (m *MakeSet) WithChildren(ctx *sql.Context, children ...sql.Expression) (sq
 }
 
 // Eval implements the Expression interface
-func (m *MakeSet) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (m *MakeSet) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	bitsVal, err := m.bits.Eval(ctx, row)
 	if err != nil {
 		return nil, err

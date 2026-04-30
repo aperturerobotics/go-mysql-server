@@ -50,7 +50,7 @@ func (s *Sleep) Description() string {
 }
 
 // Eval implements the Expression interface.
-func (s *Sleep) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *Sleep) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	child, err := s.Child.Eval(ctx, row)
 
 	if err != nil {

@@ -17,6 +17,7 @@ package sqle
 import (
 	"context"
 	"errors"
+	"maps"
 	"sync"
 	"time"
 
@@ -56,9 +57,7 @@ func (pl *ProcessList) Processes() []sql.Process {
 				Progress:           prog.Progress,
 				PartitionsProgress: make(map[string]sql.PartitionProgress, len(prog.PartitionsProgress)),
 			}
-			for partName, partProg := range prog.PartitionsProgress {
-				newProg.PartitionsProgress[partName] = partProg
-			}
+			maps.Copy(newProg.PartitionsProgress, prog.PartitionsProgress)
 			progMap[progName] = newProg
 		}
 		p.Progress = progMap

@@ -69,10 +69,10 @@ func tablesRowIter(ctx *Context, cat Catalog) (RowIter, error) {
 		tableRows      uint64
 		avgRowLength   uint64
 		dataLength     uint64
-		engine         interface{}
-		rowFormat      interface{}
-		tableCollation interface{}
-		autoInc        interface{}
+		engine         any
+		rowFormat      any
+		tableCollation any
+		autoInc        any
 	)
 
 	databases, err := AllDatabasesWithNames(ctx, cat, true)

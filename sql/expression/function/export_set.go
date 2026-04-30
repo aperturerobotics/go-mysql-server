@@ -132,7 +132,7 @@ func (e *ExportSet) WithChildren(ctx *sql.Context, children ...sql.Expression) (
 }
 
 // Eval implements the Expression interface
-func (e *ExportSet) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (e *ExportSet) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	bitsVal, err := e.bits.Eval(ctx, row)
 	if err != nil {
 		return nil, err

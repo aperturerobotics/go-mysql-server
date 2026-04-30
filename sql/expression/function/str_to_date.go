@@ -102,7 +102,7 @@ func (s *StrToDate) WithChildren(ctx *sql.Context, children ...sql.Expression) (
 }
 
 // Eval evaluates the given row and returns a result.
-func (s *StrToDate) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *StrToDate) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	date, err := s.Date.Eval(ctx, row)
 	if err != nil {
 		return nil, err

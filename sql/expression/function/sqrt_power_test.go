@@ -33,7 +33,7 @@ func TestSqrt(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null input", sql.NewRow(nil), nil, false},
@@ -69,7 +69,7 @@ func TestPower(t *testing.T) {
 		name     string
 		rowType  sql.Type
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"Base and exp are nil", types.Float64, sql.NewRow(nil, nil), nil, false},

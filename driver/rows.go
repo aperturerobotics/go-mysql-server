@@ -79,7 +79,7 @@ again:
 	return nil
 }
 
-func (r *Rows) convert(col int, v driver.Value) interface{} {
+func (r *Rows) convert(col int, v driver.Value) any {
 	switch r.cols[col].Type.Type() {
 	case query.Type_NULL_TYPE:
 		return nil

@@ -37,7 +37,7 @@ func TestLPad(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null string", sql.NewRow(nil, 1, "bar"), nil, false},
@@ -95,7 +95,7 @@ func TestRPad(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null string", sql.NewRow(nil, 1, "bar"), nil, false},

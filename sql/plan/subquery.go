@@ -540,16 +540,16 @@ func (s *Subquery) WithNodeChildren(ctx *sql.Context, children ...sql.Node) (sql
 
 // WithQuery returns the subquery with the query node changed.
 func (s *Subquery) WithQuery(node sql.Node) *Subquery {
-	ns := *s
+	ns := s.copy()
 	ns.Query = node
-	return &ns
+	return ns
 }
 
 // WithExecBuilder returns the subquery with a recursive execution builder.
 func (s *Subquery) WithExecBuilder(b sql.NodeExecBuilder) *Subquery {
-	ns := *s
+	ns := s.copy()
 	ns.b = b
-	return &ns
+	return ns
 }
 
 func (s *Subquery) IsNonDeterministic() bool {
@@ -561,15 +561,15 @@ func (s *Subquery) Volatile() bool {
 }
 
 func (s *Subquery) WithVolatile() *Subquery {
-	ret := *s
+	ret := s.copy()
 	ret.volatile = true
-	return &ret
+	return ret
 }
 
 func (s *Subquery) WithCorrelated(cols sql.ColSet) *Subquery {
-	ret := *s
+	ret := s.copy()
 	ret.correlated = cols
-	return &ret
+	return ret
 }
 
 func (s *Subquery) Correlated() sql.ColSet {
@@ -578,6 +578,20 @@ func (s *Subquery) Correlated() sql.ColSet {
 
 func (s *Subquery) CanCacheResults() bool {
 	return s.canCacheResults()
+}
+
+func (s *Subquery) copy() *Subquery {
+	return &Subquery{
+		Query:         s.Query,
+		correlated:    s.correlated,
+		hashCache:     s.hashCache,
+		b:             s.b,
+		disposeFunc:   s.disposeFunc,
+		QueryString:   s.QueryString,
+		cache:         s.cache,
+		resultsCached: s.resultsCached,
+		volatile:      s.volatile,
+	}
 }
 
 // Dispose implements sql.Disposable

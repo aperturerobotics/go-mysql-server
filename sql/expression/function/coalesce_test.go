@@ -33,7 +33,7 @@ func TestCoalesce(t *testing.T) {
 	testCases := []struct {
 		name     string
 		input    []sql.Expression
-		expected interface{}
+		expected any
 		typ      sql.Type
 		nullable bool
 	}{

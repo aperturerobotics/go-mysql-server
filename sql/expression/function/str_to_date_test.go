@@ -18,7 +18,7 @@ func TestStrToDate(t *testing.T) {
 		name     string
 		dateStr  string
 		fmtStr   string
-		expected interface{}
+		expected any
 	}{
 		{"standard", "Dec 26, 2000 2:13:15", "%b %e, %Y %T", time.Date(2000, time.December, 26, 2, 13, 15, 0, time.UTC)},
 		{"ymd", "20240101", "%Y%m%d", time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)},

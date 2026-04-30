@@ -19,8 +19,6 @@ import (
 	"io"
 	"sort"
 
-	"github.com/dolthub/jsonpath"
-
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/hash"
 	"github.com/dolthub/go-mysql-server/sql/sorters"
@@ -112,10 +110,10 @@ func (c *JsonTableCol) NextSibling() bool {
 // LoadData loads the data for this column from the given object and c.path
 // LoadData will always wrap the data in a slice to ensure it is iterable
 // Additionally, this function will set the c.currSib to the first sibling
-func (c *JsonTableCol) LoadData(obj interface{}) {
-	var data interface{}
-	data, c.err = jsonpath.JsonPathLookup(obj, c.Path)
-	if d, ok := data.([]interface{}); ok {
+func (c *JsonTableCol) LoadData(obj any) {
+	var data any
+	data, c.err = jsonPathLookup(obj, c.Path)
+	if d, ok := data.([]any); ok {
 		c.data = d
 	} else {
 		c.data = []interface{}{data}
@@ -186,7 +184,7 @@ func (c *JsonTableCol) Next(ctx *sql.Context, obj interface{}, pass bool, ord in
 	}
 
 	// TODO: cache this?
-	val, err := jsonpath.JsonPathLookup(obj, c.Path)
+	val, err := jsonPathLookup(obj, c.Path)
 	if c.Opts.Exists {
 		if err != nil {
 			return sql.Row{0}, nil

@@ -50,7 +50,7 @@ func (s *Soundex) Description() string {
 }
 
 // Eval implements the Expression interface.
-func (s *Soundex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *Soundex) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	v, err := s.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

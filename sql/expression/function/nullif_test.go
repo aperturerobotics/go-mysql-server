@@ -27,9 +27,9 @@ import (
 
 func TestNullIf(t *testing.T) {
 	testCases := []struct {
-		ex1      interface{}
-		ex2      interface{}
-		expected interface{}
+		ex1      any
+		ex2      any
+		expected any
 	}{
 		{"foo", "bar", "foo"},
 		{"foo", "foo", nil},

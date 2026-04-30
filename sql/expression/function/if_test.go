@@ -28,7 +28,7 @@ func TestIf(t *testing.T) {
 	testCases := []struct {
 		expr     sql.Expression
 		row      sql.Row
-		expected interface{}
+		expected any
 		type1    sql.Type
 		type2    sql.Type
 	}{
@@ -58,7 +58,7 @@ func eq(left, right sql.Expression) sql.Expression {
 	return expression.NewEquals(left, right)
 }
 
-func lit(n interface{}, typ sql.Type) sql.Expression {
+func lit(n any, typ sql.Type) sql.Expression {
 	return expression.NewLiteral(n, typ)
 }
 

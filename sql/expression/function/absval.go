@@ -19,7 +19,7 @@ import (
 	"math"
 
 	"github.com/cockroachdb/apd/v3"
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
@@ -50,7 +50,7 @@ func (t *AbsVal) Description() string {
 }
 
 // Eval implements the Expression interface.
-func (t *AbsVal) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (t *AbsVal) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := t.Child.Eval(ctx, row)
 
 	if err != nil {

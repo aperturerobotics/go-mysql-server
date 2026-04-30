@@ -27,60 +27,60 @@ import (
 func TestMakeSet(t *testing.T) {
 	testCases := []struct {
 		name     string
-		args     []interface{}
-		expected interface{}
+		args     []any
+		expected any
 		err      bool
 	}{
 		// MySQL documentation examples
-		{"mysql example 1", []interface{}{1, "a", "b", "c"}, "a", false},
-		{"mysql example 2", []interface{}{1 | 4, "hello", "nice", "world"}, "hello,world", false},
-		{"mysql example 3", []interface{}{1 | 4, "hello", "nice", nil, "world"}, "hello", false},
-		{"mysql example 4", []interface{}{0, "a", "b", "c"}, "", false},
+		{"mysql example 1", []any{1, "a", "b", "c"}, "a", false},
+		{"mysql example 2", []any{1 | 4, "hello", "nice", "world"}, "hello,world", false},
+		{"mysql example 3", []any{1 | 4, "hello", "nice", nil, "world"}, "hello", false},
+		{"mysql example 4", []any{0, "a", "b", "c"}, "", false},
 
 		// Basic functionality tests
-		{"single bit set - bit 0", []interface{}{1, "first", "second", "third"}, "first", false},
-		{"single bit set - bit 1", []interface{}{2, "first", "second", "third"}, "second", false},
-		{"single bit set - bit 2", []interface{}{4, "first", "second", "third"}, "third", false},
-		{"no bits set", []interface{}{0, "first", "second", "third"}, "", false},
+		{"single bit set - bit 0", []any{1, "first", "second", "third"}, "first", false},
+		{"single bit set - bit 1", []any{2, "first", "second", "third"}, "second", false},
+		{"single bit set - bit 2", []any{4, "first", "second", "third"}, "third", false},
+		{"no bits set", []any{0, "first", "second", "third"}, "", false},
 
 		// Multiple bits set
-		{"bits 0 and 1", []interface{}{3, "a", "b", "c"}, "a,b", false},
-		{"bits 0 and 2", []interface{}{5, "a", "b", "c"}, "a,c", false},
-		{"bits 1 and 2", []interface{}{6, "a", "b", "c"}, "b,c", false},
-		{"all bits set", []interface{}{7, "a", "b", "c"}, "a,b,c", false},
+		{"bits 0 and 1", []any{3, "a", "b", "c"}, "a,b", false},
+		{"bits 0 and 2", []any{5, "a", "b", "c"}, "a,c", false},
+		{"bits 1 and 2", []any{6, "a", "b", "c"}, "b,c", false},
+		{"all bits set", []any{7, "a", "b", "c"}, "a,b,c", false},
 
 		// Large bit numbers
-		{"bit 10 set", []interface{}{1024, "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"}, "k", false},
-		{"bits 0 and 10", []interface{}{1025, "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"}, "a,k", false},
+		{"bit 10 set", []any{1024, "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"}, "k", false},
+		{"bits 0 and 10", []any{1025, "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"}, "a,k", false},
 
 		// NULL handling
-		{"null bits", []interface{}{nil, "a", "b", "c"}, nil, false},
-		{"null in middle", []interface{}{7, "a", nil, "c"}, "a,c", false},
-		{"null at start", []interface{}{7, nil, "b", "c"}, "b,c", false},
-		{"null at end", []interface{}{7, "a", "b", nil}, "a,b", false},
-		{"all nulls", []interface{}{7, nil, nil, nil}, "", false},
+		{"null bits", []any{nil, "a", "b", "c"}, nil, false},
+		{"null in middle", []any{7, "a", nil, "c"}, "a,c", false},
+		{"null at start", []any{7, nil, "b", "c"}, "b,c", false},
+		{"null at end", []any{7, "a", "b", nil}, "a,b", false},
+		{"all nulls", []any{7, nil, nil, nil}, "", false},
 
 		// Type conversion
-		{"string bits", []interface{}{"5", "a", "b", "c"}, "a,c", false},
-		{"float bits", []interface{}{5.7, "a", "b", "c"}, "b,c", false}, // 5.7 converts to 6 (binary 110)
-		{"negative bits", []interface{}{-1, "a", "b", "c"}, "a,b,c", false},
+		{"string bits", []any{"5", "a", "b", "c"}, "a,c", false},
+		{"float bits", []any{5.7, "a", "b", "c"}, "b,c", false}, // 5.7 converts to 6 (binary 110)
+		{"negative bits", []any{-1, "a", "b", "c"}, "a,b,c", false},
 
 		// Different value types
-		{"numeric strings", []interface{}{3, "1", "2", "3"}, "1,2", false},
-		{"mixed types", []interface{}{3, 123, "hello", 456}, "123,hello", false},
+		{"numeric strings", []any{3, "1", "2", "3"}, "1,2", false},
+		{"mixed types", []any{3, 123, "hello", 456}, "123,hello", false},
 
 		// Edge cases
-		{"no strings provided", []interface{}{1}, "", true},
-		{"bit beyond available strings", []interface{}{16, "a", "b", "c"}, "", false},
-		{"bit partially beyond strings", []interface{}{9, "a", "b", "c"}, "a", false},
+		{"no strings provided", []any{1}, "", true},
+		{"bit beyond available strings", []any{16, "a", "b", "c"}, "", false},
+		{"bit partially beyond strings", []any{9, "a", "b", "c"}, "a", false},
 
 		// Large numbers
-		{"max uint64 bits", []interface{}{^uint64(0), "a", "b", "c"}, "a,b,c", false},
-		{"large positive number", []interface{}{4294967295, "a", "b", "c"}, "a,b,c", false},
+		{"max uint64 bits", []any{^uint64(0), "a", "b", "c"}, "a,b,c", false},
+		{"large positive number", []any{4294967295, "a", "b", "c"}, "a,b,c", false},
 
 		// Empty strings
-		{"empty string values", []interface{}{3, "", "test", ""}, ",test", false},
-		{"only empty strings", []interface{}{3, "", ""}, ",", false},
+		{"empty string values", []any{3, "", "test", ""}, ",test", false},
+		{"only empty strings", []any{3, "", ""}, ",", false},
 	}
 
 	for _, tt := range testCases {

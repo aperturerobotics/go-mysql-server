@@ -29,7 +29,7 @@ func TestConv(t *testing.T) {
 		name     string
 		nType    sql.Type
 		row      sql.Row
-		expected interface{}
+		expected any
 	}{
 		// NULL inputs
 		{"n is nil", types.Int32, sql.NewRow(nil, 16, 2), nil},

@@ -109,7 +109,7 @@ func (l *Length) DebugString(ctx *sql.Context) string {
 }
 
 // Eval implements the sql.Expression interface.
-func (l *Length) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (l *Length) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := l.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

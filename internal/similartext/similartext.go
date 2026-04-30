@@ -16,7 +16,6 @@ package similartext
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 )
 

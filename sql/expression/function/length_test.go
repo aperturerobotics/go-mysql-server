@@ -28,10 +28,10 @@ import (
 func TestLength(t *testing.T) {
 	testCases := []struct {
 		name      string
-		input     interface{}
+		input     any
 		inputType sql.Type
 		fn        func(*sql.Context, sql.Expression) sql.Expression
-		expected  interface{}
+		expected  any
 	}{
 		{
 			"length string",
