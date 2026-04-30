@@ -27,7 +27,7 @@ import (
 // the values inserted into v2 would be 30 and 40.
 type Values struct {
 	expression.UnaryExpressionStub
-	Value interface{}
+	Value any
 }
 
 var _ sql.FunctionExpression = (*Values)(nil)
@@ -42,7 +42,7 @@ func NewValues(ctx *sql.Context, col sql.Expression) sql.Expression {
 }
 
 // Eval implements sql.FunctionExpression.
-func (v *Values) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (v *Values) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// If Value is never assigned to then it has the nil value. It will only be assigned to in the ON DUPLICATE KEY UPDATE
 	// statement, therefore when used in every other context it will return nil, which is the correct and intended behavior.
 	return v.Value, nil

@@ -19,12 +19,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 	"github.com/dolthub/go-mysql-server/sql/otel/trace"
-	"github.com/dolthub/vitess/go/mysql"
 	"github.com/sirupsen/logrus"
 
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/go-mysql-server/sql/mysql_db"
 )
 
 // SessionBuilder creates sessions given a MySQL connection and a server address.
@@ -181,7 +180,7 @@ func (s *SessionManager) SetDB(ctx context.Context, conn *mysql.Conn, dbName str
 
 	sess.SetCurrentDatabase(dbName)
 	if dbName != "" {
-		if pdb, ok := db.(mysql_db.PrivilegedDatabase); ok {
+		if pdb, ok := db.(sql.PrivilegedDatabase); ok {
 			db = pdb.Unwrap()
 		}
 		err = sess.UseDatabase(sqlCtx, db)

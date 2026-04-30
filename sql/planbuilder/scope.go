@@ -15,6 +15,7 @@
 package planbuilder
 
 import (
+	"maps"
 	"sort"
 	"strings"
 
@@ -473,21 +474,15 @@ func (s *scope) copy(ctx *sql.Context) *scope {
 	}
 	if s.tables != nil {
 		ret.tables = make(map[string]sql.TableId, len(s.tables))
-		for k, v := range s.tables {
-			ret.tables[k] = v
-		}
+		maps.Copy(ret.tables, s.tables)
 	}
 	if s.ctes != nil {
 		ret.ctes = make(map[string]*scope, len(s.ctes))
-		for k, v := range s.ctes {
-			ret.ctes[k] = v
-		}
+		maps.Copy(ret.ctes, s.ctes)
 	}
 	if s.exprs != nil {
 		ret.exprs = make(map[string]columnId, len(s.exprs))
-		for k, v := range s.exprs {
-			ret.exprs[k] = v
-		}
+		maps.Copy(ret.exprs, s.exprs)
 	}
 	if s.groupBy != nil {
 		gbCopy := *s.groupBy
@@ -502,9 +497,7 @@ func (s *scope) copy(ctx *sql.Context) *scope {
 	}
 	if s.selectAliases != nil {
 		ret.selectAliases = make(map[string]sql.Expression, len(s.selectAliases))
-		for k, v := range s.selectAliases {
-			ret.selectAliases[k] = v
-		}
+		maps.Copy(ret.selectAliases, s.selectAliases)
 	}
 
 	return &ret
@@ -612,9 +605,7 @@ func (s *scope) addExpressions(newExprs map[string]columnId) {
 	if s.exprs == nil {
 		s.exprs = make(map[string]columnId)
 	}
-	for k, v := range newExprs {
-		s.exprs[k] = v
-	}
+	maps.Copy(s.exprs, newExprs)
 }
 
 // appendColumnsFromScope merges column definitions for
@@ -624,21 +615,15 @@ func (s *scope) appendColumnsFromScope(src *scope) {
 	if len(src.exprs) > 0 && s.exprs == nil {
 		s.exprs = make(map[string]columnId)
 	}
-	for k, v := range src.exprs {
-		s.exprs[k] = v
-	}
+	maps.Copy(s.exprs, src.exprs)
 	if len(src.redirectCol) > 0 && s.redirectCol == nil {
 		s.redirectCol = make(map[string]scopeColumn)
 	}
-	for k, v := range src.redirectCol {
-		s.redirectCol[k] = v
-	}
+	maps.Copy(s.redirectCol, src.redirectCol)
 	if len(src.tables) > 0 && s.tables == nil {
 		s.tables = make(map[string]sql.TableId)
 	}
-	for k, v := range src.tables {
-		s.tables[k] = v
-	}
+	maps.Copy(s.tables, src.tables)
 	// these become pass-through columns in the new scope.
 	for i := len(src.cols); i < len(s.cols); i++ {
 		s.cols[i].scalar = nil

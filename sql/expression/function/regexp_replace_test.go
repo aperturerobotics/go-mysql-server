@@ -70,7 +70,7 @@ func TestRegexpReplace(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{
@@ -156,7 +156,7 @@ func TestRegexpReplaceWithPosition(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{
@@ -240,7 +240,7 @@ func TestRegexpReplaceWithOccurrence(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{
@@ -325,7 +325,7 @@ func TestRegexpReplaceWithFlags(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{

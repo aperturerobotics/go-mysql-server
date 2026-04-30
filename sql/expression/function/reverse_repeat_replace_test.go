@@ -29,7 +29,7 @@ func TestReverse(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null input", sql.NewRow(nil), nil, false},
@@ -64,7 +64,7 @@ func TestRepeat(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null input", sql.NewRow(nil), nil, false},
@@ -101,7 +101,7 @@ func TestReplace(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null inputs", sql.NewRow(nil), nil, false},

@@ -197,7 +197,7 @@ func (f *factory) buildDistinct(ctx *sql.Context, child sql.Node, refsSubquery b
 					dMap[strings.ToLower(expr.String())] = struct{}{}
 				}
 				minMatching := min(len(distinctOn), len(sort.SortFields))
-				for i := 0; i < minMatching; i++ {
+				for i := range minMatching {
 					if _, ok := dMap[strings.ToLower(sort.SortFields[i].Column.String())]; !ok {
 						return nil, sql.ErrDistinctOnMatchOrderBy.New()
 					}

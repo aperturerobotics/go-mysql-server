@@ -743,8 +743,8 @@ func (b *Builder) buildInto(inScope *scope, into *ast.Into) {
 
 	vars := make([]sql.Expression, len(into.Variables))
 	for i, val := range into.Variables {
-		if strings.HasPrefix(val.String(), "@") {
-			vars[i] = expression.NewUserVar(strings.TrimPrefix(val.String(), "@"))
+		if after, ok := strings.CutPrefix(val.String(), "@"); ok {
+			vars[i] = expression.NewUserVar(after)
 		} else {
 			if inScope.proc == nil {
 				err := sql.ErrUndeclaredVariable.New(val.String())

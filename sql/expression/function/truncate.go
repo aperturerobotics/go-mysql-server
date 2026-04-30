@@ -18,7 +18,7 @@ import (
 	"fmt"
 
 	"github.com/cockroachdb/apd/v3"
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
@@ -60,7 +60,7 @@ func (t *Truncate) Children() []sql.Expression {
 }
 
 // Eval implements the Expression interface.
-func (t *Truncate) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (t *Truncate) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate the value to truncate
 	val, err := t.LeftChild.Eval(ctx, row)
 	if err != nil || val == nil {
@@ -105,7 +105,7 @@ func (t *Truncate) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		}
 	}
 
-	var res interface{}
+	var res any
 
 	// Truncate the decimal value
 	tmp := val.(*apd.Decimal)

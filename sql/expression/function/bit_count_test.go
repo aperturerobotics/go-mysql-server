@@ -28,7 +28,7 @@ func TestBitCount(t *testing.T) {
 	tests := []struct {
 		name string
 		arg  sql.Expression
-		exp  interface{}
+		exp  any
 		err  bool
 		skip bool
 	}{

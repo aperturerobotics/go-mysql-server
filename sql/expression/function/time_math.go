@@ -82,7 +82,7 @@ func (d *DateDiff) WithChildren(ctx *sql.Context, children ...sql.Expression) (s
 }
 
 // Eval implements the sql.Expression interface.
-func (d *DateDiff) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (d *DateDiff) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if d.LeftChild == nil || d.RightChild == nil {
 		return nil, nil
 	}
@@ -227,7 +227,7 @@ func (d *DateAdd) WithChildren(ctx *sql.Context, children ...sql.Expression) (sq
 }
 
 // Eval implements the sql.Expression interface.
-func (d *DateAdd) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (d *DateAdd) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	date, err := d.Date.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -246,7 +246,7 @@ func (d *DateAdd) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	var dateVal interface{}
+	var dateVal any
 	dateVal, _, err = types.DatetimeMaxRange.Convert(ctx, date)
 	if err != nil {
 		ctx.Warn(1292, "%s", err.Error())
@@ -380,7 +380,7 @@ func (d *DateSub) WithChildren(ctx *sql.Context, children ...sql.Expression) (sq
 }
 
 // Eval implements the sql.Expression interface.
-func (d *DateSub) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (d *DateSub) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	date, err := d.Date.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -399,7 +399,7 @@ func (d *DateSub) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	var dateVal interface{}
+	var dateVal any
 	dateVal, _, err = types.DatetimeMaxRange.Convert(ctx, date)
 	if err != nil {
 		ctx.Warn(1292, "%s", err.Error())
@@ -491,7 +491,7 @@ func (td *TimeDiff) WithChildren(ctx *sql.Context, children ...sql.Expression) (
 	return NewTimeDiff(ctx, children[0], children[1]), nil
 }
 
-func convToDateOrTime(ctx *sql.Context, val interface{}) (interface{}, error) {
+func convToDateOrTime(ctx *sql.Context, val any) (any, error) {
 	date, _, err := types.DatetimeMaxPrecision.Convert(ctx, val)
 	if err == nil {
 		return date, nil
@@ -504,7 +504,7 @@ func convToDateOrTime(ctx *sql.Context, val interface{}) (interface{}, error) {
 }
 
 // Eval implements the Expression interface.
-func (td *TimeDiff) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (td *TimeDiff) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if td.LeftChild == nil || td.RightChild == nil {
 		return nil, nil
 	}
@@ -625,7 +625,7 @@ func (t *TimestampDiff) WithChildren(ctx *sql.Context, children ...sql.Expressio
 }
 
 // Eval implements the sql.Expression interface.
-func (t *TimestampDiff) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (t *TimestampDiff) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if t.unit == nil {
 		return nil, errors.NewKind("unit cannot be null").New(t.unit)
 	}

@@ -76,7 +76,7 @@ func countBits(n uint64) int32 {
 }
 
 // Eval implements the Expression interface.
-func (b *BitCount) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (b *BitCount) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if b.Child == nil {
 		return nil, nil
 	}

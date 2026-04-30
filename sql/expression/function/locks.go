@@ -30,9 +30,9 @@ import (
 var ErrIllegalLockNameArgType = errors.NewKind("Illegal parameter data type %s for operation '%s'")
 
 // lockFuncLogic is the logic executed when one of the single argument named lock functions is executed
-type lockFuncLogic func(ctx *sql.Context, ls *sql.LockSubsystem, lockName string) (interface{}, error)
+type lockFuncLogic func(ctx *sql.Context, ls *sql.LockSubsystem, lockName string) (any, error)
 
-func (nl *NamedLockFunction) evalLockLogic(ctx *sql.Context, fn lockFuncLogic, row sql.Row) (interface{}, error) {
+func (nl *NamedLockFunction) evalLockLogic(ctx *sql.Context, fn lockFuncLogic, row sql.Row) (any, error) {
 	lock, err := nl.GetLockName(ctx, row)
 	if err != nil {
 		return nil, err
@@ -101,7 +101,7 @@ func (nl *NamedLockFunction) Type(ctx *sql.Context) sql.Type {
 }
 
 // ReleaseLockFunc is the function logic that is executed when the release_lock function is called.
-func ReleaseLockFunc(ctx *sql.Context, ls *sql.LockSubsystem, lockName string) (interface{}, error) {
+func ReleaseLockFunc(ctx *sql.Context, ls *sql.LockSubsystem, lockName string) (any, error) {
 	err := ls.Unlock(ctx, lockName)
 
 	if err != nil {
@@ -128,7 +128,7 @@ func NewIsFreeLock(ls *sql.LockSubsystem) sql.CreateFunc1Args {
 	return func(ctx *sql.Context, e sql.Expression) sql.Expression {
 		return &IsFreeLock{
 			NamedLockFunction: NamedLockFunction{
-				UnaryExpressionStub: expression.UnaryExpressionStub{e},
+				UnaryExpressionStub: expression.UnaryExpressionStub{Child: e},
 				ls:                  ls,
 				funcName:            "is_free_lock",
 				retType:             types.Int8,
@@ -147,7 +147,7 @@ func (*IsFreeLock) CollationCoercibility(ctx *sql.Context) (collation sql.Collat
 	return sql.Collation_binary, 5
 }
 
-func (i *IsFreeLock) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *IsFreeLock) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return i.evalLockLogic(ctx, IsFreeLockFunc, row)
 }
 
@@ -170,7 +170,7 @@ func NewIsUsedLock(ls *sql.LockSubsystem) sql.CreateFunc1Args {
 	return func(ctx *sql.Context, e sql.Expression) sql.Expression {
 		return &IsUsedLock{
 			NamedLockFunction: NamedLockFunction{
-				UnaryExpressionStub: expression.UnaryExpressionStub{e},
+				UnaryExpressionStub: expression.UnaryExpressionStub{Child: e},
 				ls:                  ls,
 				funcName:            "is_used_lock",
 				retType:             types.Uint32,
@@ -189,7 +189,7 @@ func (*IsUsedLock) CollationCoercibility(ctx *sql.Context) (collation sql.Collat
 	return sql.Collation_binary, 5
 }
 
-func (i *IsUsedLock) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *IsUsedLock) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return i.evalLockLogic(ctx, IsUsedLockFunc, row)
 }
 
@@ -212,7 +212,7 @@ func NewReleaseLock(ls *sql.LockSubsystem) sql.CreateFunc1Args {
 	return func(ctx *sql.Context, e sql.Expression) sql.Expression {
 		return &ReleaseLock{
 			NamedLockFunction: NamedLockFunction{
-				UnaryExpressionStub: expression.UnaryExpressionStub{e},
+				UnaryExpressionStub: expression.UnaryExpressionStub{Child: e},
 				ls:                  ls,
 				funcName:            "release_lock",
 				retType:             types.Int8,
@@ -231,7 +231,7 @@ func (*ReleaseLock) CollationCoercibility(ctx *sql.Context) (collation sql.Colla
 	return sql.Collation_binary, 5
 }
 
-func (i *ReleaseLock) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *ReleaseLock) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return i.evalLockLogic(ctx, ReleaseLockFunc, row)
 }
 
@@ -244,7 +244,7 @@ func (i *ReleaseLock) WithChildren(ctx *sql.Context, children ...sql.Expression)
 }
 
 // IsFreeLockFunc is the function logic that is executed when the is_free_lock function is called.
-func IsFreeLockFunc(_ *sql.Context, ls *sql.LockSubsystem, lockName string) (interface{}, error) {
+func IsFreeLockFunc(_ *sql.Context, ls *sql.LockSubsystem, lockName string) (any, error) {
 	state, _ := ls.GetLockState(lockName)
 
 	switch state {
@@ -256,7 +256,7 @@ func IsFreeLockFunc(_ *sql.Context, ls *sql.LockSubsystem, lockName string) (int
 }
 
 // IsUsedLockFunc is the function logic that is executed when the is_used_lock function is called.
-func IsUsedLockFunc(ctx *sql.Context, ls *sql.LockSubsystem, lockName string) (interface{}, error) {
+func IsUsedLockFunc(ctx *sql.Context, ls *sql.LockSubsystem, lockName string) (any, error) {
 	state, owner := ls.GetLockState(lockName)
 
 	switch state {
@@ -279,7 +279,7 @@ var _ sql.CollationCoercible = (*GetLock)(nil)
 // CreateNewGetLock returns a new GetLock object
 func CreateNewGetLock(ctx *sql.Context, ls *sql.LockSubsystem) func(ctx *sql.Context, e1, e2 sql.Expression) sql.Expression {
 	return func(ctx *sql.Context, e1, e2 sql.Expression) sql.Expression {
-		return &GetLock{expression.BinaryExpressionStub{e1, e2}, ls}
+		return &GetLock{expression.BinaryExpressionStub{LeftChild: e1, RightChild: e2}, ls}
 	}
 }
 
@@ -294,7 +294,7 @@ func (gl *GetLock) Description() string {
 }
 
 // Eval implements the Expression interface.
-func (gl *GetLock) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (gl *GetLock) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if gl.LeftChild == nil {
 		return nil, nil
 	}
@@ -408,7 +408,7 @@ func (ReleaseAllLocks) CollationCoercibility(ctx *sql.Context) (collation sql.Co
 	return sql.Collation_binary, 5
 }
 
-func (r ReleaseAllLocks) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (r ReleaseAllLocks) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return r.ls.ReleaseAll(ctx)
 }
 

@@ -15,7 +15,9 @@
 package function
 
 import (
-	"github.com/dolthub/vitess/go/mysql"
+	"strings"
+
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/types"
@@ -44,7 +46,7 @@ func (s *Space) CollationCoercibility(ctx *sql.Context) (collation sql.Collation
 }
 
 // Eval implements the sql.Expression interface
-func (s *Space) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *Space) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := s.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -63,16 +65,13 @@ func (s *Space) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 	}
 
-	num := int(v.(int64))
-	if num < 0 {
-		num = 0
-	}
+	num := max(int(v.(int64)), 0)
 
-	res := ""
-	for i := 0; i < num; i++ {
-		res += " "
+	var res strings.Builder
+	for range num {
+		res.WriteString(" ")
 	}
-	return res, nil
+	return res.String(), nil
 }
 
 // WithChildren implements the sql.Expression interface

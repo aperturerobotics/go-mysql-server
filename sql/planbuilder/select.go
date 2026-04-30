@@ -246,7 +246,7 @@ func (b *Builder) isSchemaDb() bool {
 		}
 		b.currentDatabase = database
 	}
-	if privilegedDatabase, ok := b.currentDatabase.(mysql_db.PrivilegedDatabase); ok {
+	if privilegedDatabase, ok := b.currentDatabase.(sql.PrivilegedDatabase); ok {
 		b.currentDatabase = privilegedDatabase.Unwrap()
 	}
 	_, isSchDb := b.currentDatabase.(sql.SchemaDatabase)

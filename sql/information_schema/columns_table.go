@@ -253,8 +253,8 @@ func getRowFromColumn(ctx *sql.Context, curOrdPos int, col *sql.Column, catName,
 	var (
 		ordinalPos        = uint32(curOrdPos + 1)
 		nullable          = "NO"
-		datetimePrecision interface{}
-		srsId             interface{}
+		datetimePrecision any
+		srsId             any
 	)
 
 	colType, dataType := getDtdIdAndDataType(col.Type)
@@ -487,7 +487,7 @@ func getIndexKeyInfo(ctx *sql.Context, t sql.Table) (map[string]string, bool, er
 }
 
 // GetColumnDefault returns the column default value for given sql.ColumnDefaultValue
-func GetColumnDefault(ctx *sql.Context, cd *sql.ColumnDefaultValue) interface{} {
+func GetColumnDefault(ctx *sql.Context, cd *sql.ColumnDefaultValue) any {
 	if cd == nil {
 		return nil
 	}
@@ -577,8 +577,8 @@ func getDtdIdAndDataType(colType sql.Type) (string, string) {
 
 // getColumnPrecisionAndScale returns the precision or a number of mysql type. For non-numeric or decimal types this
 // function should return nil,nil.
-func getColumnPrecisionAndScale(colType sql.Type) (interface{}, interface{}) {
-	var numericScale interface{}
+func getColumnPrecisionAndScale(colType sql.Type) (any, any) {
+	var numericScale any
 	switch t := colType.(type) {
 	case types.BitType:
 		return int(t.NumberOfBits()), numericScale
@@ -598,12 +598,12 @@ func getColumnPrecisionAndScale(colType sql.Type) (interface{}, interface{}) {
 	return nil, nil
 }
 
-func getCharAndCollNamesAndCharMaxAndOctetLens(ctx *sql.Context, colType sql.Type) (interface{}, interface{}, interface{}, interface{}) {
+func getCharAndCollNamesAndCharMaxAndOctetLens(ctx *sql.Context, colType sql.Type) (any, any, any, any) {
 	var (
-		charName     interface{}
-		collName     interface{}
-		charMaxLen   interface{}
-		charOctetLen interface{}
+		charName     any
+		collName     any
+		charMaxLen   any
+		charOctetLen any
 	)
 	if twc, ok := colType.(sql.TypeWithCollation); ok && !types.IsBinaryType(colType) {
 		colColl := twc.Collation()

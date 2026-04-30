@@ -22,7 +22,7 @@ import (
 
 	"github.com/dolthub/go-mysql-server/sql"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 )
 
 // BinlogConsumer processes binlog events. This interface can be used by any component that needs to consume

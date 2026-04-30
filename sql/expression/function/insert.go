@@ -88,7 +88,7 @@ func (i *Insert) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql
 }
 
 // Eval implements the Expression interface
-func (i *Insert) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *Insert) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	str, err := i.str.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -179,10 +179,7 @@ func (i *Insert) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	if l < 0 {
 		endIdx = int64(len(s))
 	} else {
-		endIdx = startIdx + l
-		if endIdx > int64(len(s)) {
-			endIdx = int64(len(s))
-		}
+		endIdx = min(startIdx+l, int64(len(s)))
 	}
 
 	// Build the result string

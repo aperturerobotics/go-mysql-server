@@ -29,7 +29,7 @@ func TestGreatest(t *testing.T) {
 	testCases := []struct {
 		name     string
 		args     []sql.Expression
-		expected interface{}
+		expected any
 	}{
 		{
 			"null",
@@ -162,7 +162,7 @@ func TestLeast(t *testing.T) {
 	testCases := []struct {
 		name     string
 		args     []sql.Expression
-		expected interface{}
+		expected any
 	}{
 		{
 			"null",

@@ -530,29 +530,29 @@ func (ee *eventExecutor) removeSchemaEvents(dbName string) {
 // occurred, in which case GMS will call EventDatabase.GetEvents to get the updated event definitions.
 type tokenTracker struct {
 	// trackedTokenMap is a map of event database name to the last opaque reload token returned by GetEvents.
-	trackedTokenMap map[string]interface{}
+	trackedTokenMap map[string]any
 }
 
 // newTokenTracker creates a new, empty tokenTracker.
 func newTokenTracker() *tokenTracker {
 	return &tokenTracker{
-		trackedTokenMap: make(map[string]interface{}),
+		trackedTokenMap: make(map[string]any),
 	}
 }
 
 // Equal returns true if the last tracked token for the EventDatabase named |databaseName| is equal
 // to the |other| opaque token. Equality is tested by an "==" check.
-func (ht *tokenTracker) Equal(databaseName string, other interface{}) bool {
+func (ht *tokenTracker) Equal(databaseName string, other any) bool {
 	return ht.trackedTokenMap[databaseName] == other
 }
 
 // UpdateTrackedToken updates the tracked token for the EventDatabase named |databaseName| to
 // the value in |token|.
-func (ht *tokenTracker) UpdateTrackedToken(databaseName string, token interface{}) {
+func (ht *tokenTracker) UpdateTrackedToken(databaseName string, token any) {
 	ht.trackedTokenMap[databaseName] = token
 }
 
 // GetTrackedToken returns the tracked token for the EventDatabase named |databaseName|.
-func (ht *tokenTracker) GetTrackedToken(databaseName string) interface{} {
+func (ht *tokenTracker) GetTrackedToken(databaseName string) any {
 	return ht.trackedTokenMap[databaseName]
 }

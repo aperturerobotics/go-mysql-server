@@ -52,7 +52,7 @@ func (r *Reverse) Description() string {
 func (r *Reverse) Eval(
 	ctx *sql.Context,
 	row sql.Row,
-) (interface{}, error) {
+) (any, error) {
 	//TODO: handle collations
 	v, err := r.Child.Eval(ctx, row)
 	if v == nil || err != nil {
@@ -156,7 +156,7 @@ func (r *Repeat) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql
 func (r *Repeat) Eval(
 	ctx *sql.Context,
 	row sql.Row,
-) (interface{}, error) {
+) (any, error) {
 	//TODO: handle collations
 	str, err := r.LeftChild.Eval(ctx, row)
 	if str == nil || err != nil {
@@ -260,7 +260,7 @@ func (r *Replace) WithChildren(ctx *sql.Context, children ...sql.Expression) (sq
 func (r *Replace) Eval(
 	ctx *sql.Context,
 	row sql.Row,
-) (interface{}, error) {
+) (any, error) {
 	//TODO: handle collations
 	str, err := r.str.Eval(ctx, row)
 	if str == nil || err != nil {

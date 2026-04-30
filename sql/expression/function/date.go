@@ -66,7 +66,7 @@ func (t *DatetimeConversion) IsNullable(ctx *sql.Context) bool {
 	return false
 }
 
-func (t *DatetimeConversion) Eval(ctx *sql.Context, r sql.Row) (interface{}, error) {
+func (t *DatetimeConversion) Eval(ctx *sql.Context, r sql.Row) (any, error) {
 	e, err := t.Date.Eval(ctx, r)
 	if err != nil {
 		return nil, err
@@ -271,7 +271,7 @@ func (ut *UnixTimestamp) WithChildren(ctx *sql.Context, children ...sql.Expressi
 	return NewUnixTimestamp(ctx, children...)
 }
 
-func (ut *UnixTimestamp) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (ut *UnixTimestamp) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if ut.Date == nil {
 		return toUnixTimestamp(ctx.QueryTime(), ut.Type(ctx)), nil
 	}
@@ -321,7 +321,7 @@ func (ut *UnixTimestamp) Eval(ctx *sql.Context, row sql.Row) (interface{}, error
 	return toUnixTimestamp(date.(time.Time), ut.Type(ctx)), nil
 }
 
-func toUnixTimestamp(t time.Time, resType sql.Type) interface{} {
+func toUnixTimestamp(t time.Time, resType sql.Type) any {
 	unixMicro := t.UnixMicro()
 	if unixMicro > MaxUnixTimeMicroSecs {
 		return int64(0)
@@ -376,8 +376,8 @@ func (*FromUnixtime) CollationCoercibility(ctx *sql.Context) (collation sql.Coll
 	return sql.Collation_binary, 5
 }
 
-func (r *FromUnixtime) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
-	vals := make([]interface{}, len(r.ChildExpressions))
+func (r *FromUnixtime) Eval(ctx *sql.Context, row sql.Row) (any, error) {
+	vals := make([]any, len(r.ChildExpressions))
 	for i, e := range r.ChildExpressions {
 		val, err := e.Eval(ctx, row)
 		if err != nil {
@@ -480,13 +480,13 @@ func NewCurrentDate(ctx *sql.Context) sql.Expression {
 	}
 }
 
-func currDateLogic(ctx *sql.Context, _ sql.Row) (interface{}, error) {
+func currDateLogic(ctx *sql.Context, _ sql.Row) (any, error) {
 	t := ctx.QueryTime()
 	return fmt.Sprintf("%d-%02d-%02d", t.Year(), t.Month(), t.Day()), nil
 }
 
 // Eval implements sql.Expression
-func (c CurrDate) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (c CurrDate) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return currDateLogic(ctx, row)
 }
 

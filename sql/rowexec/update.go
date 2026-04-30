@@ -142,7 +142,7 @@ func applyUpdateExpressionsWithIgnore(ctx *sql.Context, updateExprs *plan.Update
 }
 
 func (u *updateIter) validateNullability(ctx *sql.Context, row sql.Row, schema sql.Schema) error {
-	for idx := 0; idx < len(row); idx++ {
+	for idx := range row {
 		col := schema[idx]
 		if !col.Nullable && row[idx] == nil {
 			// In the case of an IGNORE we set the nil value to a default and add a warning

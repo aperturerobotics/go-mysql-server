@@ -32,8 +32,8 @@ func TestConfigWithDefaults(t *testing.T) {
 		Scope       sql.MysqlSVScopeType
 		Type        sql.SystemVariableType
 		ConfigField string
-		Default     interface{}
-		ExpectedCmp interface{}
+		Default     any
+		ExpectedCmp any
 	}{
 		{
 			Name:        "max_connections",
@@ -78,7 +78,7 @@ func TestConfigWithDefaults(t *testing.T) {
 
 			r := reflect.ValueOf(serverConf)
 			f := reflect.Indirect(r).FieldByName(test.ConfigField)
-			var res interface{}
+			var res any
 			switch f.Kind() {
 			case reflect.Int, reflect.Int64, reflect.Int32, reflect.Int16, reflect.Int8:
 				res = f.Int()

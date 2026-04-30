@@ -103,7 +103,7 @@ func encodeUint32(num uint32) []byte {
 }
 
 // Eval implements the sql.Expression interface
-func (c *Char) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (c *Char) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	var res []byte
 	for _, arg := range c.args {
 		if arg == nil {

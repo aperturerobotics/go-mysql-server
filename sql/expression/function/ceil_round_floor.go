@@ -19,7 +19,7 @@ import (
 	"math"
 
 	"github.com/cockroachdb/apd/v3"
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
@@ -98,7 +98,7 @@ func (c *Ceil) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.E
 }
 
 // Eval implements the Expression interface.
-func (c *Ceil) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (c *Ceil) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	child, err := c.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -185,7 +185,7 @@ func (f *Floor) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.
 }
 
 // Eval implements the Expression interface.
-func (f *Floor) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (f *Floor) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	child, err := f.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -268,7 +268,7 @@ func (r *Round) Children() []sql.Expression {
 }
 
 // Eval implements the Expression interface.
-func (r *Round) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (r *Round) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := r.Num.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -299,18 +299,15 @@ func (r *Round) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 			}
 			ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 		}
-		prec = tmp.(int32)
-		// MySQL cuts off at 30 for larger values
-		// TODO: these limits are fine only because we can't handle decimals larger than this
-		if prec > types.DecimalTypeMaxPrecision {
-			prec = types.DecimalTypeMaxPrecision
-		}
-		if prec < -types.DecimalTypeMaxScale {
-			prec = -types.DecimalTypeMaxScale
-		}
+		prec = max(
+			// MySQL cuts off at 30 for larger values
+			// TODO: these limits are fine only because we can't handle decimals larger than this
+			min(
+
+				tmp.(int32), types.DecimalTypeMaxPrecision), -types.DecimalTypeMaxScale)
 	}
 
-	var res interface{}
+	var res any
 	tmp, err := sql.DecimalRound(val.(*apd.Decimal), prec)
 	if err != nil {
 		return nil, err

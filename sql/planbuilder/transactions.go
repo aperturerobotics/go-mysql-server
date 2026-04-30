@@ -78,8 +78,8 @@ func (b *Builder) buildExecute(inScope *scope, n *ast.Execute) (outScope *scope)
 	outScope = inScope.push()
 	exprs := make([]sql.Expression, len(n.VarList))
 	for i, e := range n.VarList {
-		if strings.HasPrefix(e, "@") {
-			exprs[i] = expression.NewUserVar(strings.TrimPrefix(e, "@"))
+		if after, ok := strings.CutPrefix(e, "@"); ok {
+			exprs[i] = expression.NewUserVar(after)
 		} else {
 			exprs[i] = expression.NewUnresolvedProcedureParam(e)
 		}

@@ -193,7 +193,7 @@ func (c *Coalesce) Children() []sql.Expression { return c.args }
 // Eval implements the sql.Expression interface.
 // The function evaluates the first non-nil argument. If the value is nil,
 // then we keep going, otherwise we return the first non-nil value.
-func (c *Coalesce) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (c *Coalesce) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	for _, arg := range c.args {
 		if arg == nil {
 			continue

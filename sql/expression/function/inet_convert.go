@@ -68,7 +68,7 @@ func (i *InetAton) WithChildren(ctx *sql.Context, children ...sql.Expression) (s
 	return NewInetAton(ctx, children[0]), nil
 }
 
-func (i *InetAton) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *InetAton) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate value
 	val, err := i.Child.Eval(ctx, row)
 	if err != nil {
@@ -148,7 +148,7 @@ func (i *Inet6Aton) WithChildren(ctx *sql.Context, children ...sql.Expression) (
 	return NewInet6Aton(ctx, children[0]), nil
 }
 
-func (i *Inet6Aton) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *Inet6Aton) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate value
 	val, err := i.Child.Eval(ctx, row)
 	if err != nil {
@@ -228,7 +228,7 @@ func (i *InetNtoa) WithChildren(ctx *sql.Context, children ...sql.Expression) (s
 	return NewInetNtoa(ctx, children[0]), nil
 }
 
-func (i *InetNtoa) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *InetNtoa) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate value
 	val, err := i.Child.Eval(ctx, row)
 	if err != nil {
@@ -301,7 +301,7 @@ func (i *Inet6Ntoa) WithChildren(ctx *sql.Context, children ...sql.Expression) (
 	return NewInet6Ntoa(ctx, children[0]), nil
 }
 
-func (i *Inet6Ntoa) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *Inet6Ntoa) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate value
 	val, err := i.Child.Eval(ctx, row)
 	if err != nil {

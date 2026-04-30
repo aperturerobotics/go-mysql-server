@@ -26,12 +26,10 @@ import (
 	"github.com/cockroachdb/apd/v3"
 	"github.com/dolthub/go-mysql-server/sql/otel/attribute"
 	"github.com/dolthub/go-mysql-server/sql/otel/trace"
-	"github.com/dolthub/jsonpath"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/expression/function/aggregation"
-	"github.com/dolthub/go-mysql-server/sql/expression/function/json"
 	"github.com/dolthub/go-mysql-server/sql/iters"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/types"
@@ -202,12 +200,7 @@ func (b *BaseBuilder) buildJSONTable(ctx *sql.Context, n *plan.JSONTable, row sq
 		return &iters.JsonTableRowIter{}, nil
 	}
 
-	jsonData, err := json.GetJSONFromWrapperOrCoercibleString(ctx, data, "json_table", 1)
-	if err != nil {
-		return nil, err
-	}
-
-	jsonPathData, err := jsonpath.JsonPathLookup(jsonData, n.RootPath)
+	jsonPathData, err := buildJSONTableData(ctx, data, n.RootPath)
 	if err != nil {
 		jsonPathData = []any{}
 	}

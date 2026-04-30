@@ -52,8 +52,8 @@ func TestIsUUID(t *testing.T) {
 	testCases := []struct {
 		name     string
 		rowType  sql.Type
-		value    interface{}
-		expected interface{}
+		value    any
+		expected any
 	}{
 		{"uuid form 1", types.LongText, "{12345678-1234-5678-1234-567812345678}", true},
 		{"uuid form 2", types.LongText, "12345678123456781234567812345678", true},
@@ -84,11 +84,11 @@ func TestUUIDToBinValid(t *testing.T) {
 	validTestCases := []struct {
 		name      string
 		uuidType  sql.Type
-		uuid      interface{}
+		uuid      any
 		hasSwap   bool
 		swapType  sql.Type
-		swapValue interface{}
-		expected  interface{}
+		swapValue any
+		expected  any
 	}{
 		{"valid uuid; swap=0", types.LongText, "6ccd780c-baba-1026-9564-5b8c656024db", true, types.Int8, int8(0), "6CCD780CBABA102695645B8C656024DB"},
 		{"valid uuid; swap=nil", types.LongText, "6ccd780c-baba-1026-9564-5b8c656024db", true, types.Null, nil, "6CCD780CBABA102695645B8C656024DB"},
@@ -128,9 +128,9 @@ func TestUUIDToBinFailing(t *testing.T) {
 	failingTestCases := []struct {
 		name      string
 		uuidType  sql.Type
-		uuid      interface{}
+		uuid      any
 		swapType  sql.Type
-		swapValue interface{}
+		swapValue any
 	}{
 		{"bad swap value", types.LongText, "6ccd780c-baba-1026-9564-5b8c656024db", types.Int8, int8(2)},
 		{"bad uuid value", types.LongText, "sdasdsad", types.Int8, int8(0)},
@@ -166,11 +166,11 @@ func TestBinToUUID(t *testing.T) {
 	validTestCases := []struct {
 		name      string
 		uuidType  sql.Type
-		binary    interface{}
+		binary    any
 		hasSwap   bool
 		swapType  sql.Type
-		swapValue interface{}
-		expected  interface{}
+		swapValue any
+		expected  any
 	}{
 		{"valid uuid; swap=0", types.MustCreateBinary(query.Type_VARBINARY, int64(16)), []byte("lxºº & d[e`$Û"), true, types.Int8, int8(0), "6c78c2ba-c2ba-2026-2064-5b656024c39b"},
 		{"valid uuid; swap=1", types.MustCreateBinary(query.Type_VARBINARY, int64(16)), []byte("&ººlÍxd[e`$Û"), true, types.Int8, int8(1), "ba6cc38d-bac2-26c2-7864-5b656024c39b"},
@@ -204,9 +204,9 @@ func TestBinToUUIDFailing(t *testing.T) {
 	failingTestCases := []struct {
 		name      string
 		uuidType  sql.Type
-		uuid      interface{}
+		uuid      any
 		swapType  sql.Type
-		swapValue interface{}
+		swapValue any
 	}{
 		{"bad swap value", types.MustCreateBinary(query.Type_VARBINARY, int64(16)), "helo", types.Int8, int8(2)},
 		{"bad binary value", types.MustCreateBinary(query.Type_VARBINARY, int64(16)), "sdasdsad", types.Int8, int8(0)},

@@ -100,7 +100,7 @@ func (f *ConcatWithSeparator) Resolved() bool {
 func (f *ConcatWithSeparator) Children() []sql.Expression { return f.args }
 
 // Eval implements the Expression interface.
-func (f *ConcatWithSeparator) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (f *ConcatWithSeparator) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	var parts []string
 
 	for i, arg := range f.args {

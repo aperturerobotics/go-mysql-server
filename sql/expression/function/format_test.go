@@ -31,7 +31,7 @@ func TestFormat(t *testing.T) {
 		xType    sql.Type
 		dType    sql.Type
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      *errors.Kind
 	}{
 		{"float64 is nil", types.Float64, types.Int32, sql.NewRow(nil, nil, nil), nil, nil},
@@ -156,7 +156,7 @@ func TestSkippedFormat(t *testing.T) {
 		xType    sql.Type
 		dType    sql.Type
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      *errors.Kind
 	}{
 		{"sci-notn big num with big dp", types.Float64, types.Int32, sql.NewRow(5932886+.000000000001, 15, nil), "5,932,886.000000000001000", nil},

@@ -29,7 +29,7 @@ func TestGetFormat(t *testing.T) {
 	testCases := []struct {
 		left  sql.Expression
 		right sql.Expression
-		exp   interface{}
+		exp   any
 	}{
 		{
 			left:  expression.NewLiteral(nil, types.Null),

@@ -40,7 +40,7 @@ func TestTime_Year(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"invalid type", sql.NewRow([]byte{0, 1, 2}), nil, false},
@@ -69,7 +69,7 @@ func TestTime_Month(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
@@ -99,7 +99,7 @@ func TestTime_Quarter(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{
@@ -220,7 +220,7 @@ func TestTime_Day(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
@@ -250,7 +250,7 @@ func TestTime_Weekday(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
@@ -280,7 +280,7 @@ func TestTime_Hour(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
@@ -310,7 +310,7 @@ func TestTime_Minute(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
@@ -340,7 +340,7 @@ func TestTime_Second(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
@@ -371,7 +371,7 @@ func TestTime_Microsecond(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
@@ -401,7 +401,7 @@ func TestTime_DayOfWeek(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
@@ -431,7 +431,7 @@ func TestTime_DayOfYear(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
@@ -463,7 +463,7 @@ func TestTime_WeekOfYear(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
@@ -494,7 +494,7 @@ func TestYearWeek(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
@@ -612,7 +612,7 @@ func TestDate(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
@@ -651,7 +651,7 @@ func TestNow(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, true},
@@ -707,7 +707,7 @@ func TestSysdate(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, true},
@@ -751,7 +751,7 @@ func TestTime(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
@@ -784,7 +784,7 @@ func TestTime_DayName(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},
@@ -817,7 +817,7 @@ func TestTime_MonthName(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null date", sql.NewRow(nil), nil, false},

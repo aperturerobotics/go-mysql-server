@@ -26,23 +26,23 @@ import (
 )
 
 func TestAbsValue(t *testing.T) {
-	type toTypeFunc func(float64) interface{}
+	type toTypeFunc func(float64) any
 
 	decimal1616 := types.MustCreateDecimalType(16, 16)
 
-	toInt64 := func(x float64) interface{} { return int64(x) }
-	toInt32 := func(x float64) interface{} { return int32(x) }
-	toInt := func(x float64) interface{} { return int(x) }
-	toInt16 := func(x float64) interface{} { return int16(x) }
-	toInt8 := func(x float64) interface{} { return int8(x) }
-	toUint64 := func(x float64) interface{} { return uint64(x) }
-	toUint32 := func(x float64) interface{} { return uint32(x) }
-	toUint := func(x float64) interface{} { return uint(x) }
-	toUint16 := func(x float64) interface{} { return uint16(x) }
-	toUint8 := func(x float64) interface{} { return uint8(x) }
-	toFloat64 := func(x float64) interface{} { return x }
-	toFloat32 := func(x float64) interface{} { return float32(x) }
-	toDecimal1616 := func(x float64) interface{} { return types.DecimalFromFloat64(x) }
+	toInt64 := func(x float64) any { return int64(x) }
+	toInt32 := func(x float64) any { return int32(x) }
+	toInt := func(x float64) any { return int(x) }
+	toInt16 := func(x float64) any { return int16(x) }
+	toInt8 := func(x float64) any { return int8(x) }
+	toUint64 := func(x float64) any { return uint64(x) }
+	toUint32 := func(x float64) any { return uint32(x) }
+	toUint := func(x float64) any { return uint(x) }
+	toUint16 := func(x float64) any { return uint16(x) }
+	toUint8 := func(x float64) any { return uint8(x) }
+	toFloat64 := func(x float64) any { return x }
+	toFloat32 := func(x float64) any { return float32(x) }
+	toDecimal1616 := func(x float64) any { return types.DecimalFromFloat64(x) }
 
 	signedTypes := map[sql.Type]toTypeFunc{
 		types.Int64: toInt64,

@@ -29,7 +29,7 @@ import (
 func TestToDays(t *testing.T) {
 	tests := []struct {
 		arg  sql.Expression
-		exp  interface{}
+		exp  any
 		err  bool
 		skip bool
 	}{
@@ -124,7 +124,7 @@ func TestToDays(t *testing.T) {
 func TestFromDays(t *testing.T) {
 	tests := []struct {
 		arg  sql.Expression
-		exp  interface{}
+		exp  any
 		err  bool
 		skip bool
 	}{
@@ -271,7 +271,7 @@ func TestFromDays(t *testing.T) {
 func TestLastDay(t *testing.T) {
 	tests := []struct {
 		arg  sql.Expression
-		exp  interface{}
+		exp  any
 		err  bool
 		skip bool
 	}{

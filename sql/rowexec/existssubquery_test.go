@@ -53,7 +53,7 @@ func TestExistsSubquery(t *testing.T) {
 		name     string
 		subquery sql.Node
 		row      sql.Row
-		result   interface{}
+		result   any
 	}{
 		{
 			"Null returns as true",

@@ -157,7 +157,7 @@ func (r *RegexpLike) compile(ctx *sql.Context, row sql.Row) {
 }
 
 // Eval implements the sql.Expression interface.
-func (r *RegexpLike) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (r *RegexpLike) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	span, ctx := ctx.Span("function.RegexpLike")
 	defer span.End()
 

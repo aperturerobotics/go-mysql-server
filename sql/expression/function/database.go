@@ -81,7 +81,7 @@ func (db *Database) Resolved() bool {
 func (db *Database) Children() []sql.Expression { return nil }
 
 // Eval implements the sql.Expression interface.
-func (db *Database) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (db *Database) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if ctx.GetCurrentDatabase() == "" {
 		return nil, nil
 	}

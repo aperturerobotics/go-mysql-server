@@ -632,7 +632,7 @@ func (b *Builder) buildShowVariables(inScope *scope, s *ast.Show) (outScope *sco
 	return
 }
 
-func (b *Builder) buildAsOfLit(inScope *scope, t ast.Expr) interface{} {
+func (b *Builder) buildAsOfLit(inScope *scope, t ast.Expr) any {
 	expr := b.buildAsOfExpr(inScope, t)
 	res, err := expr.Eval(b.ctx, nil)
 	if err != nil {

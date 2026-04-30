@@ -44,7 +44,7 @@ func (uf *UnaryFunc) FunctionName() string {
 }
 
 // EvalChild is a convenience function for safely evaluating a child expression
-func (uf *UnaryFunc) EvalChild(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (uf *UnaryFunc) EvalChild(ctx *sql.Context, row sql.Row) (any, error) {
 	if uf.Child == nil {
 		return nil, nil
 	}

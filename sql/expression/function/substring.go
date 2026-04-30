@@ -78,7 +78,7 @@ func (s *Substring) Children() []sql.Expression {
 func (s *Substring) Eval(
 	ctx *sql.Context,
 	row sql.Row,
-) (interface{}, error) {
+) (any, error) {
 	str, err := s.Str.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -225,7 +225,7 @@ func (s *SubstringIndex) Children() []sql.Expression {
 }
 
 // Eval implements the Expression interface.
-func (s *SubstringIndex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *SubstringIndex) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	ex, err := s.str.Eval(ctx, row)
 	if ex == nil || err != nil {
 		return nil, err
@@ -364,7 +364,7 @@ func (l Left) Children() []sql.Expression {
 }
 
 // Eval implements the Expression interface.
-func (l Left) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (l Left) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	str, err := l.str.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -410,11 +410,7 @@ func (l Left) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	length = len.(int64)
-
-	if length > runeCount {
-		length = runeCount
-	}
+	length = min(len.(int64), runeCount)
 	if length <= 0 {
 		return "", nil
 	}
@@ -482,7 +478,7 @@ func (r Right) Children() []sql.Expression {
 }
 
 // Eval implements the Expression interface.
-func (r Right) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (r Right) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	str, err := r.str.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -528,11 +524,7 @@ func (r Right) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	length = len.(int64)
-
-	if length > runeCount {
-		length = runeCount
-	}
+	length = min(len.(int64), runeCount)
 	if length <= 0 {
 		return "", nil
 	}
@@ -610,7 +602,7 @@ func (i Instr) Children() []sql.Expression {
 }
 
 // Eval implements the Expression interface.
-func (i Instr) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i Instr) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	str, err := i.str.Eval(ctx, row)
 	if err != nil {
 		return nil, err

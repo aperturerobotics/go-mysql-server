@@ -21,7 +21,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 	"github.com/sirupsen/logrus"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -259,7 +259,7 @@ func (b *BaseBuilder) buildRenameTable(ctx *sql.Context, n *plan.RenameTable, ro
 	viewRegistry := ctx.GetViewRegistry()
 
 	db := n.Db
-	if pdb, ok := db.(mysql_db.PrivilegedDatabase); ok {
+	if pdb, ok := db.(sql.PrivilegedDatabase); ok {
 		db = pdb.Unwrap()
 	}
 	if v, ok := db.(sql.SchemaObjectNameValidator); ok {

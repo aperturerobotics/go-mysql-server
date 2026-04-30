@@ -5,7 +5,7 @@ package mysql_db
 import (
 	"crypto/tls"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 )
 
 func tlsCipherSuiteName(conn *mysql.Conn) string {

@@ -59,7 +59,7 @@ func (w *SimpleWrapper[T]) assertInterfaces() {
 	var _ sql.Wrapper[T] = w
 }
 
-func (w *SimpleWrapper[T]) Compare(ctx context.Context, other interface{}) (cmp int, comparable bool, err error) {
+func (w *SimpleWrapper[T]) Compare(ctx context.Context, other any) (cmp int, comparable bool, err error) {
 	// The most common use case for wrappers is to store a pointer to out-of-band storage.
 	// If the pointers are equal, the wrappers can be assumed to be equal.
 	// But if the pointers are not equal, nothing can be assumed.
@@ -84,7 +84,7 @@ func (w *SimpleWrapper[T]) Unwrap(ctx context.Context) (result T, err error) {
 	return w.wrapped, nil
 }
 
-func (w *SimpleWrapper[T]) UnwrapAny(ctx context.Context) (result interface{}, err error) {
+func (w *SimpleWrapper[T]) UnwrapAny(ctx context.Context) (result any, err error) {
 	w.wasUnwrapped = true
 	return w.wrapped, nil
 }
@@ -97,7 +97,7 @@ func (w SimpleWrapper[T]) IsExactLength() bool {
 	return w.isExactLength
 }
 
-func (w SimpleWrapper[T]) Hash() interface{} {
+func (w SimpleWrapper[T]) Hash() any {
 	return nil
 }
 
@@ -108,7 +108,7 @@ type ErrorWrapper[T any] struct {
 	isExactLength bool
 }
 
-func (w ErrorWrapper[T]) Compare(ctx context.Context, other interface{}) (cmp int, comparable bool, err error) {
+func (w ErrorWrapper[T]) Compare(ctx context.Context, other any) (cmp int, comparable bool, err error) {
 	return 0, false, nil
 }
 
@@ -123,7 +123,7 @@ func (w ErrorWrapper[T]) Unwrap(ctx context.Context) (result T, err error) {
 	return result, fmt.Errorf("unwrap failed")
 }
 
-func (w ErrorWrapper[T]) UnwrapAny(ctx context.Context) (result interface{}, err error) {
+func (w ErrorWrapper[T]) UnwrapAny(ctx context.Context) (result any, err error) {
 	return result, fmt.Errorf("unwrap failed")
 }
 
@@ -135,7 +135,7 @@ func (w ErrorWrapper[T]) IsExactLength() bool {
 	return w.isExactLength
 }
 
-func (w ErrorWrapper[T]) Hash() interface{} {
+func (w ErrorWrapper[T]) Hash() any {
 	panic("not implemented")
 }
 

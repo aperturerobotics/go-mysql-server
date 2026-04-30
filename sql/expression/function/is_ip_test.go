@@ -29,7 +29,7 @@ func TestIsIPv4(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null input", sql.NewRow(nil), nil, false},
@@ -61,7 +61,7 @@ func TestIsIPv6(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null input", sql.NewRow(nil), nil, false},
@@ -94,7 +94,7 @@ func TestIsIPv4Compat(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null input", sql.NewRow(nil), nil, false},
@@ -126,7 +126,7 @@ func TestIsIPv4Mapped(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null input", sql.NewRow(nil), nil, false},

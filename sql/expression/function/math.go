@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/apd/v3"
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
@@ -117,7 +117,7 @@ func (r *Rand) Children() []sql.Expression {
 }
 
 // Eval implements sql.Expression.
-func (r *Rand) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (r *Rand) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if r.Child == nil {
 		return rand.Float64(), nil
 	}
@@ -165,7 +165,7 @@ func (*Sin) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, 
 }
 
 // Eval implements sql.Expression
-func (s *Sin) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *Sin) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := s.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -217,7 +217,7 @@ func (*Cos) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, 
 }
 
 // Eval implements sql.Expression
-func (s *Cos) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *Cos) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := s.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -274,7 +274,7 @@ func (t *Tan) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements sql.Expression
-func (t *Tan) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (t *Tan) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := t.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -336,7 +336,7 @@ func (a *Asin) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements sql.Expression
-func (a *Asin) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (a *Asin) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := a.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -398,7 +398,7 @@ func (a *Acos) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements sql.Expression
-func (a *Acos) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (a *Acos) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := a.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -495,7 +495,7 @@ func (*Atan) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID,
 }
 
 // Eval implements sql.Expression
-func (a *Atan) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (a *Atan) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if a.y == nil {
 		return nil, nil
 	}
@@ -509,7 +509,7 @@ func (a *Atan) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	var xx interface{} = float64(1)
+	var xx any = float64(1)
 	if a.x != nil {
 		xx, err = a.x.Eval(ctx, row)
 		if err != nil {
@@ -580,7 +580,7 @@ func (c *Cot) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements sql.Expression
-func (c *Cot) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (c *Cot) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := c.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -647,7 +647,7 @@ func (*Degrees) CollationCoercibility(ctx *sql.Context) (collation sql.Collation
 }
 
 // Eval implements sql.Expression
-func (d *Degrees) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (d *Degrees) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := d.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -699,7 +699,7 @@ func (*Radians) CollationCoercibility(ctx *sql.Context) (collation sql.Collation
 }
 
 // Eval implements sql.Expression
-func (r *Radians) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (r *Radians) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := r.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -751,7 +751,7 @@ func (*Crc32) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID
 }
 
 // Eval implements sql.Expression
-func (c *Crc32) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (c *Crc32) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	arg, err := c.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -845,7 +845,7 @@ func (*Sign) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID,
 }
 
 // Eval implements sql.Expression
-func (s *Sign) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *Sign) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	arg, err := s.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -971,7 +971,7 @@ func (p *Pi) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements sql.Expression
-func (p *Pi) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *Pi) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return math.Pi, nil
 }
 
@@ -1017,7 +1017,7 @@ func (e *Exp) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements the Expression interface.
-func (e *Exp) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (e *Exp) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if e.Child == nil {
 		return nil, nil
 	}

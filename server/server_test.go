@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	vsql "github.com/dolthub/vitess/go/mysql"
+	vsql "github.com/dolthub/go-mysql-server/sql/mysql"
 	"github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/test/bufconn"
@@ -72,7 +72,7 @@ func TestServerCustomListener(t *testing.T) {
 	db := sql.OpenDB(driver)
 
 	var pingErr error
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if pingErr = db.Ping(); pingErr == nil {
 			break
 		}

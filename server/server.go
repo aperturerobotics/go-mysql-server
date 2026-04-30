@@ -21,8 +21,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 	"github.com/dolthub/go-mysql-server/sql/otel/trace"
-	"github.com/dolthub/vitess/go/mysql"
 	"github.com/sirupsen/logrus"
 
 	sqle "github.com/dolthub/go-mysql-server"
@@ -136,7 +136,7 @@ func getPort(cfg mysql.ListenerConfig) (int64, error) {
 }
 
 func updateSystemVariables(cfg mysql.ListenerConfig) error {
-	sysVars := make(map[string]interface{})
+	sysVars := make(map[string]any)
 
 	if port, err := getPort(cfg); err == nil {
 		sysVars["port"] = port

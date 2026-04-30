@@ -27,7 +27,6 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/encodings"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/expression/function"
-	"github.com/dolthub/go-mysql-server/sql/expression/function/json"
 	"github.com/dolthub/go-mysql-server/sql/fulltext"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/transform"
@@ -911,15 +910,7 @@ func (b *Builder) binaryExprToExpression(inScope *scope, be *ast.BinaryExpr) (sq
 		}
 
 	case ast.JSONExtractOp, ast.JSONUnquoteExtractOp:
-		jsonExtract, err := json.NewJSONExtract(b.ctx, l, r)
-		if err != nil {
-			return nil, err
-		}
-
-		if operator == ast.JSONUnquoteExtractOp {
-			return json.NewJSONUnquote(b.ctx, jsonExtract), nil
-		}
-		return jsonExtract, nil
+		return b.buildJSONExtract(operator, l, r)
 
 	default:
 		return nil, sql.ErrUnsupportedFeature.New(be.Operator)

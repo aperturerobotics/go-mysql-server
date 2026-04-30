@@ -29,10 +29,10 @@ import (
 func TestConvertTz(t *testing.T) {
 	tests := []struct {
 		name           string
-		datetime       interface{}
+		datetime       any
 		fromTimeZone   string
 		toTimeZone     string
-		expectedResult interface{}
+		expectedResult any
 	}{
 		{
 			name:           "Simple timezone conversion",

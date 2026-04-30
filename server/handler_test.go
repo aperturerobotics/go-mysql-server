@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 	"github.com/dolthub/vitess/go/race"
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
@@ -491,7 +491,7 @@ func TestHandlerComPrepareExecute(t *testing.T) {
 			var res []sql.Row
 			callback := func(r *sqltypes.Result) error {
 				for _, r := range r.Rows {
-					var vals []interface{}
+					var vals []any
 					for _, v := range r {
 						val, err := strconv.ParseInt(string(v.Raw()), 0, 64)
 						if err != nil {
@@ -607,7 +607,7 @@ func TestHandlerComPrepareExecuteWithPreparedDisabled(t *testing.T) {
 			var res []sql.Row
 			callback := func(r *sqltypes.Result) error {
 				for _, r := range r.Rows {
-					var vals []interface{}
+					var vals []any
 					for _, v := range r {
 						val, err := strconv.ParseInt(string(v.Raw()), 0, 64)
 						if err != nil {
@@ -1050,7 +1050,7 @@ func TestSchemaToFields(t *testing.T) {
 	require.NoError(err)
 
 	fields := schemaToFields(ctx, schema)
-	for i := 0; i < len(fields); i++ {
+	for i := range fields {
 		t.Run(schema[i].Name, func(t *testing.T) {
 			assert.Equal(t, expected[i], fields[i])
 		})
@@ -1287,7 +1287,7 @@ func setupMemDB(require *require.Assertions) (*sqle.Engine, *memory.DbProvider) 
 
 	tableTest := memory.NewTable(ctx, db, "test", sql.NewPrimaryKeySchema(sql.Schema{{Name: "c1", Type: types.Int32, Source: "test"}}), nil)
 
-	for i := 0; i < 1010; i++ {
+	for i := range 1010 {
 		require.NoError(tableTest.Insert(
 			ctx,
 			sql.NewRow(int32(i)),
@@ -1390,7 +1390,7 @@ const waitTimeout = 500 * time.Millisecond
 
 func checkGlobalStatVar(t *testing.T, name string, expected any) {
 	start := time.Now()
-	var globalVal interface{}
+	var globalVal any
 	var ok bool
 	for time.Now().Sub(start) < waitTimeout {
 		_, globalVal, ok = sql.StatusVariables.GetGlobal(name)
@@ -1404,7 +1404,7 @@ func checkGlobalStatVar(t *testing.T, name string, expected any) {
 
 func checkSessionStatVar(t *testing.T, sess sql.Session, name string, expected uint64) {
 	start := time.Now()
-	var sessVal interface{}
+	var sessVal any
 	var err error
 	for time.Now().Sub(start) < waitTimeout {
 		sessVal, err = sess.GetStatusVariable(nil, name)
@@ -1446,7 +1446,7 @@ func TestStatusVariableQuestions(t *testing.T) {
 	checkSessionStatVar(t, sess1, "Questions", uint64(0))
 
 	// Call ComQuery 5 times
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		err = handler.ComQuery(context.Background(), conn1, "SELECT 1", dummyCb)
 		require.NoError(t, err)
 	}
@@ -1461,7 +1461,7 @@ func TestStatusVariableQuestions(t *testing.T) {
 	sess2 := handler.sm.sessions[2]
 
 	// Get 5 syntax errors
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		err = handler.ComQuery(context.Background(), conn2, "syntax error", dummyCb)
 		require.Error(t, err)
 	}
@@ -1642,7 +1642,7 @@ func TestStatusVariableThreadsConnected(t *testing.T) {
 	checkGlobalStatVar(t, "Connections", uint64(1))
 
 	conns := make([]*mysql.Conn, 10)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		conns[i] = newConn(uint32(i))
 		handler.NewConnection(conns[i])
 		err = handler.ComInitDB(conns[i], "test")
@@ -1652,7 +1652,7 @@ func TestStatusVariableThreadsConnected(t *testing.T) {
 	checkGlobalStatVar(t, "Threads_connected", uint64(10))
 	checkGlobalStatVar(t, "Connections", uint64(11))
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		handler.sm.RemoveConn(conns[i])
 		checkGlobalStatVar(t, "Threads_connected", uint64(10-i-1))
 	}
@@ -1694,11 +1694,9 @@ func TestStatusVariableThreadsRunning(t *testing.T) {
 	require.NoError(t, err)
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		handler.ComQuery(context.Background(), conn1, "select sleep(1)", dummyCb)
-	}()
+	})
 
 	checkGlobalStatVar(t, "Threads_running", uint64(1))
 	checkGlobalStatVar(t, "Connections", uint64(2))
@@ -1761,12 +1759,12 @@ func TestStatusVariableComSelect(t *testing.T) {
 	checkSessionStatVar(t, sess2, "Com_select", uint64(0))
 
 	// have session 1 call delete 5 times
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		handler.ComQuery(context.Background(), conn1, "select 1 from dual", dummyCb)
 	}
 
 	// have session 2 call delete 3 times
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		handler.ComQuery(context.Background(), conn2, "select 1 from dual", dummyCb)
 	}
 
@@ -1811,12 +1809,12 @@ func TestStatusVariableComDelete(t *testing.T) {
 	checkSessionStatVar(t, sess2, "Com_delete", uint64(0))
 
 	// have session 1 call delete 5 times
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		handler.ComQuery(context.Background(), conn1, "DELETE FROM doesnotmatter", dummyCb)
 	}
 
 	// have session 2 call delete 3 times
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		handler.ComQuery(context.Background(), conn2, "DELETE FROM doesnotmatter", dummyCb)
 	}
 
@@ -1861,12 +1859,12 @@ func TestStatusVariableComInsert(t *testing.T) {
 	checkSessionStatVar(t, sess2, "Com_insert", uint64(0))
 
 	// have session 1 call delete 5 times
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		handler.ComQuery(context.Background(), conn1, "insert into blahblah values ()", dummyCb)
 	}
 
 	// have session 2 call delete 3 times
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		handler.ComQuery(context.Background(), conn2, "insert into blahblah values ()", dummyCb)
 	}
 
@@ -1911,12 +1909,12 @@ func TestStatusVariableComUpdate(t *testing.T) {
 	checkSessionStatVar(t, sess2, "Com_update", uint64(0))
 
 	// have session 1 call delete 5 times
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		handler.ComQuery(context.Background(), conn1, "update t set i = 10", dummyCb)
 	}
 
 	// have session 2 call delete 3 times
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		handler.ComQuery(context.Background(), conn2, "update t set i = 10", dummyCb)
 	}
 

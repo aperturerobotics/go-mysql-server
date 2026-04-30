@@ -1025,7 +1025,7 @@ func roo(lowerbound, upperbound byte) sql.MySQLRangeColumnExpr {
 }
 
 // CustomRangeColumnExpr returns a MySQLRangeColumnExpr defined by the bounds given.
-func newRangeColumnExpr(lower, upper interface{}, lowerBound, upperBound sql.MySQLRangeBoundType, typ sql.Type) sql.MySQLRangeColumnExpr {
+func newRangeColumnExpr(lower, upper any, lowerBound, upperBound sql.MySQLRangeBoundType, typ sql.Type) sql.MySQLRangeColumnExpr {
 	if lower == nil || upper == nil {
 		return sql.EmptyRangeColumnExpr(typ)
 	}

@@ -20,8 +20,6 @@ import (
 	"io"
 	"sort"
 
-	"github.com/dolthub/jsonpath"
-
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/hash"
@@ -256,7 +254,7 @@ func (c *JsonTableCol) NextSibling() bool {
 // Additionally, this function will set the c.currSib to the first sibling
 func (c *JsonTableCol) LoadData(obj any) {
 	var data any
-	data, c.err = jsonpath.JsonPathLookup(obj, c.Path)
+	data, c.err = jsonPathLookup(obj, c.Path)
 	if d, ok := data.([]any); ok {
 		c.data = d
 	} else {
@@ -328,7 +326,7 @@ func (c *JsonTableCol) Next(ctx *sql.Context, obj any, pass bool, ord int) (sql.
 	}
 
 	// TODO: cache this?
-	val, err := jsonpath.JsonPathLookup(obj, c.Path)
+	val, err := jsonPathLookup(obj, c.Path)
 	if c.Opts.Exists {
 		if err != nil {
 			return sql.Row{0}, nil

@@ -21,7 +21,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/binlogreplication"
@@ -44,8 +44,8 @@ func (b *BaseBuilder) buildBinlog(ctx *sql.Context, n *plan.Binlog, row sql.Row)
 	}
 
 	var decoded []byte
-	lines := strings.Split(n.Base64Str, "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(n.Base64Str, "\n")
+	for line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

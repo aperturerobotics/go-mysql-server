@@ -61,7 +61,7 @@ func NewIf(ctx *sql.Context, expr, ifTrue, ifFalse sql.Expression) sql.Expressio
 }
 
 // Eval implements the Expression interface.
-func (f *If) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (f *If) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	e, err := f.expr.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -77,7 +77,7 @@ func (f *If) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		}
 	}
 
-	var eval interface{}
+	var eval any
 	if asBool {
 		eval, err = f.ifTrue.Eval(ctx, row)
 		if err != nil {

@@ -126,7 +126,7 @@ func (p *Pad) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Ex
 func (p *Pad) Eval(
 	ctx *sql.Context,
 	row sql.Row,
-) (interface{}, error) {
+) (any, error) {
 	str, err := p.str.Eval(ctx, row)
 	if err != nil {
 		return nil, err

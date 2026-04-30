@@ -20,7 +20,6 @@ import (
 	"sync"
 
 	"github.com/dolthub/go-mysql-server/internal/similartext"
-	"github.com/dolthub/go-mysql-server/memory"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/binlogreplication"
 	"github.com/dolthub/go-mysql-server/sql/expression/function"
@@ -72,7 +71,7 @@ func NewCatalog(provider sql.DatabaseProvider, overrides sql.EngineOverrides) *C
 		DbProvider:       provider,
 		builtInFunctions: function.NewRegistry(),
 		overrides:        overrides,
-		StatsProvider:    memory.NewStatsProv(),
+		StatsProvider:    newStatsProvider(),
 		locks:            make(sessionLocks),
 	}
 	c.AuthHandler = sql.GetAuthorizationHandlerFactory().CreateHandler(c)
@@ -107,13 +106,24 @@ func (c *Catalog) WithTableFunctions(fns ...sql.TableFunction) (sql.TableFunctio
 	if tfp, ok := c.DbProvider.(sql.TableFunctionProvider); !ok {
 		return nil, fmt.Errorf("catalog does not implement sql.TableFunctionProvider")
 	} else {
-		ret := *c
 		newProv, err := tfp.WithTableFunctions(fns...)
 		if err != nil {
 			return nil, err
 		}
-		ret.DbProvider = newProv.(sql.DatabaseProvider)
-		return &ret, nil
+		ret := &Catalog{
+			InfoSchema:              c.InfoSchema,
+			StatsProvider:           c.StatsProvider,
+			DbProvider:              newProv.(sql.DatabaseProvider),
+			AuthHandler:             c.AuthHandler,
+			BinlogConsumer:          c.BinlogConsumer,
+			BinlogReplicaController: c.BinlogReplicaController,
+			BinlogPrimaryController: c.BinlogPrimaryController,
+			MySQLDb:                 c.MySQLDb,
+			builtInFunctions:        c.builtInFunctions,
+			overrides:               c.overrides,
+			locks:                   c.locks,
+		}
+		return ret, nil
 	}
 }
 

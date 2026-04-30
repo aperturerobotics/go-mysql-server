@@ -29,7 +29,7 @@ func TestLower(t *testing.T) {
 		name     string
 		rowType  sql.Type
 		row      sql.Row
-		expected interface{}
+		expected any
 	}{
 		{"text nil", types.LongText, sql.NewRow(nil), nil},
 		{"text ok", types.LongText, sql.NewRow("LoWeR"), "lower"},
@@ -56,7 +56,7 @@ func TestUpper(t *testing.T) {
 		name     string
 		rowType  sql.Type
 		row      sql.Row
-		expected interface{}
+		expected any
 	}{
 		{"text nil", types.LongText, sql.NewRow(nil), nil},
 		{"text ok", types.LongText, sql.NewRow("UpPeR"), "UPPER"},

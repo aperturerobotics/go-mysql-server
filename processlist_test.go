@@ -86,8 +86,8 @@ func TestProcessList(t *testing.T) {
 		},
 		"b": {
 			PartitionsProgress: map[string]sql.PartitionProgress{
-				"b-1": {sql.Progress{Name: "b-1", Done: 0, Total: -1}},
-				"b-2": {sql.Progress{Name: "b-2", Done: 1, Total: -1}},
+				"b-1": {Progress: sql.Progress{Name: "b-1", Done: 0, Total: -1}},
+				"b-2": {Progress: sql.Progress{Name: "b-2", Done: 1, Total: -1}},
 			},
 			Progress: sql.Progress{Name: "b", Total: 6},
 		},

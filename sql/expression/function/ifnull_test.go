@@ -26,11 +26,11 @@ import (
 
 func TestIfNull(t *testing.T) {
 	testCases := []struct {
-		expression     interface{}
+		expression     any
 		expressionType sql.Type
-		value          interface{}
+		value          any
 		valueType      sql.Type
-		expected       interface{}
+		expected       any
 		expectedType   sql.Type
 	}{
 		{"foo", types.LongText, "bar", types.LongText, "foo", types.LongText},

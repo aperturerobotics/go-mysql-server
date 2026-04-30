@@ -83,7 +83,7 @@ func (f *Format) String() string {
 }
 
 // Eval implements the Expression interface.
-func (f *Format) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (f *Format) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	numVal, err := f.NumValue.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -160,11 +160,11 @@ func (f *Format) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		}
 
 		str := res.Text('f')
-		dotIdx := strings.Index(str, ".")
-		if dotIdx == -1 {
+		_, after, ok := strings.Cut(str, ".")
+		if !ok {
 			fractionStr = ""
 		} else {
-			fractionStr = str[dotIdx+1:]
+			fractionStr = after
 		}
 	}
 

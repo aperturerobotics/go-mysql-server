@@ -29,7 +29,7 @@ func TestInetAton(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null input", sql.NewRow(nil), nil, false},
@@ -64,7 +64,7 @@ func TestInetNtoa(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null input", sql.NewRow(nil), nil, false},
@@ -95,7 +95,7 @@ func TestInet6Aton(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null input", sql.NewRow(nil), nil, false},
@@ -128,7 +128,7 @@ func TestInet6Ntoa(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null input", sql.NewRow(nil), nil, false},

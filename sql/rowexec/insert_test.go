@@ -32,9 +32,9 @@ func TestInsert(t *testing.T) {
 	testCases := []struct {
 		name      string
 		colType   sql.Type
-		value     interface{}
+		value     any
 		valueType sql.Type
-		expected  interface{}
+		expected  any
 		warning   bool
 		ignore    bool
 		err       bool

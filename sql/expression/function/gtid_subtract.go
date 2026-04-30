@@ -17,7 +17,7 @@ package function
 import (
 	"fmt"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/types"
@@ -90,7 +90,7 @@ func (gs *GtidSubtract) Children() []sql.Expression {
 }
 
 // Eval implements the Expression interface.
-func (gs *GtidSubtract) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (gs *GtidSubtract) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if gs.gtid1 == nil || gs.gtid2 == nil {
 		return nil, nil
 	}

@@ -193,7 +193,7 @@ func (r *RegexpReplace) compile(ctx *sql.Context, row sql.Row) {
 }
 
 // Eval implements the sql.Expression interface.
-func (r *RegexpReplace) Eval(ctx *sql.Context, row sql.Row) (val interface{}, err error) {
+func (r *RegexpReplace) Eval(ctx *sql.Context, row sql.Row) (val any, err error) {
 	span, ctx := ctx.Span("function.RegexpReplace")
 	defer span.End()
 

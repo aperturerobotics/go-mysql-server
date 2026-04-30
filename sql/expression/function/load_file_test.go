@@ -52,7 +52,7 @@ func TestLoadFileBadDir(t *testing.T) {
 	defer os.Remove(file.Name())
 
 	// Set the secure_file_priv var but make it different than the file directory
-	vars := make(map[string]interface{})
+	vars := make(map[string]any)
 	vars["secure_file_priv"] = "/not/a/real/directory"
 	err = sql.SystemVariables.AssignValues(vars)
 	assert.NoError(t, err)
@@ -93,7 +93,7 @@ func TestLoadFile(t *testing.T) {
 	dir := os.TempDir()
 
 	// Set the secure_file_priv var
-	vars := make(map[string]interface{})
+	vars := make(map[string]any)
 	vars["secure_file_priv"] = dir
 	err := sql.SystemVariables.AssignValues(vars)
 	assert.NoError(t, err)

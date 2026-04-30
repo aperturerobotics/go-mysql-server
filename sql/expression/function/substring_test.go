@@ -36,7 +36,7 @@ func TestSubstring(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null string", sql.NewRow(nil, 1, 1), nil, false},
@@ -79,7 +79,7 @@ func TestSubstringIndex(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null string", sql.NewRow(nil, ".", 1), nil, false},
@@ -122,7 +122,7 @@ func TestInstr(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"both null", sql.NewRow(nil, nil), nil, false},
@@ -147,7 +147,7 @@ func TestInstr(t *testing.T) {
 				require.Error(err)
 			} else {
 				require.NoError(err)
-				var expected interface{}
+				var expected any
 				if i, ok := tt.expected.(int); ok {
 					expected = int64(i)
 				}
@@ -167,7 +167,7 @@ func TestLeft(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"both null", sql.NewRow(nil, nil), nil, false},
@@ -208,7 +208,7 @@ func TestRight(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"both null", sql.NewRow(nil, nil), nil, false},

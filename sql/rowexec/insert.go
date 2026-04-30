@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 	"github.com/dolthub/vitess/go/vt/proto/query"
 	"gopkg.in/src-d/go-errors.v1"
 
@@ -476,7 +476,7 @@ func (i *insertIter) validateNullability(ctx *sql.Context, dstSchema sql.Schema,
 	return nil
 }
 
-func toInt64(x interface{}) int64 {
+func toInt64(x any) int64 {
 	switch x := x.(type) {
 	case int:
 		return int64(x)

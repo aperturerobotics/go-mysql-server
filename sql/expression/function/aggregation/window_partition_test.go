@@ -204,7 +204,7 @@ func TestWindowPartition_MaterializeOutput(t *testing.T) {
 			{int64(8), "desert", "scorpion", 8},
 			{int64(9), "desert", "mummy", 5},
 		}
-		i.partitions = []sql.WindowInterval{{0, 5}, {5, 9}}
+		i.partitions = []sql.WindowInterval{{Start: 0, End: 5}, {Start: 5, End: 9}}
 		i.outputOrdering = []int{0, 1, 2, 3, 4, 5, 6, 7, 8}
 		output, err := i.materializeOutput(ctx)
 		require.NoError(t, err)
@@ -225,7 +225,7 @@ func TestWindowPartition_MaterializeOutput(t *testing.T) {
 				},
 			})
 		i.input = []sql.Row{}
-		i.partitions = []sql.WindowInterval{{0, 0}}
+		i.partitions = []sql.WindowInterval{{Start: 0, End: 0}}
 		i.outputOrdering = []int{}
 		output, err := i.materializeOutput(ctx)
 		require.Equal(t, io.EOF, err)

@@ -208,7 +208,7 @@ func (r *indexAnalyzer) MatchingIndexes(ctx *sql.Context, table, db string, expr
 		}
 	})
 	sortedIndexes := make([]sql.Index, len(indexes))
-	for i := 0; i < len(sortedIndexes); i++ {
+	for i := range sortedIndexes {
 		sortedIndexes[i] = indexes[i].Index
 	}
 	return sortedIndexes

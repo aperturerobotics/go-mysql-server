@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 	"gopkg.in/src-d/go-errors.v1"
 )
 
