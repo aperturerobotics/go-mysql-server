@@ -27,7 +27,6 @@ import (
 	"github.com/dolthub/vitess/go/vt/sqlparser"
 	"github.com/pkg/errors"
 
-	"github.com/dolthub/go-mysql-server/eventscheduler"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/analyzer"
 	"github.com/dolthub/go-mysql-server/sql/expression"
@@ -81,13 +80,18 @@ type Engine struct {
 	MemoryManager     *sql.MemoryManager
 	BackgroundThreads *sql.BackgroundThreads
 	mu                *sync.Mutex
-	EventScheduler    *eventscheduler.EventScheduler
+	EventScheduler    engineEventScheduler
 	ReadOnly          atomic.Bool
 	IsServerLocked    bool
 	Version           sql.AnalyzerVersion
 }
 
 var _ sql.StatementRunner = (*Engine)(nil)
+
+type engineEventScheduler interface {
+	sql.EventScheduler
+	Close()
+}
 
 type ColumnWithRawDefault struct {
 	SqlColumn *sql.Column
@@ -102,7 +106,7 @@ func New(a *analyzer.Analyzer, cfg *Config) *Engine {
 		cfg = &Config{}
 	}
 
-	if cfg.IncludeRootAccount {
+	if cfg.IncludeRootAccount && a.Catalog.MySQLDb != nil {
 		a.Catalog.MySQLDb.AddRootAccount()
 	}
 
@@ -606,8 +610,8 @@ func (e *Engine) bindExecuteQueryNode(ctx *sql.Context, query string, eq *plan.E
 	// TODO: overwrite the current binding if bindings are not empty???
 	tempBindings := make(map[string]sql.Expression)
 	for i, name := range eq.BindVars {
-		if strings.HasPrefix(name.String(), "@") {
-			t, val, err := ctx.GetUserVariable(ctx, strings.TrimPrefix(name.String(), "@"))
+		if after, ok0 := strings.CutPrefix(name.String(), "@"); ok0 {
+			t, val, err := ctx.GetUserVariable(ctx, after)
 			if err != nil {
 				return nil, nil
 			}
@@ -734,19 +738,6 @@ func (e *Engine) EngineAnalyzer() *analyzer.Analyzer {
 
 func (e *Engine) EngineEventScheduler() sql.EventScheduler {
 	return e.EventScheduler
-}
-
-// InitializeEventScheduler initializes the EventScheduler for the engine with the given sql.Context
-// getter function, |ctxGetterFunc, the EventScheduler |status|, and the |period| for the event scheduler
-// to check for events to execute. If |period| is less than 1, then it is ignored and the default period
-// (30s currently) is used. This function also initializes the EventScheduler of the analyzer of this engine.
-func (e *Engine) InitializeEventScheduler(ctxGetterFunc func() (*sql.Context, error), status eventscheduler.SchedulerStatus, period int) error {
-	var err error
-	e.EventScheduler, err = eventscheduler.InitEventScheduler(e.Analyzer, e.BackgroundThreads, ctxGetterFunc, status, e.executeEvent, period)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 // executeEvent executes an event with this Engine. The event is executed against the |dbName| database, and by the

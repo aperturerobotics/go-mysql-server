@@ -19,8 +19,8 @@ import (
 	"net"
 	"time"
 
+	"github.com/dolthub/go-mysql-server/sql/otel/trace"
 	"github.com/dolthub/vitess/go/mysql"
-	"go.opentelemetry.io/otel/trace"
 
 	gms "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/sql"

@@ -69,7 +69,7 @@ func (l *LoadFile) IsNullable(ctx *sql.Context) bool {
 
 // TODO: Allow FILE privileges for GRANT
 // Eval implements sql.Expression.
-func (l *LoadFile) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (l *LoadFile) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	dir, err := ctx.Session.GetSessionVariable(ctx, "secure_file_priv")
 	if err != nil {
 		return "", err
@@ -146,7 +146,7 @@ func (l *LoadFile) getFile(ctx *sql.Context, row sql.Row, secureFileDir string) 
 	}
 
 	// If the two directories are not equivalent we return nil
-	if !os.SameFile(sStat, fStat) {
+	if !sameFile(sStat, fStat) {
 		return nil, nil
 	}
 

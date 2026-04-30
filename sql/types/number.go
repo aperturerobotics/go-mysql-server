@@ -1090,22 +1090,22 @@ func convertToUint64(t NumberTypeImpl_, v any, round Round) (uint64, sql.Convert
 		return uint64(v), sql.InRange, nil
 	case int8:
 		if v < 0 {
-			return uint64(math.MaxUint64 - uint(-v-1)), sql.Underflow, nil
+			return uint64(math.MaxUint64 - uint64(-v-1)), sql.Underflow, nil
 		}
 		return uint64(v), sql.InRange, nil
 	case int16:
 		if v < 0 {
-			return uint64(math.MaxUint64 - uint(-v-1)), sql.Underflow, nil
+			return uint64(math.MaxUint64 - uint64(-v-1)), sql.Underflow, nil
 		}
 		return uint64(v), sql.InRange, nil
 	case int32:
 		if v < 0 {
-			return uint64(math.MaxUint64 - uint(-v-1)), sql.Underflow, nil
+			return uint64(math.MaxUint64 - uint64(-v-1)), sql.Underflow, nil
 		}
 		return uint64(v), sql.InRange, nil
 	case int64:
 		if v < 0 {
-			return uint64(math.MaxUint64 - uint(-v-1)), sql.Underflow, nil
+			return uint64(math.MaxUint64 - uint64(-v-1)), sql.Underflow, nil
 		}
 		return uint64(v), sql.InRange, nil
 	case uint:
@@ -1123,7 +1123,7 @@ func convertToUint64(t NumberTypeImpl_, v any, round Round) (uint64, sql.Convert
 			return math.MaxUint64, sql.Overflow, nil
 		}
 		if v < 0 {
-			return uint64(math.MaxUint64 - uint(-v-1)), sql.Underflow, nil
+			return uint64(math.MaxUint64 - uint64(-v-1)), sql.Underflow, nil
 		}
 		return uint64(math.Round(float64(v))), sql.InRange, nil
 	case float64:
@@ -1134,7 +1134,7 @@ func convertToUint64(t NumberTypeImpl_, v any, round Round) (uint64, sql.Convert
 			return math.MaxUint64, sql.Overflow, nil
 		}
 		if v < 0 {
-			return uint64(math.MaxUint64 - uint(-v-1)), sql.Underflow, nil
+			return uint64(math.MaxUint64 - uint64(-v-1)), sql.Underflow, nil
 		}
 		return uint64(math.Round(v)), sql.InRange, nil
 	case *apd.Decimal:

@@ -21,9 +21,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/dolthub/go-mysql-server/sql/otel/trace"
 	"github.com/dolthub/vitess/go/mysql"
 	"github.com/sirupsen/logrus"
-	"go.opentelemetry.io/otel/trace"
 
 	sqle "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/sql"
@@ -183,7 +183,7 @@ func newServerFromHandler(cfg Config, e *sqle.Engine, sm *SessionManager, handle
 
 	listenerCfg := mysql.ListenerConfig{
 		Listener:                 l,
-		AuthServer:               e.Analyzer.Catalog.MySQLDb,
+		AuthServer:               getAuthServer(e.Analyzer.Catalog.MySQLDb),
 		Handler:                  handler,
 		ConnReadTimeout:          cfg.ConnReadTimeout,
 		ConnWriteTimeout:         cfg.ConnWriteTimeout,

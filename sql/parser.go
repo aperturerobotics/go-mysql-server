@@ -17,7 +17,6 @@ package sql
 import (
 	"context"
 	"fmt"
-	trace2 "runtime/trace"
 	"strings"
 	"unicode"
 
@@ -113,7 +112,7 @@ func (m *MysqlParser) ParseSimple(query string) (ast.Statement, error) {
 
 // Parse implements Parser interface.
 func (m *MysqlParser) Parse(ctx *Context, query string, multi bool) (ast.Statement, string, string, error) {
-	defer trace2.StartRegion(ctx, "Parse").End()
+	defer startTraceRegion(ctx, "Parse").End()
 	return m.ParseWithOptions(ctx, query, ';', multi, LoadSqlMode(ctx).ParserOptions())
 }
 

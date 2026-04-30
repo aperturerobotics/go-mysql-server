@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/go-mysql-server/sql/mysql_db"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
@@ -85,7 +84,7 @@ func (tc *TableCopier) createTableSelectCanBeCopied(ctx *sql.Context, tableNode 
 	}
 
 	// If the DB does not implement the TableCopierDatabase interface we cannot copy over the table.
-	if privDb, ok := tc.db.(mysql_db.PrivilegedDatabase); ok {
+	if privDb, ok := tc.db.(sql.PrivilegedDatabase); ok {
 		if _, ok := privDb.Unwrap().(sql.TableCopierDatabase); !ok {
 			return false
 		}

@@ -26,7 +26,6 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/expression/function"
-	"github.com/dolthub/go-mysql-server/sql/mysql_db"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
@@ -42,7 +41,7 @@ func (b *Builder) resolveDb(name string) sql.Database {
 	}
 
 	// todo show tables as of expects privileged
-	// if privilegedDatabase, ok := database.(mysql_db.PrivilegedDatabase); ok {
+	// if privilegedDatabase, ok := database.(sql.PrivilegedDatabase); ok {
 	//	database = privilegedDatabase.Unwrap()
 	// }
 	return database
@@ -334,7 +333,7 @@ func (b *Builder) buildCreateTable(inScope *scope, c *ast.DDL) (outScope *scope)
 	schema.Schema = assignColumnIndexesInSchema(b.ctx, schema.Schema)
 	chDefs = assignColumnIndexesInCheckDefs(b.ctx, chDefs, schema.Schema)
 
-	if privDb, ok := database.(mysql_db.PrivilegedDatabase); ok {
+	if privDb, ok := database.(sql.PrivilegedDatabase); ok {
 		if sv, ok := privDb.Unwrap().(sql.SchemaValidator); ok {
 			if err := sv.ValidateSchema(schema.PhysicalSchema()); err != nil {
 				b.handleErr(err)
@@ -962,7 +961,7 @@ type namedConstraint struct {
 	name string
 }
 
-func (b *Builder) convertConstraintDefinition(inScope *scope, cd *ast.ConstraintDefinition) interface{} {
+func (b *Builder) convertConstraintDefinition(inScope *scope, cd *ast.ConstraintDefinition) any {
 	if fkConstraint, ok := cd.Details.(*ast.ForeignKeyDefinition); ok {
 		columns := make([]string, len(fkConstraint.Source))
 		for i, col := range fkConstraint.Source {
@@ -1445,12 +1444,12 @@ func validateOnUpdateExprs(col *sql.Column) error {
 }
 
 // TableSpecToSchema creates a sql.Schema from a parsed TableSpec and returns the parsed primary key schema, collation ID, and table comment.
-func (b *Builder) tableSpecToSchema(inScope, outScope *scope, db sql.Database, tableName string, tableSpec *ast.TableSpec, forceInvalidCollation bool) (sql.PrimaryKeySchema, sql.CollationID, map[string]interface{}) {
+func (b *Builder) tableSpecToSchema(inScope, outScope *scope, db sql.Database, tableName string, tableSpec *ast.TableSpec, forceInvalidCollation bool) (sql.PrimaryKeySchema, sql.CollationID, map[string]any) {
 	// TODO: helper method?
-	tblOpts := make(map[string]interface{})
+	tblOpts := make(map[string]any)
 	for _, tblOpt := range tableSpec.TableOpts {
 		optName := strings.ToLower(tblOpt.Name)
-		var optVal interface{}
+		var optVal any
 		switch optName {
 		case "auto_increment":
 			// convert string to uint64

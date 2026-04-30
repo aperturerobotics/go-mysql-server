@@ -23,7 +23,6 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	dtablefunctions "github.com/dolthub/go-mysql-server/sql/expression/tablefunction"
-	"github.com/dolthub/go-mysql-server/sql/mysql_db"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/transform"
 	"github.com/dolthub/go-mysql-server/sql/types"
@@ -434,7 +433,7 @@ func columnsToStrings(cols ast.Columns) []string {
 	return res
 }
 
-func (b *Builder) resolveTable(tab, db string, asOf interface{}) *plan.ResolvedTable {
+func (b *Builder) resolveTable(tab, db string, asOf any) *plan.ResolvedTable {
 	var table sql.Table
 	var database sql.Database
 	var err error
@@ -453,7 +452,7 @@ func (b *Builder) resolveTable(tab, db string, asOf interface{}) *plan.ResolvedT
 		b.handleErr(err)
 	}
 
-	if privilegedDatabase, ok := database.(mysql_db.PrivilegedDatabase); ok {
+	if privilegedDatabase, ok := database.(sql.PrivilegedDatabase); ok {
 		database = privilegedDatabase.Unwrap()
 	}
 	return plan.NewResolvedTable(table, database, asOf)
@@ -684,7 +683,7 @@ func (b *Builder) buildResolvedTable(inScope *scope, db, schema, name string, as
 		}
 	}
 
-	var asOfLit interface{}
+	var asOfLit any
 	if asof != nil {
 		asOfLit = b.buildAsOfLit(inScope, asof.Time)
 	} else if asof := b.ViewCtx().AsOf; asof != nil {
@@ -810,7 +809,7 @@ func resolvedViewScope(ctx *sql.Context, outScope *scope, view sql.Node, db stri
 	return outScope, true
 }
 
-func (b *Builder) resolveView(name string, database sql.Database, asOf interface{}, outScope *scope) sql.Node {
+func (b *Builder) resolveView(name string, database sql.Database, asOf any, outScope *scope) sql.Node {
 	var view *sql.View
 
 	if vdb, vok := database.(sql.ViewDatabase); vok {

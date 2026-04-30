@@ -6,8 +6,8 @@ import (
 	"io"
 	"reflect"
 
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
+	"github.com/dolthub/go-mysql-server/sql/otel/attribute"
+	"github.com/dolthub/go-mysql-server/sql/otel/trace"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/plan"
@@ -291,7 +291,7 @@ func (iter *rangeHeapJoinIter) getActiveRanges(ctx *sql.Context, _ sql.NodeExecB
 // This is consistent with the order received if either child node is an index.
 // Note: We could get the same behavior by simply excluding values and ranges containing NULL,
 // but this is forward compatible if we ever want to convert joins with null-safe conditions into RangeHeapJoins.
-func compareNullsFirst(ctx *sql.Context, comparisonType sql.Type, a, b interface{}) (int, error) {
+func compareNullsFirst(ctx *sql.Context, comparisonType sql.Type, a, b any) (int, error) {
 	if a == nil {
 		if b == nil {
 			return 0, nil
@@ -334,7 +334,7 @@ func (iter *rangeHeapJoinIter) Pop() any {
 	return x
 }
 
-func (iter *rangeHeapJoinIter) Peek() interface{} {
+func (iter *rangeHeapJoinIter) Peek() any {
 	n := len(iter.activeRanges)
 	return iter.activeRanges[n-1][iter.rangeHeapPlan.MaxColumnIndex]
 }

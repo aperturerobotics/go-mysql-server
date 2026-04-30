@@ -19,9 +19,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dolthub/go-mysql-server/sql/otel/trace"
 	"github.com/dolthub/vitess/go/mysql"
 	"github.com/sirupsen/logrus"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/mysql_db"

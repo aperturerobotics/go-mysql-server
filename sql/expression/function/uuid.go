@@ -1,3 +1,5 @@
+//go:build !tinygo
+
 // Copyright 2021 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -87,7 +89,7 @@ func (UUIDFunc) CollationCoercibility(ctx *sql.Context) (collation sql.Collation
 	return sql.Collation_utf8mb3_general_ci, 4
 }
 
-func (u UUIDFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (u UUIDFunc) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return uuid.New().String(), nil
 }
 
@@ -163,7 +165,7 @@ func (IsUUID) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID
 	return sql.Collation_binary, 5
 }
 
-func (u IsUUID) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (u IsUUID) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	str, err := u.child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -279,7 +281,7 @@ func (UUIDToBin) CollationCoercibility(ctx *sql.Context) (collation sql.Collatio
 	return sql.Collation_binary, 4
 }
 
-func (ub *UUIDToBin) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (ub *UUIDToBin) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	str, err := ub.inputUUID.Eval(ctx, row)
 	if err != nil {
 		return 0, err
@@ -445,7 +447,7 @@ func (BinToUUID) CollationCoercibility(ctx *sql.Context) (collation sql.Collatio
 	return sql.Collation_utf8mb3_general_ci, 4
 }
 
-func (bu BinToUUID) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (bu BinToUUID) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	str, err := bu.inputBinary.Eval(ctx, row)
 	if err != nil {
 		return 0, err
@@ -583,7 +585,7 @@ func (u *UUIDShortFunc) CollationCoercibility(ctx *sql.Context) (collation sql.C
 }
 
 // Eval generates a 64-bit UUID_SHORT value using server_id, startup time, and counter.
-func (u *UUIDShortFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (u *UUIDShortFunc) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	uuidShortMu.Lock()
 	defer uuidShortMu.Unlock()
 

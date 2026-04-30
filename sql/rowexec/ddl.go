@@ -20,7 +20,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/dolthub/vitess/go/mysql"
 	"github.com/sirupsen/logrus"
@@ -28,7 +27,6 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/fulltext"
-	"github.com/dolthub/go-mysql-server/sql/mysql_db"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/planbuilder"
 	"github.com/dolthub/go-mysql-server/sql/types"
@@ -95,7 +93,7 @@ func (b *BaseBuilder) buildLoadData(ctx *sql.Context, n *plan.LoadData, row sql.
 	}
 
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(nil, int(types.LongTextBlobMax))
+	scanner.Buffer(nil, scannerMaxTokenSize())
 	scanner.Split(n.SplitLines)
 
 	sch := n.Schema(ctx)
@@ -500,7 +498,7 @@ func (b *BaseBuilder) buildCreateSchema(ctx *sql.Context, n *plan.CreateSchema, 
 		return nil, err
 	}
 
-	if pdb, ok := db.(mysql_db.PrivilegedDatabase); ok {
+	if pdb, ok := db.(sql.PrivilegedDatabase); ok {
 		db = pdb.Unwrap()
 	}
 
@@ -600,137 +598,11 @@ func (b *BaseBuilder) buildDropView(ctx *sql.Context, n *plan.DropView, row sql.
 }
 
 func (b *BaseBuilder) buildAlterUser(ctx *sql.Context, a *plan.AlterUser, _ sql.Row) (sql.RowIter, error) {
-	mysqlDb, ok := a.MySQLDb.(*mysql_db.MySQLDb)
-	if !ok {
-		return nil, sql.ErrDatabaseNotFound.New("mysql")
-	}
-	editor := mysqlDb.Editor()
-	defer editor.Close()
-
-	user := a.User
-	// replace empty host with any host
-	if user.UserName.Host == "" {
-		user.UserName.Host = "%"
-	}
-
-	userPk := mysql_db.UserPrimaryKey{
-		Host: user.UserName.Host,
-		User: user.UserName.Name,
-	}
-	previousUserEntry, ok := editor.GetUser(userPk)
-	if !ok {
-		if a.IfExists {
-			return sql.RowsToRowIter(sql.Row{types.NewOkResult(0)}), nil
-		}
-		return nil, sql.ErrUserAlterFailure.New(user.UserName.String("'"))
-	}
-
-	// Default the auth plugin and authorization string to the currently configured values.
-	// We can only change the auth info if a new password was specified, otherwise, we don't
-	// have a plaintext password to process into an authorization string for the auth plugin.
-	plugin := previousUserEntry.Plugin
-	authString := previousUserEntry.AuthString
-	if user.Auth1 != nil {
-		plugin = user.Auth1.Plugin()
-		var err error
-		authString, err = user.Auth1.AuthString()
-		if err != nil {
-			return nil, err
-		}
-	}
-	if plugin != string(mysql.MysqlNativePassword) && plugin != string(mysql.CachingSha2Password) {
-		if err := mysqlDb.VerifyPlugin(plugin); err != nil {
-			return nil, sql.ErrUserAlterFailure.New(err)
-		}
-	}
-
-	previousUserEntry.Plugin = plugin
-	previousUserEntry.AuthString = authString
-	previousUserEntry.PasswordLastChanged = time.Now().UTC()
-	editor.PutUser(previousUserEntry)
-
-	if err := mysqlDb.Persist(ctx, editor); err != nil {
-		return nil, err
-	}
-
-	return sql.RowsToRowIter(sql.Row{types.NewOkResult(0)}), nil
+	return b.buildAlterUserImpl(ctx, a)
 }
 
 func (b *BaseBuilder) buildCreateUser(ctx *sql.Context, n *plan.CreateUser, _ sql.Row) (sql.RowIter, error) {
-	mysqlDb, ok := n.MySQLDb.(*mysql_db.MySQLDb)
-	if !ok {
-		return nil, sql.ErrDatabaseNotFound.New("mysql")
-	}
-
-	editor := mysqlDb.Editor()
-	defer editor.Close()
-
-	for _, user := range n.Users {
-		// replace empty host with any host
-		if user.UserName.Host == "" {
-			user.UserName.Host = "%"
-		}
-
-		userPk := mysql_db.UserPrimaryKey{
-			Host: user.UserName.Host,
-			User: user.UserName.Name,
-		}
-		_, ok := editor.GetUser(userPk)
-		if ok {
-			if n.IfNotExists {
-				continue
-			}
-			return nil, sql.ErrUserCreationFailure.New(user.UserName.String("'"))
-		}
-
-		if len(user.UserName.Name) > 32 {
-			return nil, sql.ErrUserNameTooLong.New(user.UserName.Name)
-		}
-
-		if len(user.UserName.Host) > 255 {
-			return nil, sql.ErrUserHostTooLong.New(user.UserName.Host)
-		}
-
-		plugin := string(mysql_db.DefaultAuthMethod)
-		authString := ""
-		if user.Auth1 != nil {
-			plugin = user.Auth1.Plugin()
-			var err error
-			authString, err = user.Auth1.AuthString()
-			if err != nil {
-				return nil, err
-			}
-		}
-		if plugin != string(mysql.MysqlNativePassword) && plugin != string(mysql.CachingSha2Password) {
-			if err := mysqlDb.VerifyPlugin(plugin); err != nil {
-				return nil, sql.ErrUserCreationFailure.New(err)
-			}
-		}
-
-		// TODO: attributes should probably not be nil, but setting it to &n.Attribute causes unexpected behavior
-		// TODO: validate all of the data
-		sslType, sslCipher, x509Issuer, x509Subject := parseTlsOptions(n.TLSOptions)
-		editor.PutUser(&mysql_db.User{
-			User:                user.UserName.Name,
-			Host:                user.UserName.Host,
-			PrivilegeSet:        mysql_db.NewPrivilegeSet(),
-			Plugin:              plugin,
-			AuthString:          authString,
-			PasswordLastChanged: time.Now().UTC(),
-			Locked:              false,
-			Attributes:          nil,
-			IsRole:              false,
-			Identity:            user.Identity,
-			SslType:             sslType,
-			X509Issuer:          x509Issuer,
-			X509Subject:         x509Subject,
-			SslCipher:           sslCipher,
-		})
-	}
-	if err := mysqlDb.Persist(ctx, editor); err != nil {
-		return nil, err
-	}
-	return rowIterWithOkResultWithZeroRowsAffected(), nil
+	return b.buildCreateUserImpl(ctx, n)
 }
 
 // parseTlsOptions examples |tlsOptions| and returns the sslType, sslCipher, x509Issuer, and x509Subject values. If |tlsOptions| is nil,
@@ -909,7 +781,7 @@ func (b *BaseBuilder) buildDropSchema(ctx *sql.Context, n *plan.DropSchema, row 
 		return nil, err
 	}
 
-	if pdb, ok := db.(mysql_db.PrivilegedDatabase); ok {
+	if pdb, ok := db.(sql.PrivilegedDatabase); ok {
 		db = pdb.Unwrap()
 	}
 
@@ -1134,7 +1006,7 @@ func (b *BaseBuilder) buildCreateTable(ctx *sql.Context, n *plan.CreateTable, ro
 	}
 
 	maybePrivDb := n.Db
-	if privDb, ok := maybePrivDb.(mysql_db.PrivilegedDatabase); ok {
+	if privDb, ok := maybePrivDb.(sql.PrivilegedDatabase); ok {
 		maybePrivDb = privDb.Unwrap()
 	}
 

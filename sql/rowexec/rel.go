@@ -24,9 +24,9 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/apd/v3"
+	"github.com/dolthub/go-mysql-server/sql/otel/attribute"
+	"github.com/dolthub/go-mysql-server/sql/otel/trace"
 	"github.com/dolthub/jsonpath"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
@@ -209,16 +209,16 @@ func (b *BaseBuilder) buildJSONTable(ctx *sql.Context, n *plan.JSONTable, row sq
 
 	jsonPathData, err := jsonpath.JsonPathLookup(jsonData, n.RootPath)
 	if err != nil {
-		jsonPathData = []interface{}{}
+		jsonPathData = []any{}
 	}
-	if _, ok := jsonPathData.([]interface{}); !ok {
-		jsonPathData = []interface{}{jsonPathData}
+	if _, ok := jsonPathData.([]any); !ok {
+		jsonPathData = []any{jsonPathData}
 	}
 
 	cols, err := b.buildJSONTableCols(ctx, n.Cols, row)
 
 	rowIter := &iters.JsonTableRowIter{
-		Data: jsonPathData.([]interface{}),
+		Data: jsonPathData.([]any),
 		Cols: cols,
 	}
 	rowIter.NextSibling() // set to first sibling
@@ -545,7 +545,7 @@ func (b *BaseBuilder) populateMax1Results(ctx *sql.Context, n *plan.Max1Row, row
 }
 
 // isUnderSecureFileDir ensures that fileStr is under secureFileDir or a subdirectory of secureFileDir, errors otherwise
-func isUnderSecureFileDir(secureFileDir interface{}, fileStr string) error {
+func isUnderSecureFileDir(secureFileDir any, fileStr string) error {
 	if secureFileDir == nil || secureFileDir == "" {
 		return nil
 	}
@@ -557,7 +557,7 @@ func isUnderSecureFileDir(secureFileDir interface{}, fileStr string) error {
 	if err != nil {
 		return err
 	}
-	if os.SameFile(sStat, fStat) {
+	if sameFile(sStat, fStat) {
 		return nil
 	}
 
@@ -597,7 +597,7 @@ func (b *BaseBuilder) buildInto(ctx *sql.Context, n *plan.Into, row sql.Row) (sq
 		return nil, err
 	}
 
-	var secureFileDir interface{}
+	var secureFileDir any
 	if n.Outfile != "" || n.Dumpfile != "" {
 		var ok bool
 		_, secureFileDir, ok = sql.SystemVariables.GetGlobal("secure_file_priv")
@@ -680,7 +680,7 @@ func (b *BaseBuilder) buildInto(ctx *sql.Context, n *plan.Into, row sql.Row) (sq
 		return nil, sql.ErrColumnNumberDoesNotMatch.New()
 	}
 
-	var rowValues = make([]interface{}, len(rows[0]))
+	var rowValues = make([]any, len(rows[0]))
 	copy(rowValues, rows[0])
 
 	for j, v := range n.IntoVars {
