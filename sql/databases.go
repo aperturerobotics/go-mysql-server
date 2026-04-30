@@ -35,6 +35,12 @@ type DatabaseProvider interface {
 	AllDatabases(ctx *Context) []Database
 }
 
+// PrivilegedDatabase wraps a Database with privilege checks.
+type PrivilegedDatabase interface {
+	Database
+	Unwrap() Database
+}
+
 // MutableDatabaseProvider is a DatabaseProvider that can create and drop databases.
 type MutableDatabaseProvider interface {
 	DatabaseProvider

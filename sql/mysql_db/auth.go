@@ -1,3 +1,5 @@
+//go:build !tinygo
+
 // Copyright 2024 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,7 +19,6 @@ package mysql_db
 import (
 	"bytes"
 	"crypto/sha1"
-	"crypto/tls"
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"fmt"
@@ -406,12 +407,7 @@ func validateConnectionSecurity(userEntry *User, conn *mysql.Conn) error {
 			return newAccessDeniedError(userEntry.User)
 		}
 		if userEntry.SslCipher != "" {
-			tlsConn, ok := conn.Conn.(*tls.Conn)
-			if !ok {
-				return newAccessDeniedError(userEntry.User)
-			}
-			state := tlsConn.ConnectionState()
-			cipherSuiteName := tls.CipherSuiteName(state.CipherSuite)
+			cipherSuiteName := tlsCipherSuiteName(conn)
 			if cipherSuiteName != userEntry.SslCipher {
 				return newAccessDeniedError(userEntry.User)
 			}

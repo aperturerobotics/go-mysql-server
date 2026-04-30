@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	trace2 "runtime/trace"
 	"strconv"
 	"time"
 	"unsafe"
@@ -477,8 +476,8 @@ func convertJsonInterfaceToVector(val interface{}) ([]float32, error) {
 
 // EvaluateCondition evaluates a condition, which is an expression whose value
 // will be nil or coerced boolean.
-func EvaluateCondition(ctx *Context, cond Expression, row Row) (interface{}, error) {
-	defer trace2.StartRegion(ctx, "EvaluateCondition").End()
+func EvaluateCondition(ctx *Context, cond Expression, row Row) (any, error) {
+	defer startTraceRegion(ctx, "EvaluateCondition").End()
 
 	v, err := cond.Eval(ctx, row)
 	if err != nil {
