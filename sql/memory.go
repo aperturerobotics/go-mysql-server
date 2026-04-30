@@ -16,7 +16,6 @@ package sql
 
 import (
 	"os"
-	"runtime"
 	"strconv"
 	"sync"
 
@@ -116,9 +115,7 @@ var ProcessMemory Reporter = new(processReporter)
 type processReporter struct{}
 
 func (processReporter) UsedMemory() uint64 {
-	var s runtime.MemStats
-	runtime.ReadMemStats(&s)
-	return s.HeapInuse + s.StackInuse
+	return usedProcessMemory()
 }
 
 func (processReporter) MaxMemory() uint64 { return maxMemory }

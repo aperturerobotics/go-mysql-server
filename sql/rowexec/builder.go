@@ -15,8 +15,6 @@
 package rowexec
 
 import (
-	"runtime/trace"
-
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 )
@@ -46,7 +44,7 @@ func NewBuilder(priority sql.NodeExecBuilder, overrides sql.EngineOverrides) *Ba
 
 // Build implements the interface sql.NodeExecBuilder.
 func (b *BaseBuilder) Build(ctx *sql.Context, n sql.Node, r sql.Row) (sql.RowIter, error) {
-	defer trace.StartRegion(ctx, "ExecBuilder.Build").End()
+	defer startTraceRegion(ctx, "ExecBuilder.Build").End()
 	return b.buildNodeExec(ctx, n, r)
 }
 

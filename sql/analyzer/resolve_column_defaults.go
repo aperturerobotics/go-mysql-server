@@ -15,9 +15,10 @@
 package analyzer
 
 import (
+	"slices"
+
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
-	"github.com/dolthub/go-mysql-server/sql/information_schema"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/transform"
 	"github.com/dolthub/go-mysql-server/sql/types"
@@ -182,7 +183,7 @@ func stripTableNamesFromColumnDefaults(ctx *sql.Context, _ *Analyzer, n sql.Node
 				return stripTableNamesFromDefault(ctx, eWrapper)
 			})
 		case *plan.ResolvedTable:
-			ct, ok := node.Table.(*information_schema.ColumnsTable)
+			ct, ok := getInformationSchemaColumnsTable(node.Table)
 			if !ok {
 				return node, transform.SameTree, nil
 			}
@@ -335,10 +336,8 @@ func validateEnumLiteralDefault(enumType sql.EnumType, colDefault *sql.ColumnDef
 	case string:
 		// For string values, check if it's a direct enum value match
 		enumValues := enumType.Values()
-		for _, enumVal := range enumValues {
-			if enumVal == v {
-				return nil // Valid enum value
-			}
+		if slices.Contains(enumValues, v) {
+			return nil // Valid enum value
 		}
 		// String doesn't match any enum value, return appropriate error
 		if v == "" {
@@ -414,7 +413,7 @@ func quoteDefaultColumnValueNames(ctx *sql.Context, a *Analyzer, n sql.Node, _ *
 				return quoteIdentifiers(ctx, a.SchemaFormatter, eWrapper)
 			})
 		case *plan.ResolvedTable:
-			ct, ok := node.Table.(*information_schema.ColumnsTable)
+			ct, ok := getInformationSchemaColumnsTable(node.Table)
 			if !ok {
 				return node, transform.SameTree, nil
 			}

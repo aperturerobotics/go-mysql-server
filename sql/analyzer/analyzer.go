@@ -19,12 +19,11 @@ import (
 	"io"
 	"os"
 	"reflect"
-	"runtime/trace"
 	"strings"
 
+	"github.com/dolthub/go-mysql-server/sql/otel/attribute"
 	"github.com/pmezard/go-difflib/difflib"
 	"github.com/sirupsen/logrus"
-	"go.opentelemetry.io/otel/attribute"
 	"gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -323,11 +322,11 @@ func NewDefault(provider sql.DatabaseProvider) *Analyzer {
 
 // Log prints an INFO message to stdout with the given message and args
 // if the analyzer is in debug mode.
-func (a *Analyzer) Log(msg string, args ...interface{}) {
+func (a *Analyzer) Log(msg string, args ...any) {
 	if a != nil && a.Debug {
 		if len(a.contextStack) > 0 {
 			ctx := strings.Join(a.contextStack, "/")
-			log.Infof("%s: "+msg, append([]interface{}{ctx}, args...)...)
+			log.Infof("%s: "+msg, append([]any{ctx}, args...)...)
 		} else {
 			log.Infof(msg, args...)
 		}
@@ -335,11 +334,11 @@ func (a *Analyzer) Log(msg string, args ...interface{}) {
 }
 
 func (a *Analyzer) LogFn() func(string, ...any) {
-	return func(msg string, args ...interface{}) {
+	return func(msg string, args ...any) {
 		if a != nil && a.Debug {
 			if len(a.contextStack) > 0 {
 				ctx := strings.Join(a.contextStack, "/")
-				log.Infof("%s: "+msg, append([]interface{}{ctx}, args...)...)
+				log.Infof("%s: "+msg, append([]any{ctx}, args...)...)
 			} else {
 				log.Infof(msg, args...)
 			}
@@ -519,7 +518,7 @@ const maxBatchRecursion = 100
 
 func (a *Analyzer) analyzeWithSelector(ctx *sql.Context, n sql.Node, scope *plan.Scope, batchSelector BatchSelector, ruleSelector RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
 	span, ctx := ctx.Span("analyze")
-	defer trace.StartRegion(ctx, "Analyzer.analyzeWithSelector").End()
+	defer startTraceRegion(ctx, "Analyzer.analyzeWithSelector").End()
 
 	if scope.RecursionDepth() > maxBatchRecursion {
 		return n, transform.SameTree, ErrMaxAnalysisIters.New(maxBatchRecursion)

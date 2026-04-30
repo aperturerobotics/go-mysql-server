@@ -74,8 +74,12 @@ func CreateEnumType(values []string, collation sql.CollationID) (sql.EnumType, e
 	// including accounting for multibyte character representations.
 	var maxResponseByteLength uint32
 	maxCharLength := collation.Collation().CharacterSet.MaxLength()
-	hashedValToIndex := make(map[uint64]int)
-	valToIdx := make(map[string]int)
+	var hashedValToIndex map[uint64]int
+	var valToIdx map[string]int
+	if !tinygoBuild {
+		hashedValToIndex = make(map[uint64]int)
+		valToIdx = make(map[string]int)
+	}
 	for i, value := range values {
 		if !collation.Equals(sql.Collation_binary) {
 			// Trailing spaces are automatically deleted from ENUM member values in the table definition when a table
@@ -87,13 +91,20 @@ func CreateEnumType(values []string, collation sql.CollationID) (sql.EnumType, e
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := hashedValToIndex[hashedVal]; ok {
-			return nil, fmt.Errorf("duplicate entry: %v", value)
+		if tinygoBuild {
+			for _, prev := range values[:i] {
+				if prev == value {
+					return nil, fmt.Errorf("duplicate entry: %v", value)
+				}
+			}
+		} else {
+			if _, ok := hashedValToIndex[hashedVal]; ok {
+				return nil, fmt.Errorf("duplicate entry: %v", value)
+			}
+			hashedValToIndex[hashedVal] = i + 1
+			valToIdx[value] = i + 1
 		}
 		// The elements listed in the column specification are assigned index numbers, beginning with 1.
-		hashedValToIndex[hashedVal] = i + 1
-		valToIdx[value] = i + 1
-
 		byteLength := uint32(utf8.RuneCountInString(value) * int(maxCharLength))
 		if byteLength > maxResponseByteLength {
 			maxResponseByteLength = byteLength
@@ -352,6 +363,13 @@ func (t EnumType) Collation() sql.CollationID {
 func (t EnumType) IndexOf(v string) int {
 	if idx, ok := t.valToIdx[v]; ok {
 		return idx
+	}
+	if tinygoBuild {
+		for i, val := range t.idxToVal {
+			if val == v {
+				return i + 1
+			}
+		}
 	}
 	hashedVal, err := t.collation.HashToUint(v)
 	if err == nil {
