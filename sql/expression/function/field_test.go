@@ -28,7 +28,7 @@ func TestField(t *testing.T) {
 	tests := []struct {
 		name string
 		args []sql.Expression
-		exp  interface{}
+		exp  any
 		err  bool
 		skip bool
 	}{

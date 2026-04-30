@@ -65,7 +65,7 @@ func (i *IsIPv4) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql
 }
 
 // Eval implements the Expression interface
-func (i *IsIPv4) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *IsIPv4) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate value
 	val, err := i.Child.Eval(ctx, row)
 	if err != nil {
@@ -133,7 +133,7 @@ func (i *IsIPv6) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql
 }
 
 // Eval implements the Expression interface
-func (i *IsIPv6) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *IsIPv6) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate value
 	val, err := i.Child.Eval(ctx, row)
 	if err != nil {
@@ -201,7 +201,7 @@ func (i *IsIPv4Compat) WithChildren(ctx *sql.Context, children ...sql.Expression
 }
 
 // Eval implements the Expression interface
-func (i *IsIPv4Compat) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *IsIPv4Compat) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate value
 	val, err := i.Child.Eval(ctx, row)
 	if err != nil {
@@ -273,7 +273,7 @@ func (i *IsIPv4Mapped) WithChildren(ctx *sql.Context, children ...sql.Expression
 }
 
 // Eval implements the Expression interface
-func (i *IsIPv4Mapped) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *IsIPv4Mapped) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate value
 	val, err := i.Child.Eval(ctx, row)
 	if err != nil {

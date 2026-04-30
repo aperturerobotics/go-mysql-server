@@ -29,59 +29,59 @@ import (
 
 var (
 	// ctxType is the reflect.Type of a *sql.Context.
-	ctxType = reflect.TypeOf((*sql.Context)(nil))
+	ctxType = reflect.TypeFor[*sql.Context]()
 	// ctxType is the reflect.Type of a sql.RowIter.
-	rowIterType = reflect.TypeOf((*sql.RowIter)(nil)).Elem()
+	rowIterType = reflect.TypeFor[sql.RowIter]()
 	// ctxType is the reflect.Type of an error.
-	errorType = reflect.TypeOf((*error)(nil)).Elem()
+	errorType = reflect.TypeFor[error]()
 	// externalStoredProcedurePointerTypes maps a non-pointer type to a sql.Type for external stored procedures.
 	externalStoredProcedureTypes = map[reflect.Type]sql.Type{
-		reflect.TypeOf(int(0)):           types.Int64,
-		reflect.TypeOf(int8(0)):          types.Int8,
-		reflect.TypeOf(int16(0)):         types.Int16,
-		reflect.TypeOf(int32(0)):         types.Int32,
-		reflect.TypeOf(int64(0)):         types.Int64,
-		reflect.TypeOf(uint(0)):          types.Uint64,
-		reflect.TypeOf(uint8(0)):         types.Uint8,
-		reflect.TypeOf(uint16(0)):        types.Uint16,
-		reflect.TypeOf(uint32(0)):        types.Uint32,
-		reflect.TypeOf(uint64(0)):        types.Uint64,
-		reflect.TypeOf(float32(0)):       types.Float32,
-		reflect.TypeOf(float64(0)):       types.Float64,
-		reflect.TypeOf(bool(false)):      types.Int8,
-		reflect.TypeOf(string("")):       types.LongText,
-		reflect.TypeOf([]byte{}):         types.LongBlob,
-		reflect.TypeOf(time.Time{}):      types.DatetimeMaxPrecision,
-		reflect.TypeOf(&(apd.Decimal{})): types.InternalDecimalType,
+		reflect.TypeFor[int]():          types.Int64,
+		reflect.TypeFor[int8]():         types.Int8,
+		reflect.TypeFor[int16]():        types.Int16,
+		reflect.TypeFor[int32]():        types.Int32,
+		reflect.TypeFor[int64]():        types.Int64,
+		reflect.TypeFor[uint]():         types.Uint64,
+		reflect.TypeFor[uint8]():        types.Uint8,
+		reflect.TypeFor[uint16]():       types.Uint16,
+		reflect.TypeFor[uint32]():       types.Uint32,
+		reflect.TypeFor[uint64]():       types.Uint64,
+		reflect.TypeFor[float32]():      types.Float32,
+		reflect.TypeFor[float64]():      types.Float64,
+		reflect.TypeFor[bool]():         types.Int8,
+		reflect.TypeFor[string]():       types.LongText,
+		reflect.TypeFor[[]byte]():       types.LongBlob,
+		reflect.TypeFor[time.Time]():    types.DatetimeMaxPrecision,
+		reflect.TypeFor[*apd.Decimal](): types.InternalDecimalType,
 	}
 	// externalStoredProcedurePointerTypes maps a pointer type to a sql.Type for external stored procedures.
 	externalStoredProcedurePointerTypes = map[reflect.Type]sql.Type{
-		reflect.TypeOf((*int)(nil)):          types.Int64,
-		reflect.TypeOf((*int8)(nil)):         types.Int8,
-		reflect.TypeOf((*int16)(nil)):        types.Int16,
-		reflect.TypeOf((*int32)(nil)):        types.Int32,
-		reflect.TypeOf((*int64)(nil)):        types.Int64,
-		reflect.TypeOf((*uint)(nil)):         types.Uint64,
-		reflect.TypeOf((*uint8)(nil)):        types.Uint8,
-		reflect.TypeOf((*uint16)(nil)):       types.Uint16,
-		reflect.TypeOf((*uint32)(nil)):       types.Uint32,
-		reflect.TypeOf((*uint64)(nil)):       types.Uint64,
-		reflect.TypeOf((*float32)(nil)):      types.Float32,
-		reflect.TypeOf((*float64)(nil)):      types.Float64,
-		reflect.TypeOf((*bool)(nil)):         types.Int8,
-		reflect.TypeOf((*string)(nil)):       types.LongText,
-		reflect.TypeOf((*[]byte)(nil)):       types.LongBlob,
-		reflect.TypeOf((*time.Time)(nil)):    types.DatetimeMaxPrecision,
-		reflect.TypeOf((**apd.Decimal)(nil)): types.InternalDecimalType,
+		reflect.TypeFor[*int]():          types.Int64,
+		reflect.TypeFor[*int8]():         types.Int8,
+		reflect.TypeFor[*int16]():        types.Int16,
+		reflect.TypeFor[*int32]():        types.Int32,
+		reflect.TypeFor[*int64]():        types.Int64,
+		reflect.TypeFor[*uint]():         types.Uint64,
+		reflect.TypeFor[*uint8]():        types.Uint8,
+		reflect.TypeFor[*uint16]():       types.Uint16,
+		reflect.TypeFor[*uint32]():       types.Uint32,
+		reflect.TypeFor[*uint64]():       types.Uint64,
+		reflect.TypeFor[*float32]():      types.Float32,
+		reflect.TypeFor[*float64]():      types.Float64,
+		reflect.TypeFor[*bool]():         types.Int8,
+		reflect.TypeFor[*string]():       types.LongText,
+		reflect.TypeFor[*[]byte]():       types.LongBlob,
+		reflect.TypeFor[*time.Time]():    types.DatetimeMaxPrecision,
+		reflect.TypeFor[**apd.Decimal](): types.InternalDecimalType,
 	}
 )
 
 func init() {
 	if strconv.IntSize == 32 {
-		externalStoredProcedureTypes[reflect.TypeOf(int(0))] = types.Int32
-		externalStoredProcedureTypes[reflect.TypeOf(uint(0))] = types.Uint32
-		externalStoredProcedurePointerTypes[reflect.TypeOf((*int)(nil))] = types.Int32
-		externalStoredProcedurePointerTypes[reflect.TypeOf((*uint)(nil))] = types.Uint32
+		externalStoredProcedureTypes[reflect.TypeFor[int]()] = types.Int32
+		externalStoredProcedureTypes[reflect.TypeFor[uint]()] = types.Uint32
+		externalStoredProcedurePointerTypes[reflect.TypeFor[*int]()] = types.Int32
+		externalStoredProcedurePointerTypes[reflect.TypeFor[*uint]()] = types.Uint32
 	}
 }
 
@@ -112,14 +112,14 @@ func resolveExternalStoredProcedure(externalProcedure sql.ExternalStoredProcedur
 
 	paramDefinitions := make([]plan.ProcedureParam, funcType.NumIn()-1)
 	paramReferences := make([]*expression.ProcedureParam, len(paramDefinitions))
-	for i := 0; i < len(paramDefinitions); i++ {
+	for i := range paramDefinitions {
 		funcParamType := funcType.In(i + 1)
 		paramName := "A" + strconv.FormatInt(int64(i), 10)
 		paramIsVariadic := false
 		if funcIsVariadic && i == len(paramDefinitions)-1 {
 			paramIsVariadic = true
 			funcParamType = funcParamType.Elem()
-			if funcParamType.Kind() == reflect.Ptr {
+			if funcParamType.Kind() == reflect.Pointer {
 				return nil, sql.ErrExternalProcedurePointerVariadic.New()
 			}
 		}

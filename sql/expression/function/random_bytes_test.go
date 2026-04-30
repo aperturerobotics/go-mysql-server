@@ -29,7 +29,7 @@ import (
 func TestRandomBytes(t *testing.T) {
 	testCases := []struct {
 		expr sql.Expression
-		exp  interface{}
+		exp  any
 		skip bool
 		err  *errors.Kind
 	}{

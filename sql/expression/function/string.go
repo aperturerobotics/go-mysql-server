@@ -54,7 +54,7 @@ func (*Ascii) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID
 }
 
 // Eval implements the sql.Expression interface
-func (a *Ascii) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (a *Ascii) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := a.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -109,7 +109,7 @@ func (o *Ord) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID
 }
 
 // Eval implements the sql.Expression interface
-func (o *Ord) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (o *Ord) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := o.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -175,7 +175,7 @@ func (*Hex) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, 
 }
 
 // Eval implements the sql.Expression interface
-func (h *Hex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (h *Hex) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	arg, err := h.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -288,7 +288,7 @@ func hexForNegativeInt64(n int64) string {
 	// make a copy of the data that I can manipulate
 	bytes := *mem
 	// reverse the order for printing
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		bytes[i], bytes[7-i] = bytes[7-i], bytes[i]
 	}
 	// print the hex encoded bytes
@@ -344,7 +344,7 @@ func (*Unhex) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID
 }
 
 // Eval implements the sql.Expression interface
-func (h *Unhex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (h *Unhex) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	arg, err := h.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -397,12 +397,12 @@ func binForNegativeInt64(n int64) string {
 	// make a copy of the data that I can manipulate
 	bytes := *mem
 
-	s := ""
+	var s strings.Builder
 	for i := 7; i >= 0; i-- {
-		s += strconv.FormatInt(int64(bytes[i]), 2)
+		s.WriteString(strconv.FormatInt(int64(bytes[i]), 2))
 	}
 
-	return s
+	return s.String()
 }
 
 // Bin implements the sql function "bin" which returns the binary representation of a number
@@ -433,7 +433,7 @@ func (*Bin) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, 
 }
 
 // Eval implements the sql.Expression interface
-func (h *Bin) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (h *Bin) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	arg, err := h.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -476,7 +476,7 @@ func (h *Bin) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Ex
 // sql.Int64 handled conversions, which matches the expected behavior of this function. sql.Int64 has been fixed,
 // and the fixes cause incorrect behavior for this function (as they use different rules), therefore this is simply to
 // restore the original behavior specifically for this function.
-func (h *Bin) convertToInt64(v interface{}) (int64, error) {
+func (h *Bin) convertToInt64(v any) (int64, error) {
 	switch v := v.(type) {
 	case int:
 		return int64(v), nil
@@ -580,7 +580,7 @@ func (*Bitlength) CollationCoercibility(ctx *sql.Context) (collation sql.Collati
 }
 
 // Eval implements the sql.Expression interface
-func (h *Bitlength) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (h *Bitlength) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	arg, err := h.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err
@@ -617,7 +617,7 @@ func NewQuote(ctx *sql.Context, arg sql.Expression) sql.Expression {
 	return &Quote{UnaryFunc: NewUnaryFunc(arg, "QUOTE", types.Text)}
 }
 
-func (q *Quote) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (q *Quote) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	arg, err := q.EvalChild(ctx, row)
 	if err != nil {
 		return nil, err

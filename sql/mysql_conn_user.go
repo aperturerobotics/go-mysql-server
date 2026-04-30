@@ -15,7 +15,7 @@
 package sql
 
 import (
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 	"github.com/dolthub/vitess/go/vt/proto/query"
 )
 

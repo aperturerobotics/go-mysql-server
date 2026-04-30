@@ -72,7 +72,7 @@ func (f *FindInSet) WithChildren(ctx *sql.Context, children ...sql.Expression) (
 }
 
 // Eval implements the Expression interface.
-func (f *FindInSet) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (f *FindInSet) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if f.LeftChild == nil || f.RightChild == nil {
 		return nil, nil
 	}
@@ -124,7 +124,7 @@ func (f *FindInSet) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 			return nil, fmt.Errorf("enum missing index %v", r)
 		}
 	} else {
-		var rVal interface{}
+		var rVal any
 		rVal, _, err = types.LongText.Convert(ctx, right)
 		if err != nil {
 			return nil, err

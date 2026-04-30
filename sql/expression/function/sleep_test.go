@@ -33,7 +33,7 @@ func TestSleep(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		waitTime float64
 		err      bool
 	}{

@@ -281,7 +281,7 @@ func (r RowIterEvaluator) IsNullable(ctx *sql.Context) bool {
 	return true
 }
 
-func (r *RowIterEvaluator) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (r *RowIterEvaluator) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if r.finished || r.iter == nil {
 		return nil, nil
 	}
@@ -373,7 +373,7 @@ func defaultValFromSetExpression(e sql.Expression) (*sql.ColumnDefaultValue, boo
 
 // normalizeNegativeZeros converts negative zero into positive zero.
 // We do this so that floats and decimals have the same representation when displayed to the user.
-func normalizeNegativeZeros(val interface{}) interface{} {
+func normalizeNegativeZeros(val any) any {
 	// Golang doesn't have a negative zero literal, but negative zero compares equal to zero.
 	if val == float32(0) {
 		return float32(0)

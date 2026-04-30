@@ -62,7 +62,7 @@ func newPersistedSqlContext() (*sql.Context, memory.GlobalsMap) {
 	pro := memory.NewDBProvider()
 	sess := memory.NewSession(sql.NewBaseSession(), pro)
 
-	persistedGlobals := map[string]interface{}{"max_connections": 1000}
+	persistedGlobals := map[string]any{"max_connections": 1000}
 	sess.SetGlobals(persistedGlobals)
 
 	sqlCtx := sql.NewContext(ctx)
@@ -77,8 +77,8 @@ func TestPersistedSessionSetIterator(t *testing.T) {
 		value        int
 		scope        sql.MysqlSVScopeType
 		err          *errors.Kind
-		globalCmp    interface{}
-		persistedCmp interface{}
+		globalCmp    any
+		persistedCmp any
 	}{
 		{"persist var", "max_connections", 10, sql.SystemVariableScope_Persist, nil, int64(10), int64(10)},
 		{"persist only", "max_connections", 10, sql.SystemVariableScope_PersistOnly, nil, int64(151), int64(10)},

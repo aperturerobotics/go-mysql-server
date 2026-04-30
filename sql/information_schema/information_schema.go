@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"maps"
 	"sort"
 	"strings"
 
@@ -1001,7 +1002,7 @@ func eventsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 
 			for _, e := range eventDefs {
 				ed := e.ConvertTimesFromUTCToTz(SystemTimezoneOffset())
-				var at, intervalVal, intervalField, starts, ends interface{}
+				var at, intervalVal, intervalField, starts, ends any
 				var eventType, status string
 				if ed.HasExecuteAt {
 					eventType = "ONE TIME"
@@ -1202,7 +1203,7 @@ func processListRowIter(ctx *Context, c Catalog) (RowIter, error) {
 		}
 		sort.Strings(status)
 
-		var db interface{}
+		var db any
 		if proc.Database != "" {
 			db = proc.Database
 		}
@@ -1252,7 +1253,7 @@ func referentialConstraintsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 				}
 
 				for _, fk := range fks {
-					var uniqueConstName interface{}
+					var uniqueConstName any
 					referencedSchema := fk.ParentDatabase
 					referencedTableName := fk.ParentTable
 					referencedCols := make(map[string]struct{})
@@ -1434,8 +1435,8 @@ func stGeometryColumnsRowIter(ctx *Context, cat Catalog) (RowIter, error) {
 				}
 				var (
 					colName = col.Name
-					srsName interface{}
-					srsId   interface{}
+					srsName any
+					srsId   any
 				)
 				typeName, _ := getDtdIdAndDataType(col.Type)
 
@@ -1554,7 +1555,7 @@ func statisticsRowIter(ctx *Context, c Catalog) (RowIter, error) {
 								collation   string
 								nullable    string
 								cardinality int64
-								subPart     interface{}
+								subPart     any
 							)
 
 							seqInIndex := i
@@ -1909,7 +1910,7 @@ func allDatabasesWithNames(ctx *Context, cat Catalog, privCheck bool) ([]DbWithN
 	allDbs := cat.AllDatabases(ctx)
 	for _, db := range allDbs {
 		if privCheck {
-			if privDatabase, ok := db.(mysql_db.PrivilegedDatabase); ok {
+			if privDatabase, ok := db.(PrivilegedDatabase); ok {
 				db = privDatabase.Unwrap()
 			}
 		}
@@ -2116,7 +2117,7 @@ func userAttributesRowIter(ctx *Context, catalog Catalog) (RowIter, error) {
 		})
 
 		for user := range users {
-			var attributes interface{}
+			var attributes any
 			if user.Attributes != nil {
 				attributes = *user.Attributes
 			}
@@ -2579,9 +2580,7 @@ func NewInformationSchemaDatabase() Database {
 
 	// It's for Doltgres-only tables.
 	// It should be empty map for Dolt.
-	for tn, tbl := range NewInformationSchemaTablesToAdd {
-		isDb.tables[tn] = tbl
-	}
+	maps.Copy(isDb.tables, NewInformationSchemaTablesToAdd)
 
 	return isDb
 }

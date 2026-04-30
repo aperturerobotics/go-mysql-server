@@ -27,7 +27,7 @@ func (c ConnectionID) IsNonDeterministic() bool {
 	return true
 }
 
-func connIDFuncLogic(ctx *sql.Context, _ sql.Row) (interface{}, error) {
+func connIDFuncLogic(ctx *sql.Context, _ sql.Row) (any, error) {
 	return ctx.ID(), nil
 }
 
@@ -56,7 +56,7 @@ func (ConnectionID) CollationCoercibility(ctx *sql.Context) (collation sql.Colla
 }
 
 // Eval implements sql.Expression
-func (c ConnectionID) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (c ConnectionID) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return connIDFuncLogic(ctx, row)
 }
 
@@ -73,7 +73,7 @@ func (c User) IsNonDeterministic() bool {
 	return true
 }
 
-func userFuncLogic(ctx *sql.Context, _ sql.Row) (interface{}, error) {
+func userFuncLogic(ctx *sql.Context, _ sql.Row) (any, error) {
 	if ctx.Client().User == "" && ctx.Client().Address == "" {
 		return "", nil
 	}
@@ -107,7 +107,7 @@ func NewCurrentUser(ctx *sql.Context) sql.Expression {
 }
 
 // Eval implements sql.Expression
-func (c User) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (c User) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return userFuncLogic(ctx, row)
 }
 

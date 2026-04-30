@@ -32,7 +32,7 @@ func TestUnixTimestamp(t *testing.T) {
 		name string
 		args []sql.Expression
 		typ  sql.Type
-		exp  interface{}
+		exp  any
 		err  bool
 		skip bool
 

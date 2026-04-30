@@ -288,7 +288,7 @@ func TestSHA2Null(t *testing.T) {
 func TestCompress(t *testing.T) {
 	tests := []struct {
 		val sql.Expression
-		exp interface{}
+		exp any
 	}{
 		{
 			val: expression.NewLiteral(nil, types.Null),
@@ -334,7 +334,7 @@ func TestCompress(t *testing.T) {
 func TestUncompress(t *testing.T) {
 	tests := []struct {
 		val sql.Expression
-		exp interface{}
+		exp any
 	}{
 		{
 			val: expression.NewLiteral(nil, types.Null),
@@ -394,7 +394,7 @@ func TestUncompress(t *testing.T) {
 func TestUncompressedLength(t *testing.T) {
 	tests := []struct {
 		val sql.Expression
-		exp interface{}
+		exp any
 	}{
 		{
 			val: expression.NewLiteral(nil, types.Null),
@@ -449,7 +449,7 @@ func TestUncompressedLength(t *testing.T) {
 func TestValidatePasswordStrength(t *testing.T) {
 	tests := []struct {
 		val sql.Expression
-		exp interface{}
+		exp any
 	}{
 		{
 			val: expression.NewLiteral(nil, types.Null),

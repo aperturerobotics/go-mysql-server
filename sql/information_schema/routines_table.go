@@ -268,8 +268,8 @@ func parametersRowIter(ctx *Context, c Catalog, p map[string][]*plan.Procedure) 
 			for i, param := range procedure.Params {
 				var (
 					ordinalPos        = uint64(i + 1)
-					datetimePrecision interface{}
-					parameterMode     interface{}
+					datetimePrecision any
+					parameterMode     any
 				)
 
 				dtdId, dataType := getDtdIdAndDataType(param.Type)

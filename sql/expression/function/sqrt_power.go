@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
@@ -76,7 +76,7 @@ func (s *Sqrt) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.E
 }
 
 // Eval implements the Expression interface.
-func (s *Sqrt) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (s *Sqrt) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	child, err := s.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -157,7 +157,7 @@ func (p *Power) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.
 }
 
 // Eval implements the Expression interface.
-func (p *Power) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (p *Power) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	left, err := p.LeftChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err

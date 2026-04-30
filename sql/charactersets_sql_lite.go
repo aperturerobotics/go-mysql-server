@@ -143,6 +143,9 @@ func (cs CharacterSetID) Encoder() encodings.Encoder {
 
 var liteCharacterSets = []CharacterSetID{CharacterSet_binary, CharacterSet_utf8mb3, CharacterSet_utf8mb4}
 
+// SupportedCharsets contains the character sets supported by the sql_lite profile.
+var SupportedCharsets = liteCharacterSets
+
 func NewCharacterSetsIterator() *CharacterSetsIterator { return &CharacterSetsIterator{} }
 
 func (csi *CharacterSetsIterator) Next() (CharacterSet, bool) {

@@ -32,8 +32,8 @@ func (b *Builder) buildExplain(inScope *scope, n *sqlparser.Explain) (outScope *
 		Plan:    n.Plan,
 	}
 
-	formatFlags := strings.Split(n.ExplainFormat, "_")
-	for _, flag := range formatFlags {
+	formatFlags := strings.SplitSeq(n.ExplainFormat, "_")
+	for flag := range formatFlags {
 		switch strings.ToLower(flag) {
 		case "":
 			// no-op

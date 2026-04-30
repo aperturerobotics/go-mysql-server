@@ -49,7 +49,7 @@ func (l *Lower) Description() string {
 func (l *Lower) Eval(
 	ctx *sql.Context,
 	row sql.Row,
-) (interface{}, error) {
+) (any, error) {
 	v, err := l.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -115,7 +115,7 @@ func (u *Upper) Description() string {
 func (u *Upper) Eval(
 	ctx *sql.Context,
 	row sql.Row,
-) (interface{}, error) {
+) (any, error) {
 	v, err := u.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

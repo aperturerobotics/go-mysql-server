@@ -56,7 +56,7 @@ type process struct {
 }
 
 func (p process) toRow() sql.Row {
-	var db interface{}
+	var db any
 	if p.db != "" {
 		db = p.db
 	}
@@ -233,7 +233,7 @@ func (i *showIndexesIter) Next(ctx *sql.Context) (sql.Row, error) {
 		return nil, err
 	}
 
-	var expression, columnName interface{}
+	var expression, columnName any
 	columnName, expression = nil, show.expression
 	tbl := i.table
 

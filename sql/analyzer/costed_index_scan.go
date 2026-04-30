@@ -28,7 +28,6 @@ import (
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
-	"github.com/dolthub/go-mysql-server/sql/expression/function/spatial"
 	"github.com/dolthub/go-mysql-server/sql/fulltext"
 	"github.com/dolthub/go-mysql-server/sql/memo"
 	"github.com/dolthub/go-mysql-server/sql/plan"
@@ -1374,13 +1373,13 @@ type indexFilter interface {
 }
 
 type iScanLeaf struct {
-	litValue      interface{}
+	litValue      any
 	litType       sql.Type
 	typ           sql.Type
 	name          string
 	underlying    string
 	fulltextIndex string
-	setValues     []interface{}
+	setValues     []any
 	setTypes      []sql.Type
 	id            indexScanId
 	op            sql.IndexScanOp
@@ -1474,7 +1473,7 @@ func formatIndexFilterRec(b *strings.Builder, nesting int, f indexFilter) {
 	}
 	switch f := f.(type) {
 	case *iScanAnd:
-		for i := 0; i < nesting; i++ {
+		for range nesting {
 			b.WriteString("  ")
 		}
 		fmt.Fprintf(b, "(%d: and", f.Id())
@@ -1490,7 +1489,7 @@ func formatIndexFilterRec(b *strings.Builder, nesting int, f indexFilter) {
 		fmt.Fprintf(b, ")")
 
 	case *iScanOr:
-		for i := 0; i < nesting; i++ {
+		for range nesting {
 			b.WriteString("  ")
 		}
 		fmt.Fprintf(b, "(%d: or", f.Id())
@@ -1502,7 +1501,7 @@ func formatIndexFilterRec(b *strings.Builder, nesting int, f indexFilter) {
 		fmt.Fprintf(b, ")")
 
 	case *iScanLeaf:
-		for i := 0; i < nesting; i++ {
+		for range nesting {
 			b.WriteString("  ")
 		}
 		switch f.Op() {
@@ -1748,7 +1747,7 @@ func (c *indexCoster) buildLeafFromParts(ctx *sql.Context, id indexScanId, name 
 	}
 	if op == sql.IndexScanOpInSet || op == sql.IndexScanOpNotInSet {
 		tup := litExpr.(expression.Tuple)
-		var litSet []interface{}
+		var litSet []any
 		var setTypes []sql.Type
 		var litType sql.Type
 		for _, lit := range tup {
@@ -1981,6 +1980,13 @@ func IndexLeafChildren(e sql.Expression) (sql.IndexScanOp, sql.Expression, sql.E
 	var op sql.IndexScanOp
 	var left sql.Expression
 	var right sql.Expression
+	if isSpatialIndexExpression(e) {
+		op = sql.IndexScanOpSpatialEq
+		children := e.Children()
+		left = children[0]
+		right = children[1]
+		return op, left, right, true
+	}
 	switch e := e.(type) {
 	// TODO: we need to extract an interface here so that pg expressions can use them as well
 	case *expression.NullSafeEquals:
@@ -2059,11 +2065,6 @@ func IndexLeafChildren(e sql.Expression) (sql.IndexScanOp, sql.Expression, sql.E
 		default:
 			return 0, nil, nil, false
 		}
-	case *spatial.Intersects, *spatial.Within, *spatial.STEquals:
-		op = sql.IndexScanOpSpatialEq
-		children := e.Children()
-		left = children[0]
-		right = children[1]
 	case *expression.MatchAgainst:
 		op = sql.IndexScanOpFulltextEq
 	case sql.IndexComparisonExpression:
@@ -2246,7 +2247,7 @@ func newConjCollector(s sql.Statistic, hist []sql.HistogramBucket, ordinals map[
 		stat:     s,
 		hist:     hist,
 		ordinals: ordinals,
-		eqVals:   make([]interface{}, len(ordinals)),
+		eqVals:   make([]any, len(ordinals)),
 		nullable: make([]bool, len(ordinals)),
 	}
 }
@@ -2260,7 +2261,7 @@ type conjCollector struct {
 	ineqCols      sets.FastIntSet
 	applied       sets.FastIntSet
 	hist          []sql.HistogramBucket
-	eqVals        []interface{}
+	eqVals        []any
 	nullable      []bool
 	missingPrefix int
 	isFalse       bool
@@ -2292,7 +2293,7 @@ func (c *conjCollector) getFds() *sql.FuncDepSet {
 	return sql.NewLookupFDs(c.stat.FuncDeps(), c.stat.ColSet(), sql.ColSet{}, constCols, nil)
 }
 
-func (c *conjCollector) addEq(ctx *sql.Context, col string, val interface{}, nullSafe bool) error {
+func (c *conjCollector) addEq(ctx *sql.Context, col string, val any, nullSafe bool) error {
 	// make constant
 	col = strings.ToLower(col)
 	ord, ok := c.ordinals[col]
@@ -2331,7 +2332,7 @@ func (c *conjCollector) addEq(ctx *sql.Context, col string, val interface{}, nul
 	return nil
 }
 
-func (c *conjCollector) addIneq(ctx *sql.Context, op sql.IndexScanOp, col string, val interface{}) error {
+func (c *conjCollector) addIneq(ctx *sql.Context, op sql.IndexScanOp, col string, val any) error {
 	col = strings.ToLower(col)
 	ord, ok := c.ordinals[col]
 	if !ok {
@@ -2350,7 +2351,7 @@ func (c *conjCollector) addIneq(ctx *sql.Context, op sql.IndexScanOp, col string
 
 // cmpFirstCol checks whether we should try to range truncate the first
 // column in the index
-func (c *conjCollector) cmpFirstCol(ctx *sql.Context, op sql.IndexScanOp, val interface{}) error {
+func (c *conjCollector) cmpFirstCol(ctx *sql.Context, op sql.IndexScanOp, val any) error {
 	// check if first col already constant
 	// otherwise attempt to truncate histogram
 	var err error
@@ -2377,7 +2378,7 @@ func (c *conjCollector) cmpFirstCol(ctx *sql.Context, op sql.IndexScanOp, val in
 	return err
 }
 
-func (c *conjCollector) truncateMcvs(i int, op sql.IndexScanOp, val interface{}) error {
+func (c *conjCollector) truncateMcvs(i int, op sql.IndexScanOp, val any) error {
 	var err error
 	switch op {
 	case sql.IndexScanOpGt:

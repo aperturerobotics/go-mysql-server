@@ -25,7 +25,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/transform"
 	"github.com/dolthub/go-mysql-server/sql/types"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 )
 
 const TriggerSavePointPrefix = "__go_mysql_server_trigger_savepoint__"

@@ -54,7 +54,7 @@ func (o *Oct) IsNullable(ctx *sql.Context) bool {
 }
 
 // Eval implements the Expression interface.
-func (o *Oct) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (o *Oct) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Convert a decimal (base 10) number to octal (base 8)
 	return NewConv(
 		ctx,

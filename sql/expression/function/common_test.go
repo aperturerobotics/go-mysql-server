@@ -22,7 +22,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 )
 
-func eval(t *testing.T, e sql.Expression, row sql.Row) interface{} {
+func eval(t *testing.T, e sql.Expression, row sql.Row) any {
 	ctx := sql.NewEmptyContext()
 
 	t.Helper()

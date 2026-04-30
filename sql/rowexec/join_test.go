@@ -154,7 +154,7 @@ func BenchmarkInnerJoin(b *testing.B) {
 		{Name: "b", Source: "bar", Type: types.Text},
 	}), nil)
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		t1.Insert(sql.NewEmptyContext(), sql.NewRow(int64(i), fmt.Sprintf("t1_%d", i)))
 		t2.Insert(sql.NewEmptyContext(), sql.NewRow(int64(i), fmt.Sprintf("t2_%d", i)))
 	}

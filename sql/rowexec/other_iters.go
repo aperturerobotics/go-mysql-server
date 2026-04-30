@@ -166,7 +166,7 @@ func (p *prependRowIter) Close(ctx *sql.Context) error {
 type hashLookupGeneratingIter struct {
 	n         *plan.HashLookup
 	childIter sql.RowIter
-	lookup    *map[interface{}][]sql.Row
+	lookup    *map[any][]sql.Row
 }
 
 func newHashLookupGeneratingIter(n *plan.HashLookup, chlidIter sql.RowIter) *hashLookupGeneratingIter {
@@ -174,7 +174,7 @@ func newHashLookupGeneratingIter(n *plan.HashLookup, chlidIter sql.RowIter) *has
 		n:         n,
 		childIter: chlidIter,
 	}
-	lookup := make(map[interface{}][]sql.Row)
+	lookup := make(map[any][]sql.Row)
 	h.lookup = &lookup
 	return h
 }

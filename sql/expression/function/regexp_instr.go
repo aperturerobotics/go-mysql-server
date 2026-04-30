@@ -186,7 +186,7 @@ func (r *RegexpInstr) compile(ctx *sql.Context, row sql.Row) {
 }
 
 // Eval implements the sql.Expression interface.
-func (r *RegexpInstr) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (r *RegexpInstr) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	span, ctx := ctx.Span("function.RegexpInstr")
 	defer span.End()
 

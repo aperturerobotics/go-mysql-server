@@ -16,7 +16,6 @@ package sql
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -431,12 +430,7 @@ func ConvertToVector(ctx context.Context, v interface{}) ([]float32, error) {
 	case []byte:
 		return DecodeVector(b)
 	case string:
-		var val interface{}
-		err := json.Unmarshal([]byte(b), &val)
-		if err != nil {
-			return nil, fmt.Errorf("can't convert JSON to vector: %w", err)
-		}
-		return convertJsonInterfaceToVector(val)
+		return convertJSONStringToVector(b)
 	case JSONWrapper:
 		val, err := b.ToInterface(ctx)
 		if err != nil {

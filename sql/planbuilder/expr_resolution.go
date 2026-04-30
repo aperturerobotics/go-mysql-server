@@ -86,11 +86,11 @@ func (c *exprResolutionCatalog) DatabaseTable(_ *sql.Context, _ sql.Database, _ 
 	return nil, nil, sql.ErrTableNotFound.New("")
 }
 
-func (c *exprResolutionCatalog) TableAsOf(_ *sql.Context, _, _ string, _ interface{}) (sql.Table, sql.Database, error) {
+func (c *exprResolutionCatalog) TableAsOf(_ *sql.Context, _, _ string, _ any) (sql.Table, sql.Database, error) {
 	return nil, nil, sql.ErrTableNotFound.New("")
 }
 
-func (c *exprResolutionCatalog) DatabaseTableAsOf(_ *sql.Context, _ sql.Database, _ string, _ interface{}) (sql.Table, sql.Database, error) {
+func (c *exprResolutionCatalog) DatabaseTableAsOf(_ *sql.Context, _ sql.Database, _ string, _ any) (sql.Table, sql.Database, error) {
 	return nil, nil, sql.ErrTableNotFound.New("")
 }
 

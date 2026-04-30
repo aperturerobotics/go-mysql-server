@@ -52,7 +52,7 @@ func (t *ToBase64) Description() string {
 }
 
 // Eval implements the Expression interface.
-func (t *ToBase64) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (t *ToBase64) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := t.Child.Eval(ctx, row)
 
 	if err != nil {
@@ -161,7 +161,7 @@ func (t *FromBase64) Description() string {
 }
 
 // Eval implements the Expression interface.
-func (t *FromBase64) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (t *FromBase64) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	str, err := t.Child.Eval(ctx, row)
 
 	if err != nil {

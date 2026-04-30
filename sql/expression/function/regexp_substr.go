@@ -173,7 +173,7 @@ func (r *RegexpSubstr) compile(ctx *sql.Context, row sql.Row) {
 }
 
 // Eval implements the sql.Expression interface.
-func (r *RegexpSubstr) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (r *RegexpSubstr) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	span, ctx := ctx.Span("function.RegexpSubstr")
 	defer span.End()
 

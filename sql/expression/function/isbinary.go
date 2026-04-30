@@ -50,7 +50,7 @@ func (ib *IsBinary) Description() string {
 func (ib *IsBinary) Eval(
 	ctx *sql.Context,
 	row sql.Row,
-) (interface{}, error) {
+) (any, error) {
 	v, err := ib.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

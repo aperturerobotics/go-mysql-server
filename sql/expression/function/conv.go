@@ -67,7 +67,7 @@ func (c *Conv) String() string {
 }
 
 // Eval implements the Expression interface.
-func (c *Conv) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (c *Conv) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	n, err := c.n.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -135,7 +135,7 @@ func (c *Conv) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.E
 // convertFromBase returns nil if fromBase input is invalid, 0 if nVal input is invalid and converted result if nVal and fromBase inputs are valid.
 // This conversion truncates nVal as its first subpart that is convertable.
 // nVal is treated as unsigned except nVal is negative.
-func convertFromBase(ctx *sql.Context, nVal string, fromBase interface{}) interface{} {
+func convertFromBase(ctx *sql.Context, nVal string, fromBase any) any {
 	if len(nVal) == 0 {
 		return nil
 	}
@@ -201,7 +201,7 @@ func convertFromBase(ctx *sql.Context, nVal string, fromBase interface{}) interf
 
 // convertToBase returns result of whole CONV function in string format, empty string if to input is invalid.
 // The sign of toBase decides whether result is formatted as signed or unsigned.
-func convertToBase(ctx *sql.Context, val interface{}, toBase interface{}) string {
+func convertToBase(ctx *sql.Context, val any, toBase any) string {
 	toBase, _, err := types.Int64.Convert(ctx, toBase)
 	if err != nil {
 		return ""

@@ -37,7 +37,7 @@ func compEval(
 	ctx *sql.Context,
 	row sql.Row,
 	cmp compareFn,
-) (interface{}, error) {
+) (any, error) {
 
 	if returnType == types.Null {
 		return nil, nil
@@ -283,9 +283,9 @@ func (f *Greatest) Resolved() bool {
 // Children implements the Expression interface.
 func (f *Greatest) Children() []sql.Expression { return f.Args }
 
-type compareFn func(interface{}, interface{}) bool
+type compareFn func(any, any) bool
 
-func greaterThan(a, b interface{}) bool {
+func greaterThan(a, b any) bool {
 	switch i := a.(type) {
 	case int64:
 		return i > b.(int64)
@@ -299,7 +299,7 @@ func greaterThan(a, b interface{}) bool {
 	panic("Implementation error on greaterThan")
 }
 
-func lessThan(a, b interface{}) bool {
+func lessThan(a, b any) bool {
 	switch i := a.(type) {
 	case int64:
 		return i < b.(int64)
@@ -314,7 +314,7 @@ func lessThan(a, b interface{}) bool {
 }
 
 // Eval implements the Expression interface.
-func (f *Greatest) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (f *Greatest) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return compEval(f.returnType, f.Args, ctx, row, greaterThan)
 }
 
@@ -394,6 +394,6 @@ func (f *Least) Resolved() bool {
 func (f *Least) Children() []sql.Expression { return f.Args }
 
 // Eval implements the Expression interface.
-func (f *Least) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (f *Least) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	return compEval(f.returnType, f.Args, ctx, row, lessThan)
 }

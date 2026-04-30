@@ -22,9 +22,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 	"github.com/dolthub/go-mysql-server/sql/otel/attribute"
 	"github.com/dolthub/go-mysql-server/sql/otel/trace"
-	"github.com/dolthub/vitess/go/mysql"
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/sirupsen/logrus"
 
@@ -1808,7 +1808,7 @@ func addColumnToSchema(ctx *sql.Context, schema sql.Schema, column *sql.Column, 
 		for i := 0; i < idx; i++ {
 			projections[i] = getColumnExpression(i, schema[i])
 		}
-		projections[idx] = plan.ColDefaultExpression{column}
+		projections[idx] = plan.ColDefaultExpression{Column: column}
 		for i := idx; i < len(schema); i++ {
 			projections[i+1] = getColumnExpression(i, schema[i])
 		}
@@ -1818,7 +1818,7 @@ func addColumnToSchema(ctx *sql.Context, schema sql.Schema, column *sql.Column, 
 		for i, col := range schema {
 			projections[i] = getColumnExpression(i, col)
 		}
-		projections[len(schema)] = plan.ColDefaultExpression{column}
+		projections[len(schema)] = plan.ColDefaultExpression{Column: column}
 	}
 
 	// Alter old default expressions if they refer to other columns. The column indexes computed during analysis refer to the
@@ -2198,7 +2198,7 @@ func getIndexNameGenerator(db sql.Database) sql.IndexNameGenerator {
 	if gen, ok := db.(sql.IndexNameGenerator); ok {
 		return gen
 	}
-	if pdb, ok := db.(mysql_db.PrivilegedDatabase); ok {
+	if pdb, ok := db.(sql.PrivilegedDatabase); ok {
 		if gen, ok := pdb.Unwrap().(sql.IndexNameGenerator); ok {
 			return gen
 		}

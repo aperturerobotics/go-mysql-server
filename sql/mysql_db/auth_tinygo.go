@@ -5,7 +5,7 @@ package mysql_db
 import (
 	"net"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 )
 
 // DefaultAuthMethod specifies the default MySQL auth protocol.

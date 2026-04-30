@@ -41,7 +41,7 @@ func TestAddDate(t *testing.T) {
 	_, err = NewAddDate(ctx, expression.NewLiteral("2018-05-02", types.LongText))
 	require.Error(err)
 
-	var expected, result interface{}
+	var expected, result any
 	var f sql.Expression
 
 	f, err = NewAddDate(
@@ -264,7 +264,7 @@ func TestSubDate(t *testing.T) {
 	_, err = NewSubDate(ctx, expression.NewLiteral("2018-05-02", types.LongText))
 	require.Error(err)
 
-	var expected, result interface{}
+	var expected, result any
 	var f sql.Expression
 
 	f, err = NewSubDate(
@@ -473,7 +473,7 @@ func TestTimeDiff(t *testing.T) {
 		name     string
 		from     sql.Expression
 		to       sql.Expression
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{
@@ -605,7 +605,7 @@ func TestDateDiff(t *testing.T) {
 		e1Type   sql.Type
 		e2Type   sql.Type
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      *errors.Kind
 	}{
 		{"time and text types, ", types.DatetimeMaxPrecision, types.Text, sql.NewRow(dt, "2019-12-28"), int64(3), nil},
@@ -652,7 +652,7 @@ func TestTimestampDiff(t *testing.T) {
 		e1Type   sql.Type
 		e2Type   sql.Type
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"invalid unit", types.Text, types.Text, types.Text, sql.NewRow("MILLISECOND", "2007-12-30 23:59:59", "2007-12-31 00:00:00"), nil, true},

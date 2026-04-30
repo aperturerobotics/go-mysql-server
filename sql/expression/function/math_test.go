@@ -129,7 +129,7 @@ func TestRadians(t *testing.T) {
 func TestDegrees(t *testing.T) {
 	tests := []struct {
 		name     string
-		input    interface{}
+		input    any
 		expected float64
 	}{
 		{"string pi", "3.1415926536", 180.0},
@@ -154,7 +154,7 @@ func TestDegrees(t *testing.T) {
 func TestCRC32(t *testing.T) {
 	tests := []struct {
 		name     string
-		input    interface{}
+		input    any
 		expected uint32
 	}{
 		{"CRC32('MySQL)", "MySQL", 3259397556},
@@ -297,9 +297,9 @@ func TestSignFunc(t *testing.T) {
 func TestMod(t *testing.T) {
 	tests := []struct {
 		name     string
-		left     interface{}
-		right    interface{}
-		expected interface{}
+		left     any
+		right    any
+		expected any
 	}{
 		{"MOD(5,2)", 5, 2, "1"},
 		{"MOD(2,5)", 2, 5, "2"},
@@ -328,7 +328,7 @@ func TestMod(t *testing.T) {
 func TestPi(t *testing.T) {
 	tests := []struct {
 		name string
-		exp  interface{}
+		exp  any
 	}{
 		{
 			name: "call pi",
@@ -347,7 +347,7 @@ func TestPi(t *testing.T) {
 		})
 	}
 
-	var res interface{}
+	var res any
 	var err error
 	sin := NewSin(ctx, NewPi(ctx))
 	res, err = sin.Eval(nil, nil)
@@ -364,7 +364,7 @@ func TestExp(t *testing.T) {
 	tests := []struct {
 		name string
 		arg  sql.Expression
-		exp  interface{}
+		exp  any
 		err  bool
 		skip bool
 	}{
