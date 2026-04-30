@@ -20,18 +20,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 
 	"github.com/cockroachdb/apd/v3"
-	"github.com/dolthub/jsonpath"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
+	"github.com/dolthub/go-mysql-server/sql/otel/attribute"
+	"github.com/dolthub/go-mysql-server/sql/otel/trace"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/expression/function/aggregation"
-	"github.com/dolthub/go-mysql-server/sql/expression/function/json"
 	"github.com/dolthub/go-mysql-server/sql/iters"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/types"
@@ -203,23 +200,18 @@ func (b *BaseBuilder) buildJSONTable(ctx *sql.Context, n *plan.JSONTable, row sq
 		return &iters.JsonTableRowIter{}, nil
 	}
 
-	jsonData, err := json.GetJSONFromWrapperOrCoercibleString(ctx, data, "json_table", 1)
+	jsonPathData, err := buildJSONTableData(ctx, data, n.RootPath)
 	if err != nil {
-		return nil, err
+		jsonPathData = []any{}
 	}
-
-	jsonPathData, err := jsonpath.JsonPathLookup(jsonData, n.RootPath)
-	if err != nil {
-		jsonPathData = []interface{}{}
-	}
-	if _, ok := jsonPathData.([]interface{}); !ok {
-		jsonPathData = []interface{}{jsonPathData}
+	if _, ok := jsonPathData.([]any); !ok {
+		jsonPathData = []any{jsonPathData}
 	}
 
 	cols, err := b.buildJSONTableCols(ctx, n.Cols, row)
 
 	rowIter := &iters.JsonTableRowIter{
-		Data: jsonPathData.([]interface{}),
+		Data: jsonPathData.([]any),
 		Cols: cols,
 	}
 	rowIter.NextSibling() // set to first sibling
@@ -264,7 +256,7 @@ func (b *BaseBuilder) buildTableAlias(ctx *sql.Context, n *plan.TableAlias, row 
 	if tbl, ok := n.Child.(sql.Nameable); ok {
 		table = tbl.Name()
 	} else {
-		table = reflect.TypeOf(n.Child).String()
+		table = sql.TypeName(n.Child)
 	}
 
 	span, ctx := ctx.Span("sql.TableAlias",
@@ -548,7 +540,7 @@ func (b *BaseBuilder) populateMax1Results(ctx *sql.Context, n *plan.Max1Row, row
 }
 
 // isUnderSecureFileDir ensures that fileStr is under secureFileDir or a subdirectory of secureFileDir, errors otherwise
-func isUnderSecureFileDir(secureFileDir interface{}, fileStr string) error {
+func isUnderSecureFileDir(secureFileDir any, fileStr string) error {
 	if secureFileDir == nil || secureFileDir == "" {
 		return nil
 	}
@@ -560,7 +552,7 @@ func isUnderSecureFileDir(secureFileDir interface{}, fileStr string) error {
 	if err != nil {
 		return err
 	}
-	if os.SameFile(sStat, fStat) {
+	if sameFile(sStat, fStat) {
 		return nil
 	}
 
@@ -600,7 +592,7 @@ func (b *BaseBuilder) buildInto(ctx *sql.Context, n *plan.Into, row sql.Row) (sq
 		return nil, err
 	}
 
-	var secureFileDir interface{}
+	var secureFileDir any
 	if n.Outfile != "" || n.Dumpfile != "" {
 		var ok bool
 		_, secureFileDir, ok = ctx.SystemVariables().GetGlobal("secure_file_priv")
@@ -683,7 +675,7 @@ func (b *BaseBuilder) buildInto(ctx *sql.Context, n *plan.Into, row sql.Row) (sq
 		return nil, sql.ErrColumnNumberDoesNotMatch.New()
 	}
 
-	var rowValues = make([]interface{}, len(rows[0]))
+	var rowValues = make([]any, len(rows[0]))
 	copy(rowValues, rows[0])
 
 	for j, v := range n.IntoVars {
@@ -705,62 +697,6 @@ func (b *BaseBuilder) buildInto(ctx *sql.Context, n *plan.Into, row sql.Row) (sq
 	}
 
 	return sql.RowsToRowIter(sql.Row{types.NewOkResult(1)}), nil
-}
-
-func (b *BaseBuilder) buildExternalProcedure(ctx *sql.Context, n *plan.ExternalProcedure, row sql.Row) (sql.RowIter, error) {
-	// The function's structure has been verified by the analyzer, so no need to double-check any of it here
-	funcVal := reflect.ValueOf(n.Function)
-	funcType := funcVal.Type()
-	// The first parameter is always the context, but it doesn't exist as far as the stored procedures are concerned, so
-	// we prepend it here
-	funcParams := make([]reflect.Value, len(n.Params)+1)
-	funcParams[0] = reflect.ValueOf(ctx)
-
-	for i := range n.Params {
-		paramDefinition := n.ParamDefinitions[i]
-		var funcParamType reflect.Type
-		if paramDefinition.Variadic {
-			funcParamType = funcType.In(funcType.NumIn() - 1).Elem()
-		} else {
-			funcParamType = funcType.In(i + 1)
-		}
-		// Grab the passed-in variable and convert it to the type we expect
-		exprParamVal, err := n.Params[i].Eval(ctx, nil)
-		if err != nil {
-			return nil, err
-		}
-		exprParamVal, _, err = paramDefinition.Type.Convert(ctx, exprParamVal)
-		if err != nil {
-			return nil, err
-		}
-
-		funcParams[i+1], err = n.ProcessParam(ctx, funcParamType, exprParamVal)
-		if err != nil {
-			return nil, err
-		}
-	}
-	out := funcVal.Call(funcParams)
-
-	// Again, these types are enforced in the analyzer, so it's safe to assume their types here
-	if err, ok := out[1].Interface().(error); ok { // Only evaluates to true when error is not nil
-		return nil, err
-	}
-	for i, paramDefinition := range n.ParamDefinitions {
-		if paramDefinition.Direction == plan.ProcedureParamDirection_Inout || paramDefinition.Direction == plan.ProcedureParamDirection_Out {
-			exprParam := n.Params[i]
-			funcParamVal := funcParams[i+1].Elem().Interface()
-			err := exprParam.Set(ctx, funcParamVal, exprParam.Type(ctx))
-			if err != nil {
-				return nil, err
-			}
-			_ = ctx.Session.SetStoredProcParam(exprParam.Name(), funcParamVal)
-		}
-	}
-	// It's not invalid to return a nil RowIter, as having no rows to return is expected of many stored procedures.
-	if rowIter, ok := out[0].Interface().(sql.RowIter); ok {
-		return rowIter, nil
-	}
-	return sql.RowsToRowIter(), nil
 }
 
 func (b *BaseBuilder) buildHaving(ctx *sql.Context, n *plan.Having, row sql.Row) (sql.RowIter, error) {

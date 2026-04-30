@@ -46,7 +46,7 @@ func (ib *IsNull) Description() string {
 }
 
 // Eval implements the Expression interface.
-func (ib *IsNull) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (ib *IsNull) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	v, err := ib.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

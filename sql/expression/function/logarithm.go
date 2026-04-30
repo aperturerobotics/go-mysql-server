@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 	"gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -119,7 +119,7 @@ func (l *LogBase) IsNullable(ctx *sql.Context) bool {
 func (l *LogBase) Eval(
 	ctx *sql.Context,
 	row sql.Row,
-) (interface{}, error) {
+) (any, error) {
 	v, err := l.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -203,7 +203,7 @@ func (l *Log) IsNullable(ctx *sql.Context) bool {
 func (l *Log) Eval(
 	ctx *sql.Context,
 	row sql.Row,
-) (interface{}, error) {
+) (any, error) {
 	left, err := l.LeftChild.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -238,7 +238,7 @@ func (l *Log) Eval(
 	return computeLog(ctx, rhs.(float64), lhs.(float64))
 }
 
-func computeLog(ctx *sql.Context, v float64, base float64) (interface{}, error) {
+func computeLog(ctx *sql.Context, v float64, base float64) (any, error) {
 	if v <= 0 {
 		ctx.Warn(3020, "%s", ErrInvalidArgumentForLogarithm.New(v).Error())
 		return nil, nil

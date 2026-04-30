@@ -3,7 +3,7 @@ name: Label Customer Issues
 on:
   issues:
     types: [opened]
-  pull_request_target:
+  pull_request:
     branches: [main]
     types: [opened]
 

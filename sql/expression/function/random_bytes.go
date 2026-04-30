@@ -80,7 +80,7 @@ func (r *RandomBytes) IsNonDeterministic() bool {
 }
 
 // Eval implements the sql.Expression interface.
-func (r *RandomBytes) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (r *RandomBytes) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	val, err := r.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

@@ -19,10 +19,6 @@ import (
 	"math"
 	"strings"
 
-	"golang.org/x/text/language"
-	"golang.org/x/text/message"
-	"golang.org/x/text/number"
-
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
@@ -86,12 +82,12 @@ func (f *Format) String() string {
 }
 
 // Eval implements the Expression interface.
-func (f *Format) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (f *Format) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	numVal, err := f.NumValue.Eval(ctx, row)
 	if err != nil {
 		return nil, err
 	}
-	var numValue float64
+
 	numVal, _, err = types.Float64.Convert(ctx, numVal)
 	if err != nil {
 		ctx.Warn(1292, "Truncated incorrect DOUBLE value: %s", numVal)
@@ -99,7 +95,7 @@ func (f *Format) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	if numVal == nil {
 		return nil, nil
 	}
-	numValue = numVal.(float64)
+	numValue := numVal.(float64)
 
 	numDP, err := f.NumDecimalPlaces.Eval(ctx, row)
 	if err != nil {
@@ -119,44 +115,21 @@ func (f *Format) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	numDecimalPlaces = max(0, numDecimalPlaces)
 	numDecimalPlaces = min(30, numDecimalPlaces)
 
-	locale := language.English
+	var localeValue any = "en_US"
 	if f.Locale != nil {
 		loc, lErr := f.Locale.Eval(ctx, row)
 		if lErr != nil {
 			return nil, lErr
 		}
-		loc, _, err := types.Text.Convert(ctx, loc)
-		if err != nil {
-			return nil, err
-		}
-		if loc == nil {
-			ctx.Warn(1649, "Unknown Locale: 'NULL'")
-		} else {
-			locStr := loc.(string)
-			locale, err = language.Parse(locStr)
-			if err != nil {
-				ctx.Warn(1649, "Unknown Locale: %s", loc)
-				locale = language.English
-			}
-		}
+
+		localeValue = loc
 	}
 
-	// One way to round to a decimal place is to shift the number up by the desired decimal position, round to the
-	// nearest integer, and then shift back down.
-	// For example, we have 5.855 and want to round to 2 decimal places.
-	// In this case, numValue = 5.855 and numDecimalPlaces = 2
-	// round(numValue * 10^numDecimalPlaces) / 10^numDecimalPlaces
-	// round(5.855 * 10^2) / 10^2
-	// round(5.855 * 100) / 100
-	// round(585.5) / 100
-	// 586 / 100
-	// 5.86
-	//TODO: this can introduce rounding errors that don't show up in MySQL when the decimal places are larger than the input due to precision errors
+	// Shift the requested decimal place into the integer part before rounding.
+	// Floating-point precision can differ from MySQL at large scales.
 	roundedValue := math.Round(numValue*math.Pow(10.0, numDecimalPlaces)) / math.Pow(10.0, numDecimalPlaces)
 
-	// FORMAT(-5.932887e-08, 2);     		==> -0.00
-	// FORMAT(-0.00000005932887, 2); 		==> 0.00
-	// will return 0.00 for both cases
+	// Values rounded to zero omit the negative sign.
 	var whole int64
 	var fractionStr string
 	var negative string
@@ -168,28 +141,15 @@ func (f *Format) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		}
 
 		str := res.Text('f')
-		dotIdx := strings.Index(str, ".")
-		if dotIdx == -1 {
+		_, after, ok := strings.Cut(str, ".")
+		if !ok {
 			fractionStr = ""
 		} else {
-			fractionStr = str[dotIdx+1:]
+			fractionStr = after
 		}
 	}
 
-	p := message.NewPrinter(locale)
-	formattedWhole := p.Sprintf("%v", number.Decimal(whole))
-	if numDecimalPlaces == 0 {
-		return fmt.Sprintf("%s%s", negative, formattedWhole), nil
-	}
-
-	decimalChar := p.Sprintf("%v", number.Decimal(1.5))
-	if len(fractionStr) < int(numDecimalPlaces) {
-		rp := int(numDecimalPlaces) - len(fractionStr)
-		fractionStr += strings.Repeat("0", rp)
-	}
-
-	result := fmt.Sprintf("%s%s%s%s", negative, formattedWhole, decimalChar[1:2], fractionStr)
-	return result, nil
+	return formatGrouped(ctx, localeValue, negative, whole, fractionStr, int(numDecimalPlaces))
 }
 
 // Resolved implements the Expression interface.

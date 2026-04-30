@@ -57,7 +57,7 @@ func lit(n int64) sql.Expression {
 	return expression.NewLiteral(n, types.Int64)
 }
 
-func litT(n interface{}, t sql.Type) sql.Expression {
+func litT(n any, t sql.Type) sql.Expression {
 	return expression.NewLiteral(n, t)
 }
 

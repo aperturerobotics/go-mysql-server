@@ -16,7 +16,6 @@ package function
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/dolthub/vitess/go/vt/sqlparser"
@@ -59,7 +58,7 @@ func (t *Trim) Children() []sql.Expression {
 }
 
 // Eval implements the Expression interface.
-func (t *Trim) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (t *Trim) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate pattern
 	pat, err := t.pat.Eval(ctx, row)
 	if err != nil {
@@ -212,7 +211,7 @@ func (t *LeftTrim) WithChildren(ctx *sql.Context, children ...sql.Expression) (s
 	return NewLeftTrim(ctx, children[0]), nil
 }
 
-func (t *LeftTrim) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (t *LeftTrim) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	str, err := t.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err
@@ -224,7 +223,7 @@ func (t *LeftTrim) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 
 	str, _, err = types.LongText.Convert(ctx, str)
 	if err != nil {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str))
+		return nil, sql.ErrInvalidType.New(sql.TypeName(str))
 	}
 
 	// Handle Dolt's TextStorage wrapper that doesn't convert to plain string
@@ -281,7 +280,7 @@ func (t *RightTrim) WithChildren(ctx *sql.Context, children ...sql.Expression) (
 	return NewRightTrim(ctx, children[0]), nil
 }
 
-func (t *RightTrim) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (t *RightTrim) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	str, err := t.Child.Eval(ctx, row)
 	if err != nil {
 		return nil, err

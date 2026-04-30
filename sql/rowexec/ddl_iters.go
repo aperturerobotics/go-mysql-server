@@ -22,16 +22,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
+	"github.com/dolthub/go-mysql-server/sql/otel/attribute"
+	"github.com/dolthub/go-mysql-server/sql/otel/trace"
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/sirupsen/logrus"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/fulltext"
-	"github.com/dolthub/go-mysql-server/sql/mysql_db"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/planbuilder"
 	"github.com/dolthub/go-mysql-server/sql/transform"
@@ -962,14 +961,14 @@ type evalKeyValueIter struct {
 	exprs   []sql.Expression
 }
 
-func (i *evalKeyValueIter) Next(ctx *sql.Context) ([]interface{}, []byte, error) {
+func (i *evalKeyValueIter) Next(ctx *sql.Context) ([]any, []byte, error) {
 	vals, loc, err := i.iter.Next(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	row := sql.NewRow(vals...)
-	evals := make([]interface{}, len(i.exprs))
+	evals := make([]any, len(i.exprs))
 	for j, ex := range i.exprs {
 		eval, err := ex.Eval(ctx, row)
 		if err != nil {
@@ -1036,7 +1035,7 @@ func newLoggingKeyValueIter(
 	}
 }
 
-func (i *loggingKeyValueIter) Next(ctx *sql.Context) ([]interface{}, []byte, error) {
+func (i *loggingKeyValueIter) Next(ctx *sql.Context) ([]any, []byte, error) {
 	if i.span == nil {
 		i.span, ctx = ctx.Span("plan.createIndex.iterator", trace.WithAttributes(attribute.Int64("start", int64(*i.rows))))
 	}
@@ -1845,7 +1844,7 @@ func addColumnToSchema(ctx *sql.Context, schema sql.Schema, column *sql.Column, 
 		for i := 0; i < idx; i++ {
 			projections[i] = getColumnExpression(i, schema[i])
 		}
-		projections[idx] = plan.ColDefaultExpression{column}
+		projections[idx] = plan.ColDefaultExpression{Column: column}
 		for i := idx; i < len(schema); i++ {
 			projections[i+1] = getColumnExpression(i, schema[i])
 		}
@@ -1855,7 +1854,7 @@ func addColumnToSchema(ctx *sql.Context, schema sql.Schema, column *sql.Column, 
 		for i, col := range schema {
 			projections[i] = getColumnExpression(i, col)
 		}
-		projections[len(schema)] = plan.ColDefaultExpression{column}
+		projections[len(schema)] = plan.ColDefaultExpression{Column: column}
 	}
 
 	// Alter old default expressions if they refer to other columns. The column indexes computed during analysis refer to the
@@ -2152,7 +2151,7 @@ func (b *BaseBuilder) executeCreateCheck(ctx *sql.Context, c *plan.CreateCheck) 
 
 	// check existing rows in table, unless the constraint was created with NOT VALID
 	if !c.Check.IsNotValid {
-		var res interface{}
+		var res any
 		rowIter, err := b.buildNodeExec(ctx, c.Table, nil)
 		if err != nil {
 			return err
@@ -2246,7 +2245,7 @@ func getIndexNameGenerator(db sql.Database) sql.IndexNameGenerator {
 	if gen, ok := db.(sql.IndexNameGenerator); ok {
 		return gen
 	}
-	if pdb, ok := db.(mysql_db.PrivilegedDatabase); ok {
+	if pdb, ok := db.(sql.PrivilegedDatabase); ok {
 		if gen, ok := pdb.Unwrap().(sql.IndexNameGenerator); ok {
 			return gen
 		}
@@ -2260,7 +2259,7 @@ func getFulltextDatabase(db sql.Database) (fulltext.Database, error) {
 	if isFulltextDb {
 		return fullTextDb, nil
 	}
-	privDb, isPrivDb := db.(mysql_db.PrivilegedDatabase)
+	privDb, isPrivDb := db.(sql.PrivilegedDatabase)
 	if !isPrivDb {
 		return nil, sql.ErrCreateTableNotSupported.New()
 	}

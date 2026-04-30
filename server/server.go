@@ -23,9 +23,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
+	"github.com/dolthub/go-mysql-server/sql/otel/trace"
 	"github.com/sirupsen/logrus"
-	"go.opentelemetry.io/otel/trace"
 
 	sqle "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/sql"
@@ -140,7 +140,7 @@ func getPort(cfg mysql.ListenerConfig) (int64, error) {
 }
 
 func updateSystemVariables(cfg mysql.ListenerConfig, vars *sql.EngineVariables) error {
-	sysVars := make(map[string]interface{})
+	sysVars := make(map[string]any)
 
 	if port, err := getPort(cfg); err == nil {
 		sysVars["port"] = port
@@ -210,7 +210,7 @@ func newServerFromHandler(cfg Config, e *sqle.Engine, sm *SessionManager, handle
 
 	listenerCfg := mysql.ListenerConfig{
 		Listener:                 l,
-		AuthServer:               e.Analyzer.Catalog.MySQLDb,
+		AuthServer:               getAuthServer(e.Analyzer.Catalog.MySQLDb),
 		Handler:                  handler,
 		ConnReadTimeout:          cfg.ConnReadTimeout,
 		ConnWriteTimeout:         cfg.ConnWriteTimeout,

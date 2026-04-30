@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"reflect"
 	"strconv"
 	"time"
 
@@ -52,7 +51,7 @@ var (
 	ErrConvertToDecimalLimit = errors.NewKind("Out of range value for column of Decimal type ")
 	ErrMarshalNullDecimal    = errors.NewKind("Decimal cannot marshal a null value")
 
-	decimalValueType = reflect.TypeOf(&apd.Decimal{})
+	decimalValueType = sql.ValueKindDecimal
 )
 
 type DecimalType_ struct {
@@ -142,7 +141,7 @@ func (t DecimalType_) Type() query.Type {
 }
 
 // Compare implements Type interface.
-func (t DecimalType_) Compare(s context.Context, a interface{}, b interface{}) (int, error) {
+func (t DecimalType_) Compare(s context.Context, a any, b any) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -176,7 +175,7 @@ func (t DecimalType_) CompareValue(ctx *sql.Context, a, b sql.Value) (int, error
 }
 
 // Convert implements Type interface.
-func (t DecimalType_) Convert(c context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t DecimalType_) Convert(c context.Context, v any) (any, sql.ConvertInRange, error) {
 	dec, err := t.ConvertToDecimal(v)
 	if err != nil && !sql.ErrTruncatedIncorrect.Is(err) {
 		return nil, sql.InRange, err
@@ -191,7 +190,7 @@ func (t DecimalType_) Convert(c context.Context, v interface{}) (interface{}, sq
 	return res, inRange, err
 }
 
-func (t DecimalType_) ConvertToDecimal(v interface{}) (*apd.Decimal, error) {
+func (t DecimalType_) ConvertToDecimal(v any) (*apd.Decimal, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -246,7 +245,8 @@ func (t DecimalType_) ConvertToDecimal(v interface{}) (*apd.Decimal, error) {
 	case *big.Rat:
 		return t.ConvertToDecimal(new(big.Float).SetRat(value))
 	case *apd.Decimal:
-		newVal := new(*value)
+		valCopy := *value
+		newVal := &valCopy
 		if t.definesColumn && value.Exponent != int32(t.scale) {
 			var err error
 			newVal, err = sql.DecimalRound(value, int32(t.scale))
@@ -267,7 +267,8 @@ func (t DecimalType_) ConvertToDecimal(v interface{}) (*apd.Decimal, error) {
 }
 
 func (t DecimalType_) BoundsCheck(v *apd.Decimal) (*apd.Decimal, sql.ConvertInRange, error) {
-	newVal := new(*v)
+	vCopy := *v
+	newVal := &vCopy
 	if -v.Exponent > int32(t.scale) {
 		// TODO : add 'Data truncated' warning
 		var err error
@@ -314,7 +315,7 @@ func (t DecimalType_) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t DecimalType_) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t DecimalType_) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -343,12 +344,12 @@ func (t DecimalType_) String() string {
 }
 
 // ValueType implements Type interface.
-func (t DecimalType_) ValueType() reflect.Type {
+func (t DecimalType_) ValueKind() sql.ValueKind {
 	return decimalValueType
 }
 
 // Zero implements Type interface.
-func (t DecimalType_) Zero() interface{} {
+func (t DecimalType_) Zero() any {
 	// The zero value should have the same scale as the type
 	return apd.New(0, -int32(t.scale))
 }
@@ -616,7 +617,8 @@ func DecimalTruncate(val *apd.Decimal, scale int32) *apd.Decimal {
 		}
 		ctx := sql.DecimalCtx.WithPrecision(uint32(p))
 		ctx.Rounding = apd.RoundDown
-		newVal := new(*val)
+		valCopy := *val
+		newVal := &valCopy
 		_, err := ctx.Quantize(newVal, val, -scale)
 		if err != nil {
 			panic(err)

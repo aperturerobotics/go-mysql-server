@@ -29,7 +29,7 @@ func TestTrim(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null input", sql.NewRow(nil, " ", "b"), nil, false},
@@ -62,7 +62,7 @@ func TestLTrim(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null input", sql.NewRow(nil), nil, false},
@@ -95,7 +95,7 @@ func TestRTrim(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null input", sql.NewRow(nil), nil, false},

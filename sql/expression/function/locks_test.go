@@ -173,8 +173,8 @@ func TestReleaseAllLocks(t *testing.T) {
 }
 
 // releaseAllLocksForLS returns the logic to execute when the sql function release_all_locks is executed
-func releaseAllLocksForLS(ls *sql.LockSubsystem) func(*sql.Context, sql.Row) (interface{}, error) {
-	return func(ctx *sql.Context, _ sql.Row) (interface{}, error) {
+func releaseAllLocksForLS(ls *sql.LockSubsystem) func(*sql.Context, sql.Row) (any, error) {
+	return func(ctx *sql.Context, _ sql.Row) (any, error) {
 		return ls.ReleaseAll(ctx)
 	}
 }

@@ -89,12 +89,12 @@ import (
 //}
 
 // must executes functions of the form "func(args...) (sql.Expression, error)" and panics on errors
-func must(f interface{}, args ...interface{}) sql.Expression {
+func must(f any, args ...any) sql.Expression {
 	fType := reflect.TypeOf(f)
 	if fType.Kind() != reflect.Func ||
 		fType.NumOut() != 2 ||
-		!fType.Out(0).AssignableTo(reflect.TypeOf((*sql.Expression)(nil)).Elem()) ||
-		!fType.Out(1).AssignableTo(reflect.TypeOf((*error)(nil)).Elem()) {
+		!fType.Out(0).AssignableTo(reflect.TypeFor[sql.Expression]()) ||
+		!fType.Out(1).AssignableTo(reflect.TypeFor[error]()) {
 		panic("invalid function given")
 	}
 	// we let reflection ensure that the arguments match

@@ -31,7 +31,7 @@ import (
 // validateOffsetAndLimit ensures that only integer literals are used for limit and offset values
 func validateOffsetAndLimit(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
 	var err error
-	var i, i64 interface{}
+	var i, i64 any
 	transform.InspectWithOpaque(ctx, n, func(ctx *sql.Context, n sql.Node) bool {
 		switch n := n.(type) {
 		case *plan.Limit:

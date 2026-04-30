@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -57,7 +56,7 @@ const (
 )
 
 var (
-	timeValueType = reflect.TypeOf(Timespan(0))
+	timeValueType = sql.ValueKindTimespan
 
 	Time             = MustCreateTimespanType(0)
 	TimeMaxPrecision = MustCreateTimespanType(6)
@@ -72,11 +71,11 @@ type TimeType interface {
 	// ConvertToTimespan returns a Timespan from the given interface. Follows the same conversion rules as
 	// Convert(), in that this will process the value based on its base-10 visual representation (for example, Convert()
 	// will interpret the value `1234` as 12 minutes and 34 seconds). Returns an error for nil values.
-	ConvertToTimespan(v interface{}) (Timespan, error)
+	ConvertToTimespan(v any) (Timespan, error)
 	// ConvertToTimeDuration returns a time.Duration from the given interface. Follows the same conversion rules as
 	// Convert(), in that this will process the value based on its base-10 visual representation (for example, Convert()
 	// will interpret the value `1234` as 12 minutes and 34 seconds). Returns an error for nil values.
-	ConvertToTimeDuration(v interface{}) (time.Duration, error)
+	ConvertToTimeDuration(v any) (time.Duration, error)
 	// MicrosecondsToTimespan returns a Timespan from the given number of microseconds. This differs from Convert(), as
 	// that will process the value based on its base-10 visual representation (for example, Convert() will interpret
 	// the value `1234` as 12 minutes and 34 seconds). This clamps the given microseconds to the allowed range.
@@ -119,8 +118,12 @@ func (t TimespanType_) MaxTextResponseByteLength(*sql.Context) uint32 {
 	return MaxTimespanStringLength
 }
 
+func (t Timespan) ValueKind() sql.ValueKind {
+	return sql.ValueKindTimespan
+}
+
 // Compare implements Type interface.
-func (t TimespanType_) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t TimespanType_) Compare(ctx context.Context, a any, b any) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -476,12 +479,12 @@ func (t TimespanType_) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t TimespanType_) ValueType() reflect.Type {
+func (t TimespanType_) ValueKind() sql.ValueKind {
 	return timeValueType
 }
 
 // Zero implements Type interface.
-func (t TimespanType_) Zero() interface{} {
+func (t TimespanType_) Zero() any {
 	return Timespan(0)
 }
 

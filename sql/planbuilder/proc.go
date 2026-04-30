@@ -307,6 +307,7 @@ func (b *Builder) buildCall(inScope *scope, c *ast.Call) (outScope *scope) {
 
 	var proc *plan.Procedure
 	var innerQFlags *sql.QueryFlags
+	var err error
 	procName := c.ProcName.Name.String()
 	esp, err := b.cat.ExternalStoredProcedure(b.ctx, procName, len(c.Params))
 	if err != nil {
@@ -347,9 +348,6 @@ func (b *Builder) buildCall(inScope *scope, c *ast.Call) (outScope *scope) {
 
 	params := make([]sql.Expression, len(c.Params))
 	for i, param := range c.Params {
-		// While it is possible to detect a parameter count mismatch here and throw an error,
-		// there's some weirdness involving external procedures. The analyzer rule applyProceduresCall will
-		// catch this discrepancy.
 		if len(proc.Params) == len(c.Params) {
 			procParam := proc.Params[i]
 			rSpp := &sql.StoredProcParam{Type: procParam.Type}

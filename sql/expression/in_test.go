@@ -38,7 +38,7 @@ func TestInTuple(t *testing.T) {
 		left   sql.Expression
 		right  sql.Expression
 		row    sql.Row
-		result interface{}
+		result any
 		err    *errors.Kind
 	}{
 		{
@@ -191,7 +191,7 @@ func TestNotInTuple(t *testing.T) {
 		left   sql.Expression
 		right  sql.Expression
 		row    sql.Row
-		result interface{}
+		result any
 		err    *errors.Kind
 	}{
 		{
@@ -311,7 +311,7 @@ func TestHashInTuple(t *testing.T) {
 		left      sql.Expression
 		right     sql.Expression
 		row       sql.Row
-		result    interface{}
+		result    any
 		staticErr *errors.Kind
 		evalErr   *errors.Kind
 	}{

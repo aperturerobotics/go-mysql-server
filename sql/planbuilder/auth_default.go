@@ -1,3 +1,5 @@
+//go:build !tinygo
+
 // Copyright 2024 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,7 +21,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 	ast "github.com/dolthub/vitess/go/vt/sqlparser"
 
 	"github.com/dolthub/go-mysql-server/sql"

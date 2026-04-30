@@ -27,7 +27,7 @@ import (
 	"sync/atomic"
 
 	flatbuffers "github.com/dolthub/flatbuffers/v23/go"
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/in_mem_table"

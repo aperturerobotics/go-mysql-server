@@ -31,7 +31,7 @@ func TestStrCmp(t *testing.T) {
 		e1Type   sql.Type
 		e2Type   sql.Type
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      *errors.Kind
 	}{
 		{"equal strings", types.Text, types.Text, sql.NewRow("a", "a"), int(0), nil},

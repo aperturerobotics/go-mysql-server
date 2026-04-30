@@ -18,7 +18,7 @@ import (
 	"context"
 	"sync"
 
-	"go.opentelemetry.io/otel/trace"
+	"github.com/dolthub/go-mysql-server/sql/otel/trace"
 	"go.opentelemetry.io/otel/trace/embedded"
 )
 

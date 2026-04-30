@@ -17,14 +17,13 @@ package expression
 import (
 	"fmt"
 	"math"
-	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/cockroachdb/apd/v3"
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 	"github.com/dolthub/vitess/go/vt/sqlparser"
 	"gopkg.in/src-d/go-errors.v1"
 
@@ -1024,7 +1023,7 @@ func (e *UnaryMinus) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		// try getting int out of string value
 		i, iErr := strconv.ParseInt(n, 10, 64)
 		if iErr != nil {
-			return nil, sql.ErrInvalidType.New(reflect.TypeOf(n))
+			return nil, sql.ErrInvalidType.New(sql.TypeName(""))
 		}
 		return -i, nil
 	case bool:
@@ -1034,7 +1033,7 @@ func (e *UnaryMinus) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 			return 0, nil
 		}
 	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(n))
+		return nil, sql.ErrInvalidType.New(sql.TypeName(n))
 	}
 }
 

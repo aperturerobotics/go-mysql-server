@@ -17,7 +17,7 @@ package types
 import (
 	"context"
 	"fmt"
-	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -46,7 +46,7 @@ var (
 	ErrDataTruncatedForColumn      = errors.NewKind("Data truncated for column '%s'")
 	ErrDataTruncatedForColumnAtRow = errors.NewKind("Data truncated for column '%s' at row %d")
 
-	enumValueType = reflect.TypeOf(uint16(0))
+	enumValueType = sql.ValueKindUint16
 )
 
 type EnumType struct {
@@ -74,8 +74,12 @@ func CreateEnumType(values []string, collation sql.CollationID) (sql.EnumType, e
 	// including accounting for multibyte character representations.
 	var maxResponseByteLength uint32
 	maxCharLength := collation.Collation().CharacterSet.MaxLength()
-	hashedValToIndex := make(map[uint64]int)
-	valToIdx := make(map[string]int)
+	var hashedValToIndex map[uint64]int
+	var valToIdx map[string]int
+	if !tinygoBuild {
+		hashedValToIndex = make(map[uint64]int)
+		valToIdx = make(map[string]int)
+	}
 	for i, value := range values {
 		if !collation.Equals(sql.Collation_binary) {
 			// Trailing spaces are automatically deleted from ENUM member values in the table definition when a table
@@ -87,13 +91,18 @@ func CreateEnumType(values []string, collation sql.CollationID) (sql.EnumType, e
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := hashedValToIndex[hashedVal]; ok {
-			return nil, fmt.Errorf("duplicate entry: %v", value)
+		if tinygoBuild {
+			if slices.Contains(values[:i], value) {
+				return nil, fmt.Errorf("duplicate entry: %v", value)
+			}
+		} else {
+			if _, ok := hashedValToIndex[hashedVal]; ok {
+				return nil, fmt.Errorf("duplicate entry: %v", value)
+			}
+			hashedValToIndex[hashedVal] = i + 1
+			valToIdx[value] = i + 1
 		}
 		// The elements listed in the column specification are assigned index numbers, beginning with 1.
-		hashedValToIndex[hashedVal] = i + 1
-		valToIdx[value] = i + 1
-
 		byteLength := uint32(utf8.RuneCountInString(value) * int(maxCharLength))
 		if byteLength > maxResponseByteLength {
 			maxResponseByteLength = byteLength
@@ -123,7 +132,7 @@ func (t EnumType) MaxTextResponseByteLength(*sql.Context) uint32 {
 }
 
 // Compare implements Type interface.
-func (t EnumType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t EnumType) Compare(ctx context.Context, a any, b any) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -164,7 +173,7 @@ func (t EnumType) CompareValue(ctx *sql.Context, a, b sql.Value) (int, error) {
 }
 
 // Convert implements Type interface.
-func (t EnumType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t EnumType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	if v == nil {
 		return nil, sql.InRange, nil
 	}
@@ -241,7 +250,7 @@ func (t EnumType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t EnumType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t EnumType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -307,7 +316,7 @@ func (t EnumType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t EnumType) ValueType() reflect.Type {
+func (t EnumType) ValueKind() sql.ValueKind {
 	return enumValueType
 }
 
@@ -317,7 +326,7 @@ func (t EnumType) CollationCoercibility(ctx *sql.Context) (collation sql.Collati
 }
 
 // Zero implements Type interface.
-func (t EnumType) Zero() interface{} {
+func (t EnumType) Zero() any {
 	// TODO: If an ENUM column is declared NOT NULL, its default value is the first element of the list of permitted values.
 	return uint16(0)
 }
@@ -352,6 +361,13 @@ func (t EnumType) Collation() sql.CollationID {
 func (t EnumType) IndexOf(v string) int {
 	if idx, ok := t.valToIdx[v]; ok {
 		return idx
+	}
+	if tinygoBuild {
+		for i, val := range t.idxToVal {
+			if val == v {
+				return i + 1
+			}
+		}
 	}
 	hashedVal, err := t.collation.HashToUint(v)
 	if err == nil {

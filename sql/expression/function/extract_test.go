@@ -29,7 +29,7 @@ func TestExtract(t *testing.T) {
 		name     string
 		unit     string
 		dateTime string
-		expected interface{}
+		expected any
 		skip     bool
 	}{
 		{

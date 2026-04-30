@@ -51,7 +51,7 @@ var benchtable = func() *memory.Table {
 	})
 	t := memory.NewTable(sql.NewEmptyContext(), db.BaseDatabase, "test", schema, nil)
 
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		n := fmt.Sprint(i)
 		boolVal := int8(0)
 		if i%2 == 0 {
@@ -95,7 +95,7 @@ var benchtable = func() *memory.Table {
 
 func repeatStr(str string, n int) string {
 	var buf bytes.Buffer
-	for i := 0; i < n; i++ {
+	for range n {
 		buf.WriteString(str)
 	}
 	return buf.String()
@@ -103,7 +103,7 @@ func repeatStr(str string, n int) string {
 
 func repeatBytes(str string, n int) []byte {
 	var buf bytes.Buffer
-	for i := 0; i < n; i++ {
+	for range n {
 		buf.WriteString(str)
 	}
 	return buf.Bytes()

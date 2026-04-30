@@ -17,7 +17,6 @@ package analyzer
 import (
 	"unicode/utf8"
 
-	"github.com/dolthub/go-mysql-server/memory"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/plan"
@@ -46,7 +45,7 @@ func eraseProjection(ctx *sql.Context, a *Analyzer, node sql.Node, scope *plan.S
 		if ok {
 			projSch := project.Schema(ctx)
 			childSch := project.Child.Schema(ctx)
-			if projSch.CaseSensitiveEquals(childSch) && !childSch.CaseSensitiveEquals(memory.DualTableSchema.Schema) {
+			if projSch.CaseSensitiveEquals(childSch) && !plan.IsDualSchema(childSch) {
 				a.Log("project erased")
 				return project.Child, transform.NewTree, nil
 			}

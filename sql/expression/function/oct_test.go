@@ -27,7 +27,7 @@ type testCase struct {
 	name     string
 	nType    sql.Type
 	row      sql.Row
-	expected interface{}
+	expected any
 }
 
 func TestOct(t *testing.T) {

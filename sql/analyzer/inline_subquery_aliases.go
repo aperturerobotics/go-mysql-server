@@ -99,9 +99,7 @@ func inlineSubqueryAliasRefsHelper(ctx *sql.Context, scope *aliasScope, n sql.No
 					if err != nil {
 						return e, transform.SameTree, err
 					}
-					ret := *e
-					ret.Query = newQ
-					return &ret, transform.NewTree, nil
+					return e.WithQuery(newQ), transform.NewTree, nil
 				default:
 				}
 				return e, transform.SameTree, nil

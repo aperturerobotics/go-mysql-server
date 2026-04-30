@@ -105,7 +105,7 @@ var formats = map[string]map[string]string{
 }
 
 // Eval implements the Expression interface.
-func (g *GetFormat) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (g *GetFormat) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if g.LeftChild == nil || g.RightChild == nil {
 		return nil, nil
 	}

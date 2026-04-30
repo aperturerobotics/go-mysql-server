@@ -36,7 +36,7 @@ func TestInsert(t *testing.T) {
 	testCases := []struct {
 		name     string
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      bool
 	}{
 		{"null str", sql.NewRow(nil, 1, 2, "new"), nil, false},

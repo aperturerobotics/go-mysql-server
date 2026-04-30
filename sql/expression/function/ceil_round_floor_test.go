@@ -50,7 +50,7 @@ func TestCeil(t *testing.T) {
 		name     string
 		rowType  sql.Type
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      *errors.Kind
 	}{
 		{"float64 is nil", types.Float64, sql.NewRow(nil), nil, nil},
@@ -109,7 +109,7 @@ func TestFloor(t *testing.T) {
 		name     string
 		rowType  sql.Type
 		row      sql.Row
-		expected interface{}
+		expected any
 		err      *errors.Kind
 	}{
 		{"float64 is nil", types.Float64, sql.NewRow(nil), nil, nil},
@@ -168,7 +168,7 @@ func TestRound(t *testing.T) {
 		name  string
 		xExpr sql.Expression
 		dExpr sql.Expression
-		exp   interface{}
+		exp   any
 		err   *errors.Kind
 	}{
 		{

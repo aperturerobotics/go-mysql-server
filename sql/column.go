@@ -16,7 +16,6 @@ package sql
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 )
 
@@ -68,6 +67,9 @@ type Column struct {
 	DatabaseSource string
 	// Comment contains the string comment for this column.
 	Comment string
+	// Extra preserves explicit metadata supplied by a schema provider.
+	// When nonempty, it overrides the derived information_schema EXTRA value.
+	Extra string
 	// PrimaryKey is true if the column is part of the primary key for its table.
 	PrimaryKey bool
 	// Nullable is true if the column can contain NULL values, or false
@@ -112,15 +114,35 @@ func (c *Column) Equals(c2 *Column) bool {
 			strings.EqualFold(c.Source, c2.Source) &&
 			strings.EqualFold(c.DatabaseSource, c2.DatabaseSource) &&
 			c.Nullable == c2.Nullable &&
-			reflect.DeepEqual(c.Default, c2.Default) &&
+			columnDefaultEquals(c.Default, c2.Default) &&
 			c.Type.Equals(c2.Type)
 	}
 	return c.Name == c2.Name &&
 		strings.EqualFold(c.Source, c2.Source) &&
 		strings.EqualFold(c.DatabaseSource, c2.DatabaseSource) &&
 		c.Nullable == c2.Nullable &&
-		reflect.DeepEqual(c.Default, c2.Default) &&
+		columnDefaultEquals(c.Default, c2.Default) &&
 		c.Type.Equals(c2.Type)
+}
+
+func columnDefaultEquals(a, b *ColumnDefaultValue) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.Literal != b.Literal || a.ReturnNil != b.ReturnNil || a.Parenthesized != b.Parenthesized {
+		return false
+	}
+	if a.OutType == nil || b.OutType == nil {
+		if a.OutType != b.OutType {
+			return false
+		}
+	} else if !a.OutType.Equals(b.OutType) {
+		return false
+	}
+	if a.Expr == nil || b.Expr == nil {
+		return a.Expr == b.Expr
+	}
+	return a.Expr.String() == b.Expr.String()
 }
 
 func (c *Column) DebugString(ctx *Context) string {
@@ -182,6 +204,9 @@ func (c *Column) String() string {
 func FormatColumnExtra(c *Column) string {
 	if c == nil {
 		return ""
+	}
+	if c.Extra != "" {
+		return c.Extra
 	}
 	// EXTRA formats auto_increment and on update in lowercase, unlike
 	// SHOW CREATE TABLE:

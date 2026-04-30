@@ -77,6 +77,7 @@ func (f FakeExtendedType) SQL(*Context, []byte, any) (sqltypes.Value, error) {
 	return sqltypes.Value{}, nil
 }
 func (f FakeExtendedType) Type() query.Type        { return query.Type_VARCHAR }
+func (f FakeExtendedType) ValueKind() ValueKind    { return ValueKindOf(f.ZeroVal) }
 func (f FakeExtendedType) ValueType() reflect.Type { return reflect.TypeOf(f.ZeroVal) }
 func (f FakeExtendedType) Zero() any               { return f.ZeroVal }
 func (f FakeExtendedType) String() string          { return f.Name }

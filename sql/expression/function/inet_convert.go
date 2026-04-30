@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"reflect"
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql/expression"
@@ -69,7 +68,7 @@ func (i *InetAton) WithChildren(ctx *sql.Context, children ...sql.Expression) (s
 	return NewInetAton(ctx, children[0]), nil
 }
 
-func (i *InetAton) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *InetAton) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate value
 	val, err := i.Child.Eval(ctx, row)
 	if err != nil {
@@ -84,7 +83,7 @@ func (i *InetAton) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	// Expect to receive an IP address, so convert val into string
 	ipstr, err := types.ConvertToString(ctx, val, types.LongText, nil)
 	if err != nil {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(val).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(val))
 	}
 
 	// Parse IP address
@@ -149,7 +148,7 @@ func (i *Inet6Aton) WithChildren(ctx *sql.Context, children ...sql.Expression) (
 	return NewInet6Aton(ctx, children[0]), nil
 }
 
-func (i *Inet6Aton) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *Inet6Aton) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate value
 	val, err := i.Child.Eval(ctx, row)
 	if err != nil {
@@ -234,7 +233,7 @@ func (i *InetNtoa) WithChildren(ctx *sql.Context, children ...sql.Expression) (s
 	return NewInetNtoa(ctx, children[0]), nil
 }
 
-func (i *InetNtoa) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *InetNtoa) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate value
 	val, err := i.Child.Eval(ctx, row)
 	if err != nil {
@@ -252,7 +251,7 @@ func (i *InetNtoa) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	// anything INET_ATON produced for a normal public address.
 	ipv4int, _, err := types.Int64.Convert(ctx, val)
 	if ipv4int != nil && err != nil && !sql.ErrTruncatedIncorrect.Is(err) {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(val).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(val))
 	}
 
 	// Received a hex string instead of int
@@ -318,7 +317,7 @@ func (i *Inet6Ntoa) WithChildren(ctx *sql.Context, children ...sql.Expression) (
 	return NewInet6Ntoa(ctx, children[0]), nil
 }
 
-func (i *Inet6Ntoa) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+func (i *Inet6Ntoa) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Evaluate value
 	val, err := i.Child.Eval(ctx, row)
 	if err != nil {

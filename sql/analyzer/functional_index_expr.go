@@ -15,8 +15,6 @@
 package analyzer
 
 import (
-	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -61,7 +59,7 @@ func buildIndexedExprToColumnNameMap(ctx *sql.Context, cat sql.Catalog, indexes 
 		return indexedExprs, nil
 	}
 
-	// Use the schema from the table node already in the query plan, not from cat.Table() —
+	// Use the schema from the table node already in the query plan, not from cat.Table();
 	// the catalog would return raw unresolved expressions from storage (e.g. in Dolt,
 	// hidden system column expressions would still be UnresolvedColumnDefault strings).
 	// resolveTableSchema handles lazy resolution of any remaining placeholders.
@@ -77,7 +75,7 @@ func buildIndexedExprToColumnNameMap(ctx *sql.Context, cat sql.Catalog, indexes 
 			if columnIdx < 0 {
 				// The column may not appear in a projected schema (e.g. inside a subquery
 				// that only selects a subset of columns). Non-hidden columns can be safely
-				// skipped here — we only care about HiddenSystem columns.
+				// skipped here; we only care about HiddenSystem columns.
 				continue
 			}
 			if sch[columnIdx].HiddenSystem && sch[columnIdx].Generated != nil {
@@ -137,13 +135,11 @@ func buildColumnIdToIndexedExprMap(ctx *sql.Context, cat sql.Catalog, tableNode 
 // functional expression indexes.
 //
 // TODO: this function is a candidate for eventual promotion to a package-level utility
-// in the sql or expression package (e.g., expression.ExprEquals). Do NOT add Equals to
-// the sql.Expression interface itself — unlike sql.Type.Equals, expression equality has
-// no single unambiguous semantics: GetField.IsSameField includes the table qualifier;
-// this function ignores it. NOW() is structurally self-equal but never value-equal.
-// Any interface-level Equals would have to pick one semantic and be wrong for other
-// callers. If more call sites emerge, a standalone function or an optional
-// ExpressionComparer interface is likely a better path.
+// in the sql or expression package. Do NOT add Equals to the sql.Expression interface
+// itself; unlike sql.Type.Equals, expression equality has no single unambiguous
+// semantics. GetField.IsSameField includes the table qualifier; this function ignores it.
+// NOW() is structurally self-equal but never value-equal. Any interface-level Equals
+// would have to pick one semantic and be wrong for other callers.
 func expressionsEquivalent(a, b sql.Expression) bool {
 	if a == nil && b == nil {
 		return true
@@ -151,13 +147,13 @@ func expressionsEquivalent(a, b sql.Expression) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	if reflect.TypeOf(a) != reflect.TypeOf(b) {
+	if sql.TypeName(a) != sql.TypeName(b) {
 		return false
 	}
 
 	switch av := a.(type) {
 	case *expression.GetField:
-		// Ignore table qualifier and quoteName — only the column name matters for
+		// Ignore table qualifier and quoteName; only the column name matters for
 		// functional index matching. This is intentionally different from
 		// GetField.IsSameField, which includes the table name.
 		return strings.EqualFold(av.Name(), b.(*expression.GetField).Name())
@@ -170,7 +166,7 @@ func expressionsEquivalent(a, b sql.Expression) bool {
 	// For arithmetic-like nodes where a single Go type encodes multiple operators:
 	// Arithmetic uses one struct type for +, -, and *, distinguished by the Op field.
 	// Div, Mod, and IntDiv are each their own type (Operator() returns a fixed string),
-	// so the reflect.TypeOf check above already covers them — but checking Operator()
+	// so the type-name check above already covers them, but checking Operator()
 	// here is harmless and future-proof against similar polymorphic types.
 	if opA, ok := operatorOf(a); ok {
 		opB, okB := operatorOf(b)
@@ -180,7 +176,7 @@ func expressionsEquivalent(a, b sql.Expression) bool {
 	}
 
 	// Recurse into children uniformly for all other node types (functions, comparisons,
-	// conversions, etc.). The reflect.TypeOf check above ensures the node types match,
+	// conversions, etc.). The type-name check above ensures the node types match,
 	// so Children() returns semantically parallel slices.
 	aChildren := a.Children()
 	bChildren := b.Children()
@@ -193,30 +189,6 @@ func expressionsEquivalent(a, b sql.Expression) bool {
 		}
 	}
 	return true
-}
-
-// operatorOf returns a comparable representation of e's Operator()-equivalent value, if it has
-// one, along with true. The fast path is a plain type assertion that covers all of
-// GMS's own expression types, e.g. Arithmetic's `Operator() string`. Reflection is only used
-// as a fallback, for expression types that don't satisfy
-// that interface, to also support integrators whose polymorphic expression types implement an
-// Operator()-equivalent method with a different declared return type (e.g. doltgresql's
-// BinaryOperator.Operator() returns its own framework.Operator, not string).
-//
-// The returned string is only meaningful as a comparison key between two values known to come from
-// the same concrete Operator() return type (operatorOf's only caller guarantees this via
-// its prior reflect.TypeOf(a) != reflect.TypeOf(b) check). Comparing stringified operators across
-// different underlying types is not safe in general, so operatorOf must not be used to
-// compare expressions of different concrete types.
-func operatorOf(e sql.Expression) (string, bool) {
-	if o, ok := e.(interface{ Operator() string }); ok {
-		return o.Operator(), true
-	}
-	m := reflect.ValueOf(e).MethodByName("Operator")
-	if !m.IsValid() || m.Type().NumIn() != 0 || m.Type().NumOut() != 1 {
-		return "", false
-	}
-	return fmt.Sprint(m.Call(nil)[0].Interface()), true
 }
 
 // resolveTableSchema returns tableNode's schema with any UnresolvedColumnDefault expressions

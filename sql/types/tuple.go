@@ -17,7 +17,6 @@ package types
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/dolthub/vitess/go/sqltypes"
@@ -26,7 +25,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 )
 
-var tupleValueType = reflect.TypeOf((*[]interface{})(nil)).Elem()
+var tupleValueType = sql.ValueKindTuple
 
 type TupleType []sql.Type
 
@@ -38,7 +37,7 @@ func CreateTuple(types ...sql.Type) sql.Type {
 	return TupleType(types)
 }
 
-func (t TupleType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t TupleType) Compare(ctx context.Context, a any, b any) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -53,8 +52,8 @@ func (t TupleType) Compare(ctx context.Context, a interface{}, b interface{}) (i
 		return 0, err
 	}
 
-	left := a.([]interface{})
-	right := b.([]interface{})
+	left := a.([]any)
+	right := b.([]any)
 	for i := range left {
 		cmp, err := t[i].Compare(ctx, left[i], right[i])
 		if err != nil {
@@ -69,16 +68,16 @@ func (t TupleType) Compare(ctx context.Context, a interface{}, b interface{}) (i
 	return 0, nil
 }
 
-func (t TupleType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t TupleType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	if v == nil {
 		return nil, sql.InRange, nil
 	}
-	if vals, ok := v.([]interface{}); ok {
+	if vals, ok := v.([]any); ok {
 		if len(vals) != len(t) {
 			return nil, sql.InRange, sql.ErrInvalidColumnNumber.New(len(t), len(vals))
 		}
 
-		var result = make([]interface{}, len(t))
+		var result = make([]any, len(t))
 		for i, typ := range t {
 			var err error
 			result[i], _, err = typ.Convert(ctx, vals[i])
@@ -115,7 +114,7 @@ func (t TupleType) Promote() sql.Type {
 	return t
 }
 
-func (t TupleType) SQL(*sql.Context, []byte, interface{}) (sqltypes.Value, error) {
+func (t TupleType) SQL(*sql.Context, []byte, any) (sqltypes.Value, error) {
 	return sqltypes.Value{}, fmt.Errorf("unable to convert tuple type to SQL")
 }
 
@@ -132,12 +131,12 @@ func (t TupleType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t TupleType) ValueType() reflect.Type {
+func (t TupleType) ValueKind() sql.ValueKind {
 	return tupleValueType
 }
 
-func (t TupleType) Zero() interface{} {
-	zeroes := make([]interface{}, len(t))
+func (t TupleType) Zero() any {
+	zeroes := make([]any, len(t))
 	for i, tt := range t {
 		zeroes[i] = tt.Zero()
 	}

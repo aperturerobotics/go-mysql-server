@@ -301,7 +301,7 @@ func BenchmarkGroupBy(b *testing.B) {
 	)
 
 	expected = []sql.Row{}
-	for i := int64(0); i < 50; i++ {
+	for i := range int64(50) {
 		expected = append(expected, sql.NewRow(i, int64(200)))
 	}
 
@@ -318,7 +318,7 @@ func benchmarkTable(t testing.TB) sql.Table {
 		{Name: "b", Type: types.Int64},
 	}), nil)
 
-	for i := int64(0); i < 50; i++ {
+	for i := range int64(50) {
 		for j := int64(200); j > 0; j-- {
 			row := sql.NewRow(i, j)
 			require.NoError(table.Insert(sql.NewEmptyContext(), row))

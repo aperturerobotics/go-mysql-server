@@ -16,12 +16,10 @@ package types
 
 import (
 	"context"
-	"math"
-	"reflect"
-
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
 	"gopkg.in/src-d/go-errors.v1"
+	"math"
 
 	"github.com/dolthub/go-mysql-server/sql"
 )
@@ -40,10 +38,14 @@ type MultiLineString struct {
 	SRID  uint32
 }
 
+func (l MultiLineString) ValueKind() sql.ValueKind {
+	return sql.ValueKindMultiLineString
+}
+
 var (
 	ErrNotMultiLineString = errors.NewKind("value of type %T is not a multilinestring")
 
-	multilinestringValueType = reflect.TypeOf(MultiLineString{})
+	multilinestringValueType = sql.ValueKindMultiLineString
 )
 
 var _ sql.Type = MultiLineStringType{}
@@ -52,12 +54,12 @@ var _ sql.CollationCoercible = MultiLineStringType{}
 var _ GeometryValue = MultiLineString{}
 
 // Compare implements Type interface.
-func (t MultiLineStringType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t MultiLineStringType) Compare(ctx context.Context, a any, b any) (int, error) {
 	return GeometryType{}.Compare(ctx, a, b)
 }
 
 // Convert implements Type interface.
-func (t MultiLineStringType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t MultiLineStringType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	switch buf := v.(type) {
 	case nil:
 		return nil, sql.InRange, nil
@@ -102,7 +104,7 @@ func (t MultiLineStringType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t MultiLineStringType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t MultiLineStringType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -128,12 +130,12 @@ func (t MultiLineStringType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t MultiLineStringType) ValueType() reflect.Type {
+func (t MultiLineStringType) ValueKind() sql.ValueKind {
 	return multilinestringValueType
 }
 
 // Zero implements Type interface.
-func (t MultiLineStringType) Zero() interface{} {
+func (t MultiLineStringType) Zero() any {
 	return MultiLineString{Lines: []LineString{LineStringType{}.Zero().(LineString)}}
 }
 
@@ -155,7 +157,7 @@ func (t MultiLineStringType) SetSRID(v uint32) sql.Type {
 }
 
 // MatchSRID implements SpatialColumnType interface
-func (t MultiLineStringType) MatchSRID(v interface{}) error {
+func (t MultiLineStringType) MatchSRID(v any) error {
 	val, ok := v.(MultiLineString)
 	if !ok {
 		return ErrNotMultiLineString.New(v)

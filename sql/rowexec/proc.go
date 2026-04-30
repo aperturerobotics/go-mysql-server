@@ -185,8 +185,8 @@ func (b *BaseBuilder) buildCall(ctx *sql.Context, n *plan.Call, row sql.Row) (sq
 	if n.Procedure.ExternalProc != nil {
 		// Statements that call this are rejected before they run (see procedures.SubStatementError). This also covers a
 		// call that wasn't checked, before the procedure has any effect.
-		if ep, ok := n.Procedure.ExternalProc.(*plan.ExternalProcedure); ok && ep.NotAllowedInSubStatement && ctx.IsSubStatement() {
-			return nil, sql.ErrCommitNotAllowedInSubStatement.New()
+		if err := n.Procedure.CheckSubStatement(ctx); err != nil {
+			return nil, err
 		}
 		for i, paramExpr := range n.Params {
 			val, err := paramExpr.Eval(ctx, row)

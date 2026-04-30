@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 )
 
 // UserName represents either a user or role name.

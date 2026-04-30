@@ -16,7 +16,6 @@ package function
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 	"unicode/utf8"
 
@@ -105,7 +104,7 @@ func (s *Substring) Eval(
 	case nil:
 		return nil, nil
 	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(str))
 	}
 
 	start, err := s.Start.Eval(ctx, row)
@@ -244,7 +243,7 @@ func (s *SubstringIndex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error
 
 	str, ok := ex.(string)
 	if !ok {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(ex).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(ex))
 	}
 
 	ex, err = s.delim.Eval(ctx, row)
@@ -264,7 +263,7 @@ func (s *SubstringIndex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error
 
 	delim, ok := ex.(string)
 	if !ok {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(ex).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(ex))
 	}
 
 	ex, err = s.count.Eval(ctx, row)
@@ -277,7 +276,7 @@ func (s *SubstringIndex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error
 	}
 	count, ok := ex.(int64)
 	if !ok {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(ex).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(ex))
 	}
 
 	// Implementation taken from pingcap/tidb
@@ -392,7 +391,7 @@ func (l Left) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	case nil:
 		return nil, nil
 	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(str))
 	}
 
 	var length int64
@@ -510,7 +509,7 @@ func (r Right) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	case nil:
 		return nil, nil
 	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(str))
 	}
 
 	var length int64

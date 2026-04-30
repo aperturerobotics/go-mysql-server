@@ -15,7 +15,7 @@
 package analyzer
 
 import (
-	"reflect"
+	"slices"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
@@ -170,13 +170,9 @@ func subtractExprSet(all, toSubtract []sql.Expression) []sql.Expression {
 	var remainder []sql.Expression
 
 	for _, e := range all {
-		var found bool
-		for _, s := range toSubtract {
-			if reflect.DeepEqual(e, s) {
-				found = true
-				break
-			}
-		}
+		found := slices.ContainsFunc(toSubtract, func(s sql.Expression) bool {
+			return sameFilterExpression(e, s)
+		})
 
 		if !found {
 			remainder = append(remainder, e)
@@ -184,4 +180,15 @@ func subtractExprSet(all, toSubtract []sql.Expression) []sql.Expression {
 	}
 
 	return remainder
+}
+
+// sameFilterExpression compares tuple elements without comparing slice values.
+// Other expressions retain their existing identity comparisons.
+func sameFilterExpression(left, right sql.Expression) bool {
+	if tuple, ok := left.(expression.Tuple); ok {
+		other, ok := right.(expression.Tuple)
+		return ok && slices.EqualFunc(tuple, other, sameFilterExpression)
+	}
+
+	return left == right
 }

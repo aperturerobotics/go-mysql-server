@@ -16,7 +16,6 @@ package types
 
 import (
 	"fmt"
-	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -32,8 +31,8 @@ func TestEnumCompare(t *testing.T) {
 	tests := []struct {
 		vals        []string
 		collation   sql.CollationID
-		val1        interface{}
-		val2        interface{}
+		val1        any
+		val2        any
 		expectedCmp int
 	}{
 		{[]string{"one", "two"}, sql.Collation_Default, nil, 1, 1},
@@ -116,8 +115,8 @@ func TestEnumConvert(t *testing.T) {
 	tests := []struct {
 		vals        []string
 		collation   sql.CollationID
-		val         interface{}
-		expectedVal interface{}
+		val         any
+		expectedVal any
 		expectedErr bool
 	}{
 		{[]string{"one", "two"}, sql.Collation_Default, nil, nil, false},
@@ -157,7 +156,7 @@ func TestEnumConvert(t *testing.T) {
 					cmp, err := typ.Compare(ctx, test.val, umar)
 					require.NoError(t, err)
 					assert.Equal(t, 0, cmp)
-					assert.Equal(t, typ.ValueType(), reflect.TypeOf(val))
+					assert.Equal(t, typ.ValueKind(), sql.ValueKindOf(val))
 				} else {
 					assert.Equal(t, test.expectedVal, val)
 				}

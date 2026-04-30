@@ -18,9 +18,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dolthub/go-mysql-server/sql/mysql_db"
-
-	"github.com/dolthub/go-mysql-server/memory"
 	"github.com/dolthub/go-mysql-server/sql"
 )
 
@@ -50,7 +47,7 @@ func NewResolvedTable(table sql.Table, db sql.Database, asOf interface{}) *Resol
 
 // NewResolvedDualTable creates a new instance of ResolvedTable.
 func NewResolvedDualTable() *ResolvedTable {
-	return &ResolvedTable{Table: NewDualSqlTable(), SqlDatabase: memory.NewDatabase(""), AsOf: nil}
+	return &ResolvedTable{Table: NewDualSqlTable(), SqlDatabase: NewDummyResolvedDB(""), AsOf: nil}
 }
 
 // WithId implements sql.TableIdNode
@@ -94,7 +91,7 @@ func (t *ResolvedTable) Database() sql.Database {
 }
 
 func (t *ResolvedTable) UnwrappedDatabase() sql.Database {
-	if privDb, ok := t.SqlDatabase.(mysql_db.PrivilegedDatabase); ok {
+	if privDb, ok := t.SqlDatabase.(sql.PrivilegedDatabase); ok {
 		return privDb.Unwrap()
 	}
 	return t.SqlDatabase

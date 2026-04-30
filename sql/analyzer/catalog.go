@@ -20,12 +20,9 @@ import (
 	"sync"
 
 	"github.com/dolthub/go-mysql-server/internal/similartext"
-	"github.com/dolthub/go-mysql-server/memory"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/binlogreplication"
 	"github.com/dolthub/go-mysql-server/sql/expression/function"
-	"github.com/dolthub/go-mysql-server/sql/information_schema"
-	"github.com/dolthub/go-mysql-server/sql/mysql_db"
 )
 
 type Catalog struct {
@@ -43,7 +40,7 @@ type Catalog struct {
 	// replication messages (e.g. "show replicas") and commands (e.g. COM_REGISTER_REPLICA).
 	BinlogPrimaryController binlogreplication.BinlogPrimaryController
 
-	MySQLDb          *mysql_db.MySQLDb
+	MySQLDb          catalogMySQLDb
 	builtInFunctions function.Registry
 	overrides        sql.EngineOverrides
 
@@ -65,12 +62,12 @@ type sessionLocks map[uint32]dbLocks
 // NewCatalog returns a new empty Catalog with the given provider
 func NewCatalog(provider sql.DatabaseProvider, overrides sql.EngineOverrides) *Catalog {
 	c := &Catalog{
-		MySQLDb:          mysql_db.CreateEmptyMySQLDb(),
-		InfoSchema:       information_schema.NewInformationSchemaDatabase(),
+		MySQLDb:          newCatalogMySQLDb(),
+		InfoSchema:       newCatalogInfoSchema(),
 		DbProvider:       provider,
 		builtInFunctions: function.NewRegistry(),
 		overrides:        overrides,
-		StatsProvider:    memory.NewStatsProv(),
+		StatsProvider:    newStatsProvider(),
 		locks:            make(sessionLocks),
 	}
 	c.AuthHandler = sql.GetAuthorizationHandlerFactory().CreateHandler(c)
@@ -105,22 +102,35 @@ func (c *Catalog) WithTableFunctions(fns ...sql.TableFunction) (sql.TableFunctio
 	if tfp, ok := c.DbProvider.(sql.TableFunctionProvider); !ok {
 		return nil, fmt.Errorf("catalog does not implement sql.TableFunctionProvider")
 	} else {
-		ret := *c
 		newProv, err := tfp.WithTableFunctions(fns...)
 		if err != nil {
 			return nil, err
 		}
-		ret.DbProvider = newProv.(sql.DatabaseProvider)
-		return &ret, nil
+		ret := &Catalog{
+			InfoSchema:              c.InfoSchema,
+			StatsProvider:           c.StatsProvider,
+			DbProvider:              newProv.(sql.DatabaseProvider),
+			AuthHandler:             c.AuthHandler,
+			BinlogConsumer:          c.BinlogConsumer,
+			BinlogReplicaController: c.BinlogReplicaController,
+			BinlogPrimaryController: c.BinlogPrimaryController,
+			MySQLDb:                 c.MySQLDb,
+			builtInFunctions:        c.builtInFunctions,
+			overrides:               c.overrides,
+			locks:                   c.locks,
+		}
+		return ret, nil
 	}
 }
 
 func (c *Catalog) AllDatabases(ctx *sql.Context) []sql.Database {
 	var dbs []sql.Database
-	dbs = append(dbs, c.InfoSchema)
+	if c.InfoSchema != nil {
+		dbs = append(dbs, c.InfoSchema)
+	}
 
-	if c.MySQLDb.Enabled() {
-		dbs = append(dbs, mysql_db.NewPrivilegedDatabaseProvider(c.MySQLDb, c.DbProvider, c.AuthHandler).AllDatabases(ctx)...)
+	if catalogMySQLDbEnabled(c.MySQLDb) {
+		dbs = append(dbs, newCatalogDatabaseProvider(c.MySQLDb, c.DbProvider, c.AuthHandler).AllDatabases(ctx)...)
 	} else {
 		dbs = append(dbs, c.DbProvider.AllDatabases(ctx)...)
 	}
@@ -164,7 +174,7 @@ func (c *Catalog) RemoveDatabase(ctx *sql.Context, dbName string) error {
 	if !ok {
 		return sql.ErrImmutableDatabaseProvider.New()
 	}
-	if strings.EqualFold(dbName, "information_schema") || (c.MySQLDb.Enabled() && strings.EqualFold(dbName, "mysql")) {
+	if c.InfoSchema != nil && strings.EqualFold(dbName, "information_schema") || (catalogMySQLDbEnabled(c.MySQLDb) && strings.EqualFold(dbName, "mysql")) {
 		return fmt.Errorf("unable to drop database: %s", dbName)
 	}
 	return mut.DropDatabase(ctx, dbName)
@@ -172,10 +182,10 @@ func (c *Catalog) RemoveDatabase(ctx *sql.Context, dbName string) error {
 
 func (c *Catalog) HasDatabase(ctx *sql.Context, db string) bool {
 	db = strings.ToLower(db)
-	if db == "information_schema" {
+	if db == "information_schema" && c.InfoSchema != nil {
 		return true
-	} else if c.MySQLDb.Enabled() {
-		return mysql_db.NewPrivilegedDatabaseProvider(c.MySQLDb, c.DbProvider, c.AuthHandler).HasDatabase(ctx, db)
+	} else if catalogMySQLDbEnabled(c.MySQLDb) {
+		return newCatalogDatabaseProvider(c.MySQLDb, c.DbProvider, c.AuthHandler).HasDatabase(ctx, db)
 	} else {
 		return c.DbProvider.HasDatabase(ctx, db)
 	}
@@ -183,10 +193,10 @@ func (c *Catalog) HasDatabase(ctx *sql.Context, db string) bool {
 
 // Database returns the database with the given name.
 func (c *Catalog) Database(ctx *sql.Context, db string) (sql.Database, error) {
-	if strings.ToLower(db) == "information_schema" {
+	if strings.ToLower(db) == "information_schema" && c.InfoSchema != nil {
 		return c.InfoSchema, nil
-	} else if c.MySQLDb.Enabled() {
-		return mysql_db.NewPrivilegedDatabaseProvider(c.MySQLDb, c.DbProvider, c.AuthHandler).Database(ctx, db)
+	} else if catalogMySQLDbEnabled(c.MySQLDb) {
+		return newCatalogDatabaseProvider(c.MySQLDb, c.DbProvider, c.AuthHandler).Database(ctx, db)
 	} else {
 		return c.DbProvider.Database(ctx, db)
 	}
@@ -306,7 +316,7 @@ func (c *Catalog) DatabaseTable(ctx *sql.Context, db sql.Database, tableName str
 
 // TableAsOf returns the table in the given database with the given name, as it existed at the time given. The database
 // named must support timed queries.
-func (c *Catalog) TableAsOf(ctx *sql.Context, dbName, tableName string, asOf interface{}) (sql.Table, sql.Database, error) {
+func (c *Catalog) TableAsOf(ctx *sql.Context, dbName, tableName string, asOf any) (sql.Table, sql.Database, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -318,7 +328,7 @@ func (c *Catalog) TableAsOf(ctx *sql.Context, dbName, tableName string, asOf int
 	return c.DatabaseTableAsOf(ctx, db, tableName, asOf)
 }
 
-func (c *Catalog) DatabaseTableAsOf(ctx *sql.Context, db sql.Database, tableName string, asOf interface{}) (sql.Table, sql.Database, error) {
+func (c *Catalog) DatabaseTableAsOf(ctx *sql.Context, db sql.Database, tableName string, asOf any) (sql.Table, sql.Database, error) {
 	_, ok := db.(sql.UnresolvedDatabase)
 	if ok {
 		return c.TableAsOf(ctx, db.Name(), tableName, asOf)
@@ -369,32 +379,22 @@ func (c *Catalog) Function(ctx *sql.Context, schema, name string) (sql.Function,
 	return c.builtInFunctions.Function(ctx, schema, name)
 }
 
-// ExternalStoredProcedure implements sql.ExternalStoredProcedureProvider
+// ExternalStoredProcedure returns a built-in procedure from the provider.
 func (c *Catalog) ExternalStoredProcedure(ctx *sql.Context, name string, numOfParams int) (*sql.ExternalStoredProcedureDetails, error) {
-	if espp, ok := c.DbProvider.(sql.ExternalStoredProcedureProvider); ok {
-		esp, err := espp.ExternalStoredProcedure(ctx, name, numOfParams)
-		if err != nil {
-			return nil, err
-		} else if esp != nil {
-			return esp, nil
-		}
+	provider, ok := c.DbProvider.(sql.ExternalStoredProcedureProvider)
+	if !ok {
+		return nil, nil
 	}
-
-	return nil, nil
+	return provider.ExternalStoredProcedure(ctx, name, numOfParams)
 }
 
-// ExternalStoredProcedures implements sql.ExternalStoredProcedureProvider
+// ExternalStoredProcedures returns the provider's built-in procedure variants.
 func (c *Catalog) ExternalStoredProcedures(ctx *sql.Context, name string) ([]sql.ExternalStoredProcedureDetails, error) {
-	if espp, ok := c.DbProvider.(sql.ExternalStoredProcedureProvider); ok {
-		esps, err := espp.ExternalStoredProcedures(ctx, name)
-		if err != nil {
-			return nil, err
-		} else if esps != nil {
-			return esps, nil
-		}
+	provider, ok := c.DbProvider.(sql.ExternalStoredProcedureProvider)
+	if !ok {
+		return nil, nil
 	}
-
-	return nil, nil
+	return provider.ExternalStoredProcedures(ctx, name)
 }
 
 // TableFunction implements the TableFunctionProvider interface
@@ -504,7 +504,7 @@ func suggestSimilarTables(db sql.Database, ctx *sql.Context, tableName string) e
 	return sql.ErrTableNotFound.New(tableName + similar)
 }
 
-func suggestSimilarTablesAsOf(db sql.VersionedDatabase, ctx *sql.Context, tableName string, time interface{}) error {
+func suggestSimilarTablesAsOf(db sql.VersionedDatabase, ctx *sql.Context, tableName string, time any) error {
 	tableNames, err := db.GetTableNamesAsOf(ctx, time)
 	if err != nil {
 		return err

@@ -24,13 +24,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dolthub/vitess/go/mysql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
+	"github.com/dolthub/go-mysql-server/sql/otel/attribute"
+	otel "github.com/dolthub/go-mysql-server/sql/otel/trace"
 	"github.com/dolthub/vitess/go/sqltypes"
 	querypb "github.com/dolthub/vitess/go/vt/proto/query"
 	"github.com/dolthub/vitess/go/vt/sqlparser"
 	"github.com/sirupsen/logrus"
-	"go.opentelemetry.io/otel/attribute"
-	otel "go.opentelemetry.io/otel/trace"
 	"gopkg.in/src-d/go-errors.v1"
 
 	sqle "github.com/dolthub/go-mysql-server"
@@ -1124,7 +1124,7 @@ func updateMaxUsedConnectionsStatusVariable(registry sql.StatusVariableRegistry)
 	}()
 }
 
-func toSqlHelper(ctx *sql.Context, typ sql.Type, buf *sql.ByteBuffer, val interface{}) (sqltypes.Value, error) {
+func toSqlHelper(ctx *sql.Context, typ sql.Type, buf *sql.ByteBuffer, val any) (sqltypes.Value, error) {
 	if buf == nil {
 		return typ.SQL(ctx, nil, val)
 	}

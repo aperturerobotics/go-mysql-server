@@ -118,7 +118,7 @@ func (bv *BindvarContext) UnusedBindings() []string {
 // ViewContext overwrites database root source of nested
 // calls.
 type ViewContext struct {
-	AsOf   interface{}
+	AsOf   any
 	DbName string
 	// resolving holds the views being resolved, from the outermost to the innermost.
 	resolving []viewID
@@ -142,7 +142,7 @@ type TriggerContext struct {
 // ProcContext allows nested CALLs to use the same database for resolving
 // procedure definitions without changing the underlying database roots.
 type ProcContext struct {
-	AsOf   interface{}
+	AsOf   any
 	DbName string
 }
 

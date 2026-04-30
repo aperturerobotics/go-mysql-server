@@ -16,11 +16,10 @@ package planbuilder
 
 import (
 	goerrors "errors"
-	"runtime/trace"
 
+	"github.com/dolthub/go-mysql-server/sql/otel/attribute"
+	otel "github.com/dolthub/go-mysql-server/sql/otel/trace"
 	ast "github.com/dolthub/vitess/go/vt/sqlparser"
-	"go.opentelemetry.io/otel/attribute"
-	otel "go.opentelemetry.io/otel/trace"
 	"gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -33,7 +32,7 @@ const maxAnalysisIterations = 8
 var ErrMaxAnalysisIters = errors.NewKind("exceeded max analysis iterations (%d)")
 
 func (b *Builder) Parse(query string, qFlags *sql.QueryFlags, multi bool) (ret sql.Node, parsed, remainder string, qProps *sql.QueryFlags, err error) {
-	defer trace.StartRegion(b.ctx, "ParseOnly").End()
+	defer startTraceRegion(b.ctx, "ParseOnly").End()
 	b.nesting++
 	if b.nesting > maxAnalysisIterations {
 		return nil, "", "", nil, ErrMaxAnalysisIters.New(maxAnalysisIterations)
@@ -98,7 +97,7 @@ func (b *Builder) BindOnly(stmt ast.Statement, s string, queryFlags *sql.QueryFl
 }
 
 func (b *Builder) bindOnly(stmt ast.Statement, s string, queryFlags *sql.QueryFlags) (_ *scope, err error) {
-	defer trace.StartRegion(b.ctx, "BindOnly").End()
+	defer startTraceRegion(b.ctx, "BindOnly").End()
 	defer func() {
 		if r := recover(); r != nil {
 			switch r := r.(type) {

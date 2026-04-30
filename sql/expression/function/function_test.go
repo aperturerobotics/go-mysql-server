@@ -17,6 +17,7 @@ package function
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ import (
 type FuncTest struct {
 	name      string
 	expr      sql.Expression
-	expected  interface{}
+	expected  any
 	expectErr bool
 }
 
@@ -53,7 +54,7 @@ func (ft FuncTest) Run(t *testing.T, ctx *sql.Context, r sql.Row) {
 	})
 }
 
-func assertResultType(t *testing.T, expectedType sql.Type, result interface{}) {
+func assertResultType(t *testing.T, expectedType sql.Type, result any) {
 	if result == nil {
 		return
 	}
@@ -93,11 +94,11 @@ func assertResultType(t *testing.T, expectedType sql.Type, result interface{}) {
 }
 
 type TestFactory struct {
-	createFunc interface{}
+	createFunc any
 	Tests      []FuncTest
 }
 
-func NewTestFactory(createFunc interface{}) *TestFactory {
+func NewTestFactory(createFunc any) *TestFactory {
 	switch createFunc.(type) {
 	case sql.CreateFunc0Args, sql.CreateFunc1Args, sql.CreateFunc2Args, sql.CreateFunc3Args, sql.CreateFunc4Args, sql.CreateFunc5Args, sql.CreateFunc6Args, sql.CreateFunc7Args, sql.CreateFuncNArgs:
 	default:
@@ -113,7 +114,7 @@ func (tf *TestFactory) Test(t *testing.T, ctx *sql.Context, r sql.Row) {
 	}
 }
 
-func (tf *TestFactory) AddTest(name string, expected interface{}, expectErr bool, inputs ...interface{}) {
+func (tf *TestFactory) AddTest(name string, expected any, expectErr bool, inputs ...any) {
 	var test FuncTest
 	ctx := sql.NewEmptyContext()
 
@@ -191,12 +192,12 @@ func (tf *TestFactory) AddTest(name string, expected interface{}, expectErr bool
 	tf.Tests = append(tf.Tests, test)
 }
 
-func (tf *TestFactory) AddSucceeding(expected interface{}, args ...interface{}) {
+func (tf *TestFactory) AddSucceeding(expected any, args ...any) {
 	name := generateNameFromArgs(args...)
 	tf.AddTest(name, expected, false, args...)
 }
 
-func (tf *TestFactory) AddFailing(args ...interface{}) {
+func (tf *TestFactory) AddFailing(args ...any) {
 	name := generateNameFromArgs(args...)
 	tf.AddTest(name, nil, true, args...)
 }
@@ -207,7 +208,7 @@ func isValidIntOfSize(bits int, n int64) bool {
 	return n < max && n > min
 }
 
-func (tf *TestFactory) AddSignedVariations(expected interface{}, arg int64) {
+func (tf *TestFactory) AddSignedVariations(expected any, arg int64) {
 	if isValidIntOfSize(8, arg) {
 		tf.AddSucceeding(expected, int8(arg))
 	}
@@ -229,7 +230,7 @@ func isValidUintOfSize(bits int, n uint64) bool {
 	return n < max
 }
 
-func (tf *TestFactory) AddUnsignedVariations(expected interface{}, arg uint64) {
+func (tf *TestFactory) AddUnsignedVariations(expected any, arg uint64) {
 	if isValidUintOfSize(8, arg) {
 		tf.AddSucceeding(expected, uint8(arg))
 	}
@@ -246,33 +247,34 @@ func (tf *TestFactory) AddUnsignedVariations(expected interface{}, arg uint64) {
 	tf.AddSucceeding(expected, arg)
 }
 
-func (tf *TestFactory) AddFloatVariations(expected interface{}, f float64) {
+func (tf *TestFactory) AddFloatVariations(expected any, f float64) {
 	tf.AddSucceeding(expected, f)
 	tf.AddSucceeding(expected, float32(f))
 	tf.AddSucceeding(expected, types.DecimalFromFloat64(f))
 }
 
-func generateNameFromArgs(args ...interface{}) string {
-	name := "("
+func generateNameFromArgs(args ...any) string {
+	var name strings.Builder
+	name.WriteString("(")
 
 	for i, arg := range args {
 		if i > 0 {
-			name += ","
+			name.WriteString(",")
 		}
 
 		if arg == nil {
-			name += "nil"
+			name.WriteString("nil")
 		} else {
-			name += fmt.Sprintf("%s{%v}", reflect.TypeOf(arg).String(), arg)
+			name.WriteString(fmt.Sprintf("%s{%v}", reflect.TypeOf(arg).String(), arg))
 		}
 	}
 
-	name += ")"
+	name.WriteString(")")
 
-	return name
+	return name.String()
 }
 
-func toLiteralExpressions(inputs []interface{}) []sql.Expression {
+func toLiteralExpressions(inputs []any) []sql.Expression {
 	literals := make([]sql.Expression, len(inputs))
 	for i, in := range inputs {
 		literals[i] = toLiteralExpression(in)
@@ -281,7 +283,7 @@ func toLiteralExpressions(inputs []interface{}) []sql.Expression {
 	return literals
 }
 
-func toLiteralExpression(input interface{}) *expression.Literal {
+func toLiteralExpression(input any) *expression.Literal {
 	if input == nil {
 		return expression.NewLiteral(nil, types.Null)
 	}

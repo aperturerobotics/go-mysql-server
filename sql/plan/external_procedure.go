@@ -1,3 +1,5 @@
+//go:build !sql_lite
+
 // Copyright 2022 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -146,6 +148,7 @@ func (n *ExternalProcedure) RowIter(ctx *sql.Context, row sql.Row) (sql.RowIter,
 			if err != nil {
 				return nil, err
 			}
+			_ = ctx.Session.SetStoredProcParam(exprParam.Name(), funcParamVal)
 		}
 	}
 	// It's not invalid to return a nil RowIter, as having no rows to return is expected of many stored procedures.

@@ -18,10 +18,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"reflect"
 
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
+	"github.com/dolthub/go-mysql-server/sql/otel/attribute"
+	"github.com/dolthub/go-mysql-server/sql/otel/trace"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/hash"
@@ -180,12 +179,12 @@ func newJoinState(ctx *sql.Context, b sql.NodeExecBuilder, j *plan.JoinNode, par
 	if leftTable, ok := j.Left().(sql.Nameable); ok {
 		left = leftTable.Name()
 	} else {
-		left = reflect.TypeOf(j.Left()).String()
+		left = sql.TypeName(j.Left())
 	}
 	if rightTable, ok := j.Right().(sql.Nameable); ok {
 		right = rightTable.Name()
 	} else {
-		right = reflect.TypeOf(j.Right()).String()
+		right = sql.TypeName(j.Right())
 	}
 
 	span, ctx := ctx.Span(opName, trace.WithAttributes(

@@ -142,6 +142,7 @@ type PrivilegedDatabase struct {
 }
 
 var _ sql.Database = PrivilegedDatabase{}
+var _ sql.PrivilegedDatabase = PrivilegedDatabase{}
 var _ sql.VersionedDatabase = PrivilegedDatabase{}
 var _ sql.TableCreator = PrivilegedDatabase{}
 var _ sql.TableDropper = PrivilegedDatabase{}

@@ -103,7 +103,7 @@ func TestUnhexFunc(t *testing.T) {
 
 func TestHexRoundTrip(t *testing.T) {
 	tests := []struct {
-		val interface{}
+		val any
 		typ sql.Type
 		out string
 	}{

@@ -16,7 +16,6 @@ package types
 
 import (
 	"fmt"
-	"reflect"
 	"testing"
 	"time"
 
@@ -29,8 +28,8 @@ import (
 func TestYearCompare(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	tests := []struct {
-		val1        interface{}
-		val2        interface{}
+		val1        any
+		val2        any
 		expectedCmp int
 	}{
 		{nil, 0, 1},
@@ -56,8 +55,8 @@ func TestYearCompare(t *testing.T) {
 func TestYearConvert(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	tests := []struct {
-		val         interface{}
-		expectedVal interface{}
+		val         any
+		expectedVal any
 		expectedErr bool
 	}{
 		{int(0), int16(0), false},
@@ -101,7 +100,7 @@ func TestYearConvert(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, test.expectedVal, val)
 				if val != nil {
-					assert.Equal(t, Year.ValueType(), reflect.TypeOf(val))
+					assert.Equal(t, Year.ValueKind(), sql.ValueKindOf(val))
 				}
 			}
 		})

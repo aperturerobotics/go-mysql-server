@@ -106,7 +106,7 @@ func TestShowIndexes(t *testing.T) {
 
 			for i, row := range rows {
 				var nullable string
-				var columnName, ex interface{}
+				var columnName, ex any
 				columnName, ex = "NULL", expressions[i].String()
 				if col := GetColumnFromIndexExpr(ctx, ex.(string), test.table); col != nil {
 					columnName, ex = col.Name, nil

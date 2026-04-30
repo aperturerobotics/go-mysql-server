@@ -16,10 +16,8 @@ package sql
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
-	trace2 "runtime/trace"
 	"strconv"
 	"time"
 	"unsafe"
@@ -248,19 +246,10 @@ type Closer interface {
 	Close(*Context) error
 }
 
-// ExternalStoredProcedureProvider provides access to built-in stored procedures. These procedures are implemented
-// as functions, instead of as SQL statements. The returned stored procedures cannot be modified or deleted.
+// ExternalStoredProcedureProvider exposes built-in stored procedures.
 type ExternalStoredProcedureProvider interface {
-	// ExternalStoredProcedure returns the external stored procedure details for the procedure with the specified name
-	// that is able to accept the specified number of parameters. If no matching external stored procedure is found,
-	// nil, nil is returned. If an unexpected error is encountered, it is returned as the error parameter.
-	ExternalStoredProcedure(ctx *Context, name string, numOfParams int) (*ExternalStoredProcedureDetails, error)
-	// ExternalStoredProcedures returns a slice of all external stored procedure details with the specified name. External
-	// stored procedures can overload the same name with different arguments, so this method enables a caller to see all
-	// available variants with the specified name. If no matching external stored procedures are found, an
-	// empty slice is returned, with a nil error. If an unexpected error is encountered, it is returned as the
-	// error parameter.
-	ExternalStoredProcedures(ctx *Context, name string) ([]ExternalStoredProcedureDetails, error)
+	ExternalStoredProcedure(*Context, string, int) (*ExternalStoredProcedureDetails, error)
+	ExternalStoredProcedures(*Context, string) ([]ExternalStoredProcedureDetails, error)
 }
 
 type TransactionCharacteristic int
@@ -432,12 +421,7 @@ func ConvertToVector(ctx context.Context, v interface{}) ([]float32, error) {
 	case []byte:
 		return DecodeVector(b)
 	case string:
-		var val interface{}
-		err := json.Unmarshal([]byte(b), &val)
-		if err != nil {
-			return nil, fmt.Errorf("can't convert JSON to vector: %w", err)
-		}
-		return convertJsonInterfaceToVector(val)
+		return convertJSONStringToVector(b)
 	case JSONWrapper:
 		val, err := b.ToInterface(ctx)
 		if err != nil {
@@ -477,8 +461,8 @@ func convertJsonInterfaceToVector(val interface{}) ([]float32, error) {
 
 // EvaluateCondition evaluates a condition, which is an expression whose value
 // will be nil or coerced boolean.
-func EvaluateCondition(ctx *Context, cond Expression, row Row) (interface{}, error) {
-	defer trace2.StartRegion(ctx, "EvaluateCondition").End()
+func EvaluateCondition(ctx *Context, cond Expression, row Row) (any, error) {
+	defer startTraceRegion(ctx, "EvaluateCondition").End()
 
 	v, err := cond.Eval(ctx, row)
 	if err != nil {
@@ -497,7 +481,7 @@ func EvaluateCondition(ctx *Context, cond Expression, row Row) (interface{}, err
 // EvaluateConditionValue evaluates a condition, which is an ValueExpression whose value
 // will be nil or coerced boolean.
 func EvaluateConditionValue(ctx *Context, cond ValueExpression, row ValueRow) (bool, error) {
-	defer trace2.StartRegion(ctx, "EvaluateCondition").End()
+	defer startTraceRegion(ctx, "EvaluateCondition").End()
 
 	v, err := cond.EvalValue(ctx, row)
 	if err != nil {
