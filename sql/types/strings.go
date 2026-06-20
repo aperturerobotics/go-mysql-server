@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -77,8 +76,8 @@ var (
 	VarChar   = MustCreateStringWithDefaults(sqltypes.VarChar, varcharVarbinaryMax)
 	VarBinary = MustCreateBinary(sqltypes.VarBinary, varcharVarbinaryMax)
 
-	stringValueType = reflect.TypeOf(string(""))
-	byteValueType   = reflect.TypeOf(([]byte)(nil))
+	stringValueType = sql.ValueKindString
+	byteValueType   = sql.ValueKindBytes
 )
 
 type StringType struct {
@@ -265,7 +264,7 @@ func (t StringType) Length() int64 {
 }
 
 // Compare implements Type interface.
-func (t StringType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t StringType) Compare(ctx context.Context, a any, b any) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -346,7 +345,7 @@ func (t StringType) CompareValue(ctx *sql.Context, a, b sql.Value) (int, error) 
 }
 
 // Convert implements Type interface.
-func (t StringType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t StringType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	if v == nil {
 		return nil, sql.InRange, nil
 	}
@@ -377,12 +376,12 @@ func (t StringType) Convert(ctx context.Context, v interface{}) (interface{}, sq
 
 }
 
-func ConvertToString(ctx context.Context, v interface{}, t sql.StringType, dest []byte) (string, error) {
+func ConvertToString(ctx context.Context, v any, t sql.StringType, dest []byte) (string, error) {
 	ret, err := ConvertToBytes(ctx, v, t, dest)
 	return string(ret), err
 }
 
-func ConvertToBytes(ctx context.Context, v interface{}, t sql.StringType, dest []byte) ([]byte, error) {
+func ConvertToBytes(ctx context.Context, v any, t sql.StringType, dest []byte) ([]byte, error) {
 	var val []byte
 	start := len(dest)
 	// Based on the type of the input, convert it into a byte array, writing it into |dest| to avoid an allocation.
@@ -612,7 +611,7 @@ func FormatInvalidByteForError(bytesVal []byte) string {
 }
 
 // convertToLongTextString safely converts a value to string using LongText.Convert with nil checking
-func convertToLongTextString(ctx context.Context, val interface{}) (string, error) {
+func convertToLongTextString(ctx context.Context, val any) (string, error) {
 	converted, _, err := LongText.Convert(ctx, val)
 	if err != nil {
 		return "", err
@@ -624,7 +623,7 @@ func convertToLongTextString(ctx context.Context, val interface{}) (string, erro
 }
 
 // convertEnumToString converts an enum value to its string representation
-func convertEnumToString(ctx context.Context, val interface{}, enumType EnumType) (string, error) {
+func convertEnumToString(ctx context.Context, val any, enumType EnumType) (string, error) {
 	if enumVal, ok := val.(uint16); ok {
 		if enumStr, exists := enumType.At(int(enumVal)); exists {
 			return enumStr, nil
@@ -635,7 +634,7 @@ func convertEnumToString(ctx context.Context, val interface{}, enumType EnumType
 }
 
 // convertSetToString converts a set value to its string representation
-func convertSetToString(ctx context.Context, val interface{}, setType SetType) (string, error) {
+func convertSetToString(ctx context.Context, val any, setType SetType) (string, error) {
 	if setVal, ok := val.(uint64); ok {
 		return setType.BitsToString(setVal)
 	}
@@ -648,7 +647,7 @@ func convertSetToString(ctx context.Context, val interface{}, setType SetType) (
 // conversions are made. If the value is a byte slice then a non-copying conversion is made, which means that the
 // original byte slice MUST NOT be modified after being passed to this function. If modifications need to be made, then
 // you must allocate a new byte slice and pass that new one in.
-func ConvertToCollatedString(ctx context.Context, val interface{}, typ sql.Type) (string, sql.CollationID, error) {
+func ConvertToCollatedString(ctx context.Context, val any, typ sql.Type) (string, sql.CollationID, error) {
 	var content string
 	var collation sql.CollationID
 	var err error
@@ -712,7 +711,7 @@ func (t StringType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t StringType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t StringType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	var err error
 	if v == nil {
 		return sqltypes.NULL, nil
@@ -842,7 +841,7 @@ func (t StringType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t StringType) ValueType() reflect.Type {
+func (t StringType) ValueKind() sql.ValueKind {
 	if IsBinaryType(t) {
 		return byteValueType
 	}
@@ -850,7 +849,7 @@ func (t StringType) ValueType() reflect.Type {
 }
 
 // Zero implements Type interface.
-func (t StringType) Zero() interface{} {
+func (t StringType) Zero() any {
 	return ""
 }
 

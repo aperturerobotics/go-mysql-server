@@ -18,8 +18,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"reflect"
-
 	"github.com/cockroachdb/apd/v3"
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
@@ -38,7 +36,7 @@ const (
 var (
 	promotedBitType = MustCreateBitType(BitTypeMaxBits)
 	errBeyondMaxBit = errors.NewKind("%v is beyond the maximum value that can be held by %v bits")
-	bitValueType    = reflect.TypeOf(uint64(0))
+	bitValueType    = sql.ValueKindUint64
 )
 
 // BitType represents the BIT type.
@@ -79,7 +77,7 @@ func (t BitType_) MaxTextResponseByteLength(*sql.Context) uint32 {
 }
 
 // Compare implements Type interface.
-func (t BitType_) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t BitType_) Compare(ctx context.Context, a any, b any) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -129,7 +127,7 @@ func (t BitType_) CompareValue(ctx *sql.Context, a, b sql.Value) (int, error) {
 }
 
 // Convert implements Type interface.
-func (t BitType_) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t BitType_) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	if v == nil {
 		return nil, sql.InRange, nil
 	}
@@ -212,7 +210,7 @@ func (t BitType_) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t BitType_) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t BitType_) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -269,7 +267,7 @@ func (t BitType_) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t BitType_) ValueType() reflect.Type {
+func (t BitType_) ValueKind() sql.ValueKind {
 	return bitValueType
 }
 
@@ -279,7 +277,7 @@ func (BitType_) CollationCoercibility(ctx *sql.Context) (collation sql.Collation
 }
 
 // Zero implements Type interface. Returns a uint64 value.
-func (t BitType_) Zero() interface{} {
+func (t BitType_) Zero() any {
 	return uint64(0)
 }
 

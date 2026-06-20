@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"reflect"
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql/expression"
@@ -84,7 +83,7 @@ func (i *InetAton) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Expect to receive an IP address, so convert val into string
 	ipstr, err := types.ConvertToString(ctx, val, types.LongText, nil)
 	if err != nil {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(val).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(val))
 	}
 
 	// Parse IP address
@@ -252,7 +251,7 @@ func (i *InetNtoa) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// anything INET_ATON produced for a normal public address.
 	ipv4int, _, err := types.Int64.Convert(ctx, val)
 	if ipv4int != nil && err != nil && !sql.ErrTruncatedIncorrect.Is(err) {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(val).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(val))
 	}
 
 	// Received a hex string instead of int

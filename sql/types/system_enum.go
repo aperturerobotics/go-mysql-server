@@ -16,7 +16,6 @@ package types
 
 import (
 	"context"
-	"reflect"
 	"strings"
 
 	"github.com/cockroachdb/apd/v3"
@@ -26,7 +25,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 )
 
-var systemEnumValueType = reflect.TypeOf(string(""))
+var systemEnumValueType = sql.ValueKindString
 
 // systemEnumType is an internal enum type ONLY for system variables.
 type systemEnumType struct {
@@ -51,7 +50,7 @@ func NewSystemEnumType(varName string, values ...string) sql.SystemVariableType 
 }
 
 // Compare implements Type interface.
-func (t systemEnumType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t systemEnumType) Compare(ctx context.Context, a any, b any) (int, error) {
 	as, _, err := t.Convert(ctx, a)
 	if err != nil {
 		return 0, err
@@ -73,7 +72,7 @@ func (t systemEnumType) Compare(ctx context.Context, a interface{}, b interface{
 }
 
 // Convert implements Type interface.
-func (t systemEnumType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t systemEnumType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	// Nil values are not accepted
 	switch value := v.(type) {
 	case int:
@@ -142,7 +141,7 @@ func (t systemEnumType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t systemEnumType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t systemEnumType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -168,12 +167,12 @@ func (t systemEnumType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t systemEnumType) ValueType() reflect.Type {
+func (t systemEnumType) ValueKind() sql.ValueKind {
 	return systemEnumValueType
 }
 
 // Zero implements Type interface.
-func (t systemEnumType) Zero() interface{} {
+func (t systemEnumType) Zero() any {
 	return ""
 }
 
@@ -183,7 +182,7 @@ func (systemEnumType) CollationCoercibility(ctx *sql.Context) (collation sql.Col
 }
 
 // EncodeValue implements SystemVariableType interface.
-func (t systemEnumType) EncodeValue(val interface{}) (string, error) {
+func (t systemEnumType) EncodeValue(val any) (string, error) {
 	expectedVal, ok := val.(string)
 	if !ok {
 		return "", sql.ErrSystemVariableCodeFail.New(val, t.String())
@@ -192,7 +191,7 @@ func (t systemEnumType) EncodeValue(val interface{}) (string, error) {
 }
 
 // DecodeValue implements SystemVariableType interface.
-func (t systemEnumType) DecodeValue(val string) (interface{}, error) {
+func (t systemEnumType) DecodeValue(val string) (any, error) {
 	outVal, _, err := t.Convert(context.Background(), val)
 	if err != nil {
 		return nil, sql.ErrSystemVariableCodeFail.New(val, t.String())

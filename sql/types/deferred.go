@@ -16,8 +16,6 @@ package types
 
 import (
 	"context"
-	"reflect"
-
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
 
@@ -41,12 +39,12 @@ func (t deferredType) Equals(otherType sql.Type) bool {
 
 // Compare implements Type interface. Note that while this returns 0 (equals)
 // for ordering purposes, in SQL NULL != NULL.
-func (t deferredType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t deferredType) Compare(ctx context.Context, a any, b any) (int, error) {
 	return 0, nil
 }
 
 // Convert implements Type interface.
-func (t deferredType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t deferredType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	if v != nil {
 		return nil, sql.InRange, ErrValueNotNil.New(v)
 	}
@@ -65,7 +63,7 @@ func (t deferredType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t deferredType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t deferredType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	return sqltypes.NULL, nil
 }
 
@@ -80,12 +78,12 @@ func (t deferredType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t deferredType) ValueType() reflect.Type {
-	return nil
+func (t deferredType) ValueKind() sql.ValueKind {
+	return sql.ValueKindUnknown
 }
 
 // Zero implements Type interface.
-func (t deferredType) Zero() interface{} {
+func (t deferredType) Zero() any {
 	return nil
 }
 

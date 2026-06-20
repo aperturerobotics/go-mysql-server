@@ -17,11 +17,9 @@ package types
 import (
 	"context"
 	"encoding/binary"
-	"math"
-	"reflect"
-
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
+	"math"
 
 	"github.com/dolthub/go-mysql-server/sql"
 )
@@ -41,22 +39,26 @@ type Point struct {
 	Y    float64
 }
 
+func (p Point) ValueKind() sql.ValueKind {
+	return sql.ValueKindPoint
+}
+
 var _ sql.Type = PointType{}
 var _ sql.SpatialColumnType = PointType{}
 var _ sql.CollationCoercible = PointType{}
 var _ GeometryValue = Point{}
 
 var (
-	pointValueType = reflect.TypeOf(Point{})
+	pointValueType = sql.ValueKindPoint
 )
 
 // Compare implements Type interface.
-func (t PointType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t PointType) Compare(ctx context.Context, a any, b any) (int, error) {
 	return GeometryType{}.Compare(ctx, a, b)
 }
 
 // Convert implements Type interface.
-func (t PointType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t PointType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	// Allow null
 	if v == nil {
 		return nil, sql.InRange, nil
@@ -114,7 +116,7 @@ func (t PointType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t PointType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t PointType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -140,7 +142,7 @@ func (t PointType) Type() query.Type {
 }
 
 // Zero implements Type interface.
-func (t PointType) Zero() interface{} {
+func (t PointType) Zero() any {
 	return Point{X: 0.0, Y: 0.0}
 }
 
@@ -150,7 +152,7 @@ func (PointType) CollationCoercibility(ctx *sql.Context) (collation sql.Collatio
 }
 
 // ValueType implements Type interface.
-func (t PointType) ValueType() reflect.Type {
+func (t PointType) ValueKind() sql.ValueKind {
 	return pointValueType
 }
 
@@ -167,7 +169,7 @@ func (t PointType) SetSRID(v uint32) sql.Type {
 }
 
 // MatchSRID implements SpatialColumnType interface
-func (t PointType) MatchSRID(v interface{}) error {
+func (t PointType) MatchSRID(v any) error {
 	val, ok := v.(Point)
 	if !ok {
 		return sql.ErrNotPoint.New(v)

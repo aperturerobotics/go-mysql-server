@@ -16,8 +16,6 @@ package types
 
 import (
 	"context"
-	"reflect"
-
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
 	"gopkg.in/src-d/go-errors.v1"
@@ -40,12 +38,12 @@ func (t nullType) IsNullType() bool {
 
 // Compare implements Type interface. Note that while this returns 0 (equals)
 // for ordering purposes, in SQL NULL != NULL.
-func (t nullType) Compare(s context.Context, a interface{}, b interface{}) (int, error) {
+func (t nullType) Compare(s context.Context, a any, b any) (int, error) {
 	return 0, nil
 }
 
 // Convert implements Type interface.
-func (t nullType) Convert(c context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t nullType) Convert(c context.Context, v any) (any, sql.ConvertInRange, error) {
 	if v != nil {
 		return nil, sql.InRange, ErrValueNotNil.New(v)
 	}
@@ -70,7 +68,7 @@ func (t nullType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t nullType) SQL(*sql.Context, []byte, interface{}) (sqltypes.Value, error) {
+func (t nullType) SQL(*sql.Context, []byte, any) (sqltypes.Value, error) {
 	return sqltypes.NULL, nil
 }
 
@@ -85,12 +83,12 @@ func (t nullType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t nullType) ValueType() reflect.Type {
-	return nil
+func (t nullType) ValueKind() sql.ValueKind {
+	return sql.ValueKindNull
 }
 
 // Zero implements Type interface.
-func (t nullType) Zero() interface{} {
+func (t nullType) Zero() any {
 	return nil
 }
 

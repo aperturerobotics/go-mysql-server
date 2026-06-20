@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"reflect"
 	"strconv"
 
 	"github.com/dolthub/vitess/go/sqltypes"
@@ -55,7 +54,7 @@ func CreateVectorType(dimensions int) (VectorType, error) {
 }
 
 // Compare implements Type interface.
-func (t VectorType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t VectorType) Compare(ctx context.Context, a any, b any) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -76,7 +75,7 @@ func (t VectorType) Compare(ctx context.Context, a interface{}, b interface{}) (
 }
 
 // Convert implements Type interface.
-func (t VectorType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t VectorType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	if v == nil {
 		return nil, sql.InRange, nil
 	}
@@ -102,7 +101,7 @@ func (t VectorType) Convert(ctx context.Context, v interface{}) (interface{}, sq
 			return nil, sql.InRange, err
 		}
 		return t.Convert(ctx, unwrapped)
-	case []interface{}:
+	case []any:
 		if t.Dimensions != 0 && len(val) != t.Dimensions {
 			return nil, sql.InRange, ErrVectorWrongDimensions.New(t.Dimensions, len(val))
 		}
@@ -138,7 +137,7 @@ func (t VectorType) Convert(ctx context.Context, v interface{}) (interface{}, sq
 }
 
 // MustConvert implements Type interface.
-func (t VectorType) MustConvert(ctx context.Context, v interface{}) interface{} {
+func (t VectorType) MustConvert(ctx context.Context, v any) any {
 	value, _, err := t.Convert(ctx, v)
 	if err != nil {
 		panic(err)
@@ -165,7 +164,7 @@ func (t VectorType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t VectorType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t VectorType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	val, err := ConvertToBytes(ctx, v, LongBlob, dest)
 	if err != nil {
 		return sqltypes.Value{}, err
@@ -185,12 +184,12 @@ func (t VectorType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t VectorType) ValueType() reflect.Type {
+func (t VectorType) ValueKind() sql.ValueKind {
 	return byteValueType
 }
 
 // Zero implements Type interface.
-func (t VectorType) Zero() interface{} {
+func (t VectorType) Zero() any {
 	return make([]float32, t.Dimensions)
 }
 

@@ -264,41 +264,27 @@ func (b *BaseBuilder) buildShowCreateProcedure(ctx *sql.Context, n *plan.ShowCre
 		return nil, err
 	}
 
-	if n.ExternalStoredProcedure != nil {
-		// If an external stored procedure has been plugged in by the analyzer, use that
-		fakeCreateProcedureStmt := n.ExternalStoredProcedure.FakeCreateProcedureStmt()
-		return sql.RowsToRowIter(sql.Row{
-			n.ExternalStoredProcedure.Name, // Procedure
-			"",                             // sql_mode
-			fakeCreateProcedureStmt,        // Create Procedure
-			characterSetClient,             // character_set_client
-			collationConnection,            // collation_connection
-			collationServer,                // Database Collation
-		}), nil
-	} else {
-		// Otherwise, search the StoredProcedureDatabase for a user-created stored procedure
-		procedureDb, ok := n.Database().(sql.StoredProcedureDatabase)
-		if !ok {
-			return nil, sql.ErrStoredProceduresNotSupported.New(n.Database().Name())
-		}
-		procedures, err := procedureDb.GetStoredProcedures(ctx)
-		if err != nil {
-			return nil, err
-		}
-		for _, procedure := range procedures {
-			if strings.ToLower(procedure.Name) == n.ProcedureName {
-				return sql.RowsToRowIter(sql.Row{
-					procedure.Name,            // Procedure
-					"",                        // sql_mode
-					procedure.CreateStatement, // Create Procedure
-					characterSetClient,        // character_set_client
-					collationConnection,       // collation_connection
-					collationServer,           // Database Collation
-				}), nil
-			}
-		}
-		return nil, sql.ErrStoredProcedureDoesNotExist.New(n.ProcedureName)
+	procedureDb, ok := n.Database().(sql.StoredProcedureDatabase)
+	if !ok {
+		return nil, sql.ErrStoredProceduresNotSupported.New(n.Database().Name())
 	}
+	procedures, err := procedureDb.GetStoredProcedures(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, procedure := range procedures {
+		if strings.ToLower(procedure.Name) == n.ProcedureName {
+			return sql.RowsToRowIter(sql.Row{
+				procedure.Name,            // Procedure
+				"",                        // sql_mode
+				procedure.CreateStatement, // Create Procedure
+				characterSetClient,        // character_set_client
+				collationConnection,       // collation_connection
+				collationServer,           // Database Collation
+			}), nil
+		}
+	}
+	return nil, sql.ErrStoredProcedureDoesNotExist.New(n.ProcedureName)
 }
 
 func (b *BaseBuilder) buildShowCreateDatabase(ctx *sql.Context, n *plan.ShowCreateDatabase, row sql.Row) (sql.RowIter, error) {

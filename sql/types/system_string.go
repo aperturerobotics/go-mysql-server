@@ -16,15 +16,13 @@ package types
 
 import (
 	"context"
-	"reflect"
-
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
 
 	"github.com/dolthub/go-mysql-server/sql"
 )
 
-var systemStringValueType = reflect.TypeOf(string(""))
+var systemStringValueType = sql.ValueKindString
 
 // systemStringType is an internal string type ONLY for system variables.
 type systemStringType struct {
@@ -41,7 +39,7 @@ func NewSystemStringType(varName string) sql.SystemVariableType {
 }
 
 // Compare implements Type interface.
-func (t systemStringType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t systemStringType) Compare(ctx context.Context, a any, b any) (int, error) {
 	as, _, err := t.Convert(ctx, a)
 	if err != nil {
 		return 0, err
@@ -63,7 +61,7 @@ func (t systemStringType) Compare(ctx context.Context, a interface{}, b interfac
 }
 
 // Convert implements Type interface.
-func (t systemStringType) Convert(c context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t systemStringType) Convert(c context.Context, v any) (any, sql.ConvertInRange, error) {
 	if v == nil {
 		return "", sql.InRange, nil
 	}
@@ -93,7 +91,7 @@ func (t systemStringType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t systemStringType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t systemStringType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -119,12 +117,12 @@ func (t systemStringType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t systemStringType) ValueType() reflect.Type {
+func (t systemStringType) ValueKind() sql.ValueKind {
 	return systemStringValueType
 }
 
 // Zero implements Type interface.
-func (t systemStringType) Zero() interface{} {
+func (t systemStringType) Zero() any {
 	return ""
 }
 
@@ -134,7 +132,7 @@ func (t systemStringType) CollationCoercibility(ctx *sql.Context) (collation sql
 }
 
 // EncodeValue implements SystemVariableType interface.
-func (t systemStringType) EncodeValue(val interface{}) (string, error) {
+func (t systemStringType) EncodeValue(val any) (string, error) {
 	expectedVal, ok := val.(string)
 	if !ok {
 		return "", sql.ErrSystemVariableCodeFail.New(val, t.String())
@@ -143,7 +141,7 @@ func (t systemStringType) EncodeValue(val interface{}) (string, error) {
 }
 
 // DecodeValue implements SystemVariableType interface.
-func (t systemStringType) DecodeValue(val string) (interface{}, error) {
+func (t systemStringType) DecodeValue(val string) (any, error) {
 	return val, nil
 }
 

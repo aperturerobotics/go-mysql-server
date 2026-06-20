@@ -16,12 +16,10 @@ package types
 
 import (
 	"context"
-	"math"
-	"reflect"
-
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
 	"gopkg.in/src-d/go-errors.v1"
+	"math"
 
 	"github.com/dolthub/go-mysql-server/sql"
 )
@@ -40,6 +38,10 @@ type MultiPoint struct {
 	SRID   uint32
 }
 
+func (p MultiPoint) ValueKind() sql.ValueKind {
+	return sql.ValueKindMultiPoint
+}
+
 var _ sql.Type = MultiPointType{}
 var _ sql.SpatialColumnType = MultiPointType{}
 var _ sql.CollationCoercible = MultiPointType{}
@@ -48,16 +50,16 @@ var _ GeometryValue = MultiPoint{}
 var (
 	ErrNotMultiPoint = errors.NewKind("value of type %T is not a multipoint")
 
-	multiPointValueType = reflect.TypeOf(MultiPoint{})
+	multiPointValueType = sql.ValueKindMultiPoint
 )
 
 // Compare implements Type interface.
-func (t MultiPointType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t MultiPointType) Compare(ctx context.Context, a any, b any) (int, error) {
 	return GeometryType{}.Compare(ctx, a, b)
 }
 
 // Convert implements Type interface.
-func (t MultiPointType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t MultiPointType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	switch buf := v.(type) {
 	case nil:
 		return nil, sql.InRange, nil
@@ -106,7 +108,7 @@ func (t MultiPointType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t MultiPointType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t MultiPointType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -132,12 +134,12 @@ func (t MultiPointType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t MultiPointType) ValueType() reflect.Type {
+func (t MultiPointType) ValueKind() sql.ValueKind {
 	return multiPointValueType
 }
 
 // Zero implements Type interface.
-func (t MultiPointType) Zero() interface{} {
+func (t MultiPointType) Zero() any {
 	return MultiPoint{Points: []Point{{}}}
 }
 
@@ -159,7 +161,7 @@ func (t MultiPointType) SetSRID(v uint32) sql.Type {
 }
 
 // MatchSRID implements SpatialColumnType interface
-func (t MultiPointType) MatchSRID(v interface{}) error {
+func (t MultiPointType) MatchSRID(v any) error {
 	val, ok := v.(MultiPoint)
 	if !ok {
 		return ErrNotMultiPoint.New(v)

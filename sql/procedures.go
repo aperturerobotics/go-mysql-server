@@ -15,7 +15,6 @@
 package sql
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/dolthub/vitess/go/vt/sqlparser"

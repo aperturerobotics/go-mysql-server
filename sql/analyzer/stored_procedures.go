@@ -177,14 +177,6 @@ func applyProcedures(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scop
 			}()
 		}
 
-		esp, err := a.Catalog.ExternalStoredProcedure(ctx, call.Name, len(call.Params))
-		if err != nil {
-			return nil, transform.SameTree, err
-		}
-		if esp != nil {
-			return call, transform.SameTree, nil
-		}
-
 		if _, isStoredProcDb := call.Database().(sql.StoredProcedureDatabase); !isStoredProcDb {
 			return nil, transform.SameTree, sql.ErrStoredProceduresNotSupported.New(call.Database().Name())
 		}
@@ -213,17 +205,6 @@ func applyProcedures(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scop
 		switch n := n.(type) {
 		case *plan.Call:
 			return applyProceduresCall(ctx, a, n, scope, sel, qFlags)
-		case *plan.ShowCreateProcedure:
-			procedures, err := a.Catalog.ExternalStoredProcedures(ctx, n.ProcedureName)
-			if err != nil {
-				return n, transform.SameTree, err
-			}
-			if len(procedures) == 0 {
-				// Not finding an external stored procedure is not an error, since we'll also later
-				// search for a user-defined stored procedure with this name.
-				return n, transform.SameTree, nil
-			}
-			return n.WithExternalStoredProcedure(procedures[0]), transform.NewTree, nil
 		default:
 			return n, newIdentity, nil
 		}
@@ -233,9 +214,6 @@ func applyProcedures(ctx *sql.Context, a *Analyzer, n sql.Node, scope *plan.Scop
 // applyProceduresCall applies the relevant stored procedure to the given *plan.Call.
 func applyProceduresCall(ctx *sql.Context, a *Analyzer, call *plan.Call, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
 	procedure := call.Procedure
-	if procedure.HasVariadicParameter() {
-		procedure = procedure.ExtendVariadic(ctx, len(call.Params))
-	}
 	pRef := expression.NewProcedureReference()
 	call = call.WithParamReference(pRef)
 

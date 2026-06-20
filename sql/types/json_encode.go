@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"reflect"
 	"sort"
 	"strconv"
 	"time"
@@ -23,7 +22,7 @@ const firstNonControlByte = 0x20
 // escapeSeq maps a byte to its JSON escape, or nil when the byte is safe to
 // write unchanged.
 var escapeSeq = func() (seq [256][]byte) {
-	for c := 0; c < firstNonControlByte; c++ {
+	for c := range firstNonControlByte {
 		seq[c] = []byte{'\\', 'u', '0', '0', hexDigits[c>>4], hexDigits[c&0xf]}
 	}
 	seq['\b'] = []byte(`\b`)
@@ -59,10 +58,7 @@ func (b *NoCopyBuilder) Write(p []byte) (int, error) {
 	space := cap(currBuff) - destPos
 
 	if space > 0 {
-		firstWrite := toWrite
-		if firstWrite > space {
-			firstWrite = space
-		}
+		firstWrite := min(toWrite, space)
 
 		currBuff = currBuff[:destPos+firstWrite]
 		n := copy(currBuff[destPos:], p[sourcePos:firstWrite])
@@ -135,7 +131,7 @@ func WriteStrings(wr io.Writer, strs ...string) (int, error) {
 
 // marshalToMySqlString is a helper function to marshal a JSONDocument to a string that is
 // compatible with MySQL's JSON output, including spaces.
-func marshalToMySqlString(val interface{}) (string, error) {
+func marshalToMySqlString(val any) (string, error) {
 	b := NewNoCopyBuilder(1024)
 	err := writeMarshalledValue(b, val)
 	if err != nil {
@@ -147,7 +143,7 @@ func marshalToMySqlString(val interface{}) (string, error) {
 
 // marshalToMySqlBytes is a helper function to marshal a JSONDocument to a byte slice that is
 // compatible with MySQL's JSON output, including spaces.
-func marshalToMySqlBytes(val interface{}) ([]byte, error) {
+func marshalToMySqlBytes(val any) ([]byte, error) {
 	b := NewNoCopyBuilder(1024)
 	err := writeMarshalledValue(b, val)
 	if err != nil {
@@ -172,9 +168,9 @@ func sortKeys[T any](m map[string]T) []string {
 	return keys
 }
 
-func writeMarshalledValue(writer io.Writer, val interface{}) error {
+func writeMarshalledValue(writer io.Writer, val any) error {
 	switch val := val.(type) {
-	case []interface{}:
+	case []any:
 		writer.Write([]byte{'['})
 		for i, v := range val {
 			err := writeMarshalledValue(writer, v)
@@ -210,7 +206,7 @@ func writeMarshalledValue(writer io.Writer, val interface{}) error {
 		writer.Write([]byte{'}'})
 		return nil
 
-	case map[string]interface{}:
+	case map[string]any:
 		keys := sortKeys(val)
 
 		writer.Write([]byte{'{'})
@@ -341,34 +337,49 @@ func writeMarshalledValue(writer io.Writer, val interface{}) error {
 		}
 		writer.Write(bytes)
 		return nil
+	case []string:
+		return writeMarshalledSlice(writer, val)
+	case []int:
+		return writeMarshalledSlice(writer, val)
+	case []int8:
+		return writeMarshalledSlice(writer, val)
+	case []int16:
+		return writeMarshalledSlice(writer, val)
+	case []int32:
+		return writeMarshalledSlice(writer, val)
+	case []int64:
+		return writeMarshalledSlice(writer, val)
+	case []uint:
+		return writeMarshalledSlice(writer, val)
+	case []uint8:
+		return writeMarshalledSlice(writer, val)
+	case []uint16:
+		return writeMarshalledSlice(writer, val)
+	case []uint32:
+		return writeMarshalledSlice(writer, val)
+	case []uint64:
+		return writeMarshalledSlice(writer, val)
+	case []float32:
+		return writeMarshalledSlice(writer, val)
+	case []float64:
+		return writeMarshalledSlice(writer, val)
+	case []bool:
+		return writeMarshalledSlice(writer, val)
 	default:
-		r := reflect.ValueOf(val)
-		switch r.Kind() {
-		case reflect.Slice, reflect.Array:
-			writer.Write([]byte{'['})
-			for i := 0; i < r.Len(); i++ {
-				err := writeMarshalledValue(writer, r.Index(i).Interface())
-				if err != nil {
-					return err
-				}
+		return fmt.Errorf("unsupported type: %T", val)
+	}
+}
 
-				if i != r.Len()-1 {
-					writer.Write([]byte{',', ' '})
-				}
-			}
-			writer.Write([]byte{']'})
-			return nil
-
-		case reflect.Map:
-			interfMap := make(map[string]interface{})
-			for _, k := range r.MapKeys() {
-				interfMap[k.String()] = r.MapIndex(k).Interface()
-			}
-
-			return writeMarshalledValue(writer, interfMap)
-
-		default:
-			return fmt.Errorf("unsupported type: %T", val)
+func writeMarshalledSlice[T any](writer io.Writer, vals []T) error {
+	writer.Write([]byte{'['})
+	for i, val := range vals {
+		if err := writeMarshalledValue(writer, val); err != nil {
+			return err
+		}
+		if i != len(vals)-1 {
+			writer.Write([]byte{',', ' '})
 		}
 	}
+	writer.Write([]byte{']'})
+	return nil
 }

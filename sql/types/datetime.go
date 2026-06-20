@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"reflect"
 	"strconv"
 	"time"
 	"unicode"
@@ -127,7 +126,7 @@ var (
 	// DatetimeMaxRange is a date and a time with maximum precision and maximum range.
 	DatetimeMaxRange = MustCreateDatetimeType(sqltypes.Datetime, MaxDatetimePrecision)
 
-	datetimeValueType = reflect.TypeOf(time.Time{})
+	datetimeValueType = sql.ValueKindTime
 )
 
 type datetimeType struct {
@@ -928,11 +927,11 @@ func (t datetimeType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t datetimeType) ValueType() reflect.Type {
+func (t datetimeType) ValueKind() sql.ValueKind {
 	return datetimeValueType
 }
 
-func (t datetimeType) Zero() interface{} {
+func (t datetimeType) Zero() any {
 	return ZeroTime
 }
 

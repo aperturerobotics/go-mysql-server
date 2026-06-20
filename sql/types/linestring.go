@@ -16,11 +16,9 @@ package types
 
 import (
 	"context"
-	"math"
-	"reflect"
-
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
+	"math"
 
 	"github.com/dolthub/go-mysql-server/sql"
 )
@@ -39,22 +37,26 @@ type LineString struct {
 	SRID   uint32
 }
 
+func (l LineString) ValueKind() sql.ValueKind {
+	return sql.ValueKindLineString
+}
+
 var _ sql.Type = LineStringType{}
 var _ sql.SpatialColumnType = LineStringType{}
 var _ sql.CollationCoercible = LineStringType{}
 var _ GeometryValue = LineString{}
 
 var (
-	lineStringValueType = reflect.TypeOf(LineString{})
+	lineStringValueType = sql.ValueKindLineString
 )
 
 // Compare implements Type interface.
-func (t LineStringType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t LineStringType) Compare(ctx context.Context, a any, b any) (int, error) {
 	return GeometryType{}.Compare(ctx, a, b)
 }
 
 // Convert implements Type interface.
-func (t LineStringType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t LineStringType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	switch buf := v.(type) {
 	case nil:
 		return nil, sql.InRange, nil
@@ -99,7 +101,7 @@ func (t LineStringType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t LineStringType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t LineStringType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -125,12 +127,12 @@ func (t LineStringType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t LineStringType) ValueType() reflect.Type {
+func (t LineStringType) ValueKind() sql.ValueKind {
 	return lineStringValueType
 }
 
 // Zero implements Type interface.
-func (t LineStringType) Zero() interface{} {
+func (t LineStringType) Zero() any {
 	return LineString{Points: []Point{{}, {}}}
 }
 
@@ -152,7 +154,7 @@ func (t LineStringType) SetSRID(v uint32) sql.Type {
 }
 
 // MatchSRID implements SpatialColumnType interface
-func (t LineStringType) MatchSRID(v interface{}) error {
+func (t LineStringType) MatchSRID(v any) error {
 	val, ok := v.(LineString)
 	if !ok {
 		return sql.ErrNotLineString.New(v)

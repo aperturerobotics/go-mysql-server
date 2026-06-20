@@ -16,7 +16,6 @@ package function
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -104,7 +103,7 @@ func (s *Substring) Eval(
 	case nil:
 		return nil, nil
 	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(str))
 	}
 
 	start, err := s.Start.Eval(ctx, row)
@@ -243,7 +242,7 @@ func (s *SubstringIndex) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 
 	str, ok := ex.(string)
 	if !ok {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(ex).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(ex))
 	}
 
 	ex, err = s.delim.Eval(ctx, row)
@@ -263,7 +262,7 @@ func (s *SubstringIndex) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 
 	delim, ok := ex.(string)
 	if !ok {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(ex).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(ex))
 	}
 
 	ex, err = s.count.Eval(ctx, row)
@@ -276,7 +275,7 @@ func (s *SubstringIndex) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	}
 	count, ok := ex.(int64)
 	if !ok {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(ex).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(ex))
 	}
 
 	// Implementation taken from pingcap/tidb
@@ -391,7 +390,7 @@ func (l Left) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	case nil:
 		return nil, nil
 	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(str))
 	}
 
 	var length int64
@@ -505,7 +504,7 @@ func (r Right) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	case nil:
 		return nil, nil
 	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(str))
 	}
 
 	var length int64
@@ -629,7 +628,7 @@ func (i Instr) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	case nil:
 		return nil, nil
 	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(str))
 	}
 
 	substr, err := i.substr.Eval(ctx, row)
@@ -658,7 +657,7 @@ func (i Instr) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	case nil:
 		return nil, nil
 	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(str))
 	}
 
 	return findSubsequence(text, subtext) + 1, nil

@@ -101,6 +101,10 @@ func (w SimpleWrapper[T]) Hash() any {
 	return nil
 }
 
+func (w SimpleWrapper[T]) ValueKind() sql.ValueKind {
+	return sql.ValueKindFor[T]()
+}
+
 // ErrorWrapper is a wrapped type that errors when unwrapped. This can be used to test that certain operations
 // won't trigger an unwrap.
 type ErrorWrapper[T any] struct {
@@ -137,6 +141,10 @@ func (w ErrorWrapper[T]) IsExactLength() bool {
 
 func (w ErrorWrapper[T]) Hash() any {
 	panic("not implemented")
+}
+
+func (w ErrorWrapper[T]) ValueKind() sql.ValueKind {
+	return sql.ValueKindFor[T]()
 }
 
 // TestWrapperCompare tests that a wrapped value can be used in comparisons.
