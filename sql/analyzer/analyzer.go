@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"reflect"
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql/otel/attribute"
@@ -362,7 +361,7 @@ func (a *Analyzer) LogNode(ctx *sql.Context, n sql.Node) {
 // Only can print a diff when the string representations of the nodes differ, which isn't always the case.
 func (a *Analyzer) LogDiff(ctx *sql.Context, prev, next sql.Node) {
 	if a.Debug && a.Verbose {
-		if !reflect.DeepEqual(next, prev) {
+		if sql.DebugString(ctx, next) != sql.DebugString(ctx, prev) {
 			diff, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
 				A:        difflib.SplitLines(sql.DebugString(ctx, prev)),
 				B:        difflib.SplitLines(sql.DebugString(ctx, next)),

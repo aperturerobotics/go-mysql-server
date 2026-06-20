@@ -4,7 +4,6 @@ import (
 	"container/heap"
 	"errors"
 	"io"
-	"reflect"
 
 	"github.com/dolthub/go-mysql-server/sql/otel/attribute"
 	"github.com/dolthub/go-mysql-server/sql/otel/trace"
@@ -45,13 +44,13 @@ func newRangeHeapJoinIter(ctx *sql.Context, b sql.NodeExecBuilder, j *plan.JoinN
 	if leftTable, ok := j.Left().(sql.Nameable); ok {
 		leftName = leftTable.Name()
 	} else {
-		leftName = reflect.TypeOf(j.Left()).String()
+		leftName = sql.TypeName(j.Left())
 	}
 
 	if rightTable, ok := j.Right().(sql.Nameable); ok {
 		rightName = rightTable.Name()
 	} else {
-		rightName = reflect.TypeOf(j.Right()).String()
+		rightName = sql.TypeName(j.Right())
 	}
 
 	span, ctx := ctx.Span("plan.rangeHeapJoinIter", trace.WithAttributes(

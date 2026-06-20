@@ -21,7 +21,7 @@ import (
 
 // NewBuilderForColumnDefaultResolution creates a Builder suitable for resolving column default
 // and generated expressions in a schema (e.g. UnresolvedColumnDefault placeholders). It uses a minimal
-// catalog backed only by the built-in function registry — sufficient because generated column
+// catalog backed only by the built-in function registry, sufficient because generated column
 // expressions may only reference columns of the same table and built-in SQL functions.
 func NewBuilderForColumnDefaultResolution(ctx *sql.Context, overrides sql.EngineOverrides) *Builder {
 	return New(ctx, &exprResolutionCatalog{

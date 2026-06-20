@@ -7,7 +7,6 @@ import (
 	"database/sql/driver"
 	"io"
 	"maps"
-	"reflect"
 	"slices"
 
 	"github.com/dolthub/vitess/go/sqltypes"
@@ -82,7 +81,7 @@ func (JsonType) String() string { return "json" }
 
 func (JsonType) Type() query.Type { return sqltypes.TypeJSON }
 
-func (JsonType) ValueType() reflect.Type { return reflect.TypeOf(JSONDocument{}) }
+func (JsonType) ValueKind() sql.ValueKind { return sql.ValueKindJSONDocument }
 
 func (JsonType) Zero() interface{} { return nil }
 
@@ -111,6 +110,8 @@ func (doc JSONDocument) Value() (driver.Value, error) {
 }
 
 func (doc JSONDocument) String() string { return "json" }
+
+func (doc JSONDocument) ValueKind() sql.ValueKind { return sql.ValueKindJSONDocument }
 
 func (doc JSONDocument) JSONString() (string, error) {
 	return "", sql.ErrUnsupportedFeature.New("json")

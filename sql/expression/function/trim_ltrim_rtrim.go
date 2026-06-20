@@ -16,7 +16,6 @@ package function
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/dolthub/vitess/go/vt/sqlparser"
@@ -224,7 +223,7 @@ func (t *LeftTrim) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 
 	str, _, err = types.LongText.Convert(ctx, str)
 	if err != nil {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str))
+		return nil, sql.ErrInvalidType.New(sql.TypeName(str))
 	}
 
 	// Handle Dolt's TextStorage wrapper that doesn't convert to plain string

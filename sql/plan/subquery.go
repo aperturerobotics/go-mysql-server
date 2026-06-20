@@ -42,7 +42,7 @@ type Subquery struct {
 	b sql.NodeExecBuilder
 
 	// Dispose function for the cache, if any. This would appear to violate the rule that nodes must be comparable by
-	// reflect.DeepEquals, but it's safe in practice because the function is always nil until execution.
+	// Deep equality is safe in practice because the function is always nil until execution.
 	disposeFunc sql.DisposeFunc
 
 	// The original verbatim select statement for this subquery

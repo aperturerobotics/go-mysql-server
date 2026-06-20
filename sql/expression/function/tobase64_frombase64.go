@@ -17,7 +17,6 @@ package function
 import (
 	"encoding/base64"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql/encodings"
@@ -67,7 +66,7 @@ func (t *ToBase64) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	if types.IsTextOnly(t.Child.Type(ctx)) {
 		val, _, err = t.Child.Type(ctx).Convert(ctx, val)
 		if err != nil {
-			return nil, sql.ErrInvalidType.New(reflect.TypeOf(val))
+			return nil, sql.ErrInvalidType.New(sql.TypeName(val))
 		}
 		// For string types we need to re-encode the internal string so that we get the correct base64 output
 		encoder := t.Child.Type(ctx).(sql.StringType).Collation().CharacterSet().Encoder()
@@ -79,7 +78,7 @@ func (t *ToBase64) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	} else {
 		val, _, err = types.LongBlob.Convert(ctx, val)
 		if err != nil {
-			return nil, sql.ErrInvalidType.New(reflect.TypeOf(val))
+			return nil, sql.ErrInvalidType.New(sql.TypeName(val))
 		}
 		strBytes = val.([]byte)
 	}
@@ -174,7 +173,7 @@ func (t *FromBase64) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 
 	str, _, err = types.LongText.Convert(ctx, str)
 	if err != nil {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str))
+		return nil, sql.ErrInvalidType.New(sql.TypeName(str))
 	}
 
 	decoded, err := base64.StdEncoding.DecodeString(str.(string))

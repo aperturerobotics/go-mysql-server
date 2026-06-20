@@ -16,7 +16,6 @@ package driver
 
 import (
 	"database/sql/driver"
-	"reflect"
 
 	"github.com/dolthub/vitess/go/vt/proto/query"
 
@@ -87,16 +86,33 @@ func (r *Rows) convert(col int, v driver.Value) any {
 	case query.Type_INT8, query.Type_INT16, query.Type_INT24, query.Type_INT32, query.Type_INT64,
 		query.Type_UINT8, query.Type_UINT16, query.Type_UINT24, query.Type_UINT32, query.Type_UINT64,
 		query.Type_FLOAT32, query.Type_FLOAT64:
-		rv := reflect.ValueOf(v)
-		switch rv.Kind() {
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			return rv.Int()
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			return rv.Uint()
-		case reflect.Float32, reflect.Float64:
-			return rv.Float()
-		case reflect.String:
-			return rv.String()
+		switch val := v.(type) {
+		case int:
+			return int64(val)
+		case int8:
+			return int64(val)
+		case int16:
+			return int64(val)
+		case int32:
+			return int64(val)
+		case int64:
+			return val
+		case uint:
+			return uint64(val)
+		case uint8:
+			return uint64(val)
+		case uint16:
+			return uint64(val)
+		case uint32:
+			return uint64(val)
+		case uint64:
+			return val
+		case float32:
+			return float64(val)
+		case float64:
+			return val
+		case string:
+			return val
 		}
 
 	case query.Type_JSON:

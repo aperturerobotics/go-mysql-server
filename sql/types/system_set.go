@@ -16,8 +16,6 @@ package types
 
 import (
 	"context"
-	"reflect"
-
 	"github.com/cockroachdb/apd/v3"
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
@@ -40,7 +38,7 @@ func NewSystemSetType(varName string, collation sql.CollationID, values ...strin
 }
 
 // Compare implements Type interface.
-func (t systemSetType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t systemSetType) Compare(ctx context.Context, a any, b any) (int, error) {
 	if a == nil || b == nil {
 		return 0, sql.ErrInvalidSystemVariableValue.New(t.varName, nil)
 	}
@@ -65,7 +63,7 @@ func (t systemSetType) Compare(ctx context.Context, a interface{}, b interface{}
 }
 
 // Convert implements Type interface.
-func (t systemSetType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t systemSetType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	// Nil values are not accepted
 	switch value := v.(type) {
 	case int:
@@ -125,7 +123,7 @@ func (t systemSetType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t systemSetType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t systemSetType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -154,12 +152,12 @@ func (t systemSetType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t systemSetType) ValueType() reflect.Type {
-	return t.SetType.ValueType()
+func (t systemSetType) ValueKind() sql.ValueKind {
+	return t.SetType.ValueKind()
 }
 
 // Zero implements Type interface.
-func (t systemSetType) Zero() interface{} {
+func (t systemSetType) Zero() any {
 	return ""
 }
 
@@ -169,7 +167,7 @@ func (systemSetType) CollationCoercibility(ctx *sql.Context) (collation sql.Coll
 }
 
 // EncodeValue implements SystemVariableType interface.
-func (t systemSetType) EncodeValue(val interface{}) (string, error) {
+func (t systemSetType) EncodeValue(val any) (string, error) {
 	expectedVal, ok := val.(uint64)
 	if !ok {
 		return "", sql.ErrSystemVariableCodeFail.New(val, t.String())
@@ -178,7 +176,7 @@ func (t systemSetType) EncodeValue(val interface{}) (string, error) {
 }
 
 // DecodeValue implements SystemVariableType interface.
-func (t systemSetType) DecodeValue(val string) (interface{}, error) {
+func (t systemSetType) DecodeValue(val string) (any, error) {
 	outVal, _, err := t.Convert(context.Background(), val)
 	if err != nil {
 		return nil, sql.ErrSystemVariableCodeFail.New(val, t.String())

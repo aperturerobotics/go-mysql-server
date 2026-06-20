@@ -17,7 +17,6 @@ package types
 import (
 	"context"
 	"math"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -43,7 +42,7 @@ var (
 	microsecondsPerHour       int64 = 3600000000
 	nanosecondsPerMicrosecond int64 = 1000
 
-	timeValueType = reflect.TypeOf(Timespan(0))
+	timeValueType = sql.ValueKindTimespan
 )
 
 // TimeType represents the TIME type.
@@ -56,11 +55,11 @@ type TimeType interface {
 	// ConvertToTimespan returns a Timespan from the given interface. Follows the same conversion rules as
 	// Convert(), in that this will process the value based on its base-10 visual representation (for example, Convert()
 	// will interpret the value `1234` as 12 minutes and 34 seconds). Returns an error for nil values.
-	ConvertToTimespan(v interface{}) (Timespan, error)
+	ConvertToTimespan(v any) (Timespan, error)
 	// ConvertToTimeDuration returns a time.Duration from the given interface. Follows the same conversion rules as
 	// Convert(), in that this will process the value based on its base-10 visual representation (for example, Convert()
 	// will interpret the value `1234` as 12 minutes and 34 seconds). Returns an error for nil values.
-	ConvertToTimeDuration(v interface{}) (time.Duration, error)
+	ConvertToTimeDuration(v any) (time.Duration, error)
 	// MicrosecondsToTimespan returns a Timespan from the given number of microseconds. This differs from Convert(), as
 	// that will process the value based on its base-10 visual representation (for example, Convert() will interpret
 	// the value `1234` as 12 minutes and 34 seconds). This clamps the given microseconds to the allowed range.
@@ -82,8 +81,12 @@ func (t TimespanType_) MaxTextResponseByteLength(*sql.Context) uint32 {
 // Timespan is the value type returned by TimeType.Convert().
 type Timespan int64
 
+func (t Timespan) ValueKind() sql.ValueKind {
+	return sql.ValueKindTimespan
+}
+
 // Compare implements Type interface.
-func (t TimespanType_) Compare(s context.Context, a interface{}, b interface{}) (int, error) {
+func (t TimespanType_) Compare(s context.Context, a any, b any) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -105,7 +108,7 @@ func (t TimespanType_) CompareValue(ctx *sql.Context, a, b sql.Value) (int, erro
 	panic("TODO: implement CompareValue for TimespanType")
 }
 
-func (t TimespanType_) Convert(c context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t TimespanType_) Convert(c context.Context, v any) (any, sql.ConvertInRange, error) {
 	if v == nil {
 		return nil, sql.InRange, nil
 	}
@@ -116,7 +119,7 @@ func (t TimespanType_) Convert(c context.Context, v interface{}) (interface{}, s
 // ConvertToTimespan converts the given interface value to a Timespan. This follows the conversion rules of MySQL, which
 // are based on the base-10 visual representation of numbers (for example, Time.Convert() will interpret the value
 // `1234` as 12 minutes and 34 seconds). Returns an error on a nil value.
-func (t TimespanType_) ConvertToTimespan(v interface{}) (Timespan, error) {
+func (t TimespanType_) ConvertToTimespan(v any) (Timespan, error) {
 	switch value := v.(type) {
 	case Timespan:
 		// We only create a Timespan if it's valid, so we can skip this check if we receive a Timespan.
@@ -236,7 +239,7 @@ func (t TimespanType_) ConvertToTimespan(v interface{}) (Timespan, error) {
 }
 
 // ConvertToTimeDuration implements the TimeType interface.
-func (t TimespanType_) ConvertToTimeDuration(v interface{}) (time.Duration, error) {
+func (t TimespanType_) ConvertToTimeDuration(v any) (time.Duration, error) {
 	val, err := t.ConvertToTimespan(v)
 	if err != nil {
 		return time.Duration(0), err
@@ -256,7 +259,7 @@ func (t TimespanType_) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t TimespanType_) SQL(_ *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t TimespanType_) SQL(_ *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -292,12 +295,12 @@ func (t TimespanType_) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t TimespanType_) ValueType() reflect.Type {
+func (t TimespanType_) ValueKind() sql.ValueKind {
 	return timeValueType
 }
 
 // Zero implements Type interface.
-func (t TimespanType_) Zero() interface{} {
+func (t TimespanType_) Zero() any {
 	return Timespan(0)
 }
 

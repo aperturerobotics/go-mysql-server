@@ -23,9 +23,8 @@ import (
 )
 
 type ShowCreateProcedure struct {
-	db                      sql.Database
-	ExternalStoredProcedure *sql.ExternalStoredProcedureDetails
-	ProcedureName           string
+	db            sql.Database
+	ProcedureName string
 }
 
 var _ sql.Databaser = (*ShowCreateProcedure)(nil)
@@ -94,12 +93,4 @@ func (s *ShowCreateProcedure) WithDatabase(db sql.Database) (sql.Node, error) {
 	ns := *s
 	ns.db = db
 	return &ns, nil
-}
-
-// WithExternalStoredProcedure returns a new ShowCreateProcedure node with the specified external stored procedure set
-// as the procedure to be shown.
-func (s *ShowCreateProcedure) WithExternalStoredProcedure(procedure sql.ExternalStoredProcedureDetails) sql.Node {
-	ns := *s
-	ns.ExternalStoredProcedure = &procedure
-	return &ns
 }

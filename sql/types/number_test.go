@@ -18,7 +18,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -36,8 +35,8 @@ func TestNumberCompare(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	tests := []struct {
 		typ         sql.Type
-		val1        interface{}
-		val2        interface{}
+		val1        any
+		val2        any
 		expectedCmp int
 	}{
 		{Int8, nil, 0, 1},
@@ -171,8 +170,8 @@ func TestNumberConvert(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	tests := []struct {
 		typ     sql.Type
-		inp     interface{}
-		exp     interface{}
+		inp     any
+		exp     any
 		err     bool
 		inRange sql.ConvertInRange
 	}{
@@ -237,7 +236,7 @@ func TestNumberConvert(t *testing.T) {
 				assert.Equal(t, test.exp, val)
 				assert.Equal(t, test.inRange, inRange)
 				if val != nil {
-					assert.Equal(t, test.typ.ValueType(), reflect.TypeOf(val))
+					assert.Equal(t, test.typ.ValueKind(), sql.ValueKindOf(val))
 				}
 			}
 		})
@@ -248,8 +247,8 @@ func TestNumberConvertRound(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	tests := []struct {
 		typ     sql.Type
-		inp     interface{}
-		exp     interface{}
+		inp     any
+		exp     any
 		err     bool
 		inRange sql.ConvertInRange
 	}{

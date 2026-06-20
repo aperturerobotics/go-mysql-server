@@ -14,10 +14,7 @@
 
 package encodings
 
-import (
-	"reflect"
-	"unsafe"
-)
+import "unsafe"
 
 // Encoder is used to transcode from one encoding to another, along with handling uppercase and lowercase conversions.
 // Decoding always converts to Go's string encoding, while encoding always converts to the target encoding. Encoding and
@@ -88,7 +85,5 @@ func StringToBytes(str string) []byte {
 		// It makes sense to return a non-nil empty byte slice since we're passing in a non-nil (although empty) string
 		return []byte{}
 	}
-	return (*[0x7fff0000]byte)(unsafe.Pointer(
-		(*reflect.StringHeader)(unsafe.Pointer(&str)).Data),
-	)[:len(str):len(str)]
+	return unsafe.Slice(unsafe.StringData(str), len(str))
 }

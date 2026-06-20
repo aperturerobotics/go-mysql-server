@@ -34,8 +34,8 @@ func TestDatetimeCompare(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	tests := []struct {
 		typ         sql.Type
-		val1        interface{}
-		val2        interface{}
+		val1        any
+		val2        any
 		expectedCmp int
 	}{
 		{Date, nil, 0, 1},
@@ -553,7 +553,7 @@ func TestDatetimeOverflowUnderflow(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	tests := []struct {
 		typ         sql.DatetimeType
-		val         interface{}
+		val         any
 		expectError bool
 	}{
 		{Timestamp, "1969-12-31 23:59:59", true},

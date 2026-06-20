@@ -16,12 +16,10 @@ package plan
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/procedures"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
@@ -74,9 +72,8 @@ const (
 
 // Procedure is a stored procedure that may be executed using the CALL statement.
 type Procedure struct {
-	CreatedAt    time.Time
-	ModifiedAt   time.Time
-	ExternalProc sql.Node
+	CreatedAt  time.Time
+	ModifiedAt time.Time
 
 	ValidationError error
 
@@ -135,25 +132,16 @@ func NewProcedure(
 
 // Resolved implements the sql.Node interface.
 func (p *Procedure) Resolved() bool {
-	if p.ExternalProc != nil {
-		return p.ExternalProc.Resolved()
-	}
 	return true
 }
 
 // IsReadOnly implements the sql.Node interface.
 func (p *Procedure) IsReadOnly() bool {
-	if p.ExternalProc != nil {
-		return p.ExternalProc.IsReadOnly()
-	}
 	return false
 }
 
 // String implements the sql.Node interface.
 func (p *Procedure) String() string {
-	if p.ExternalProc != nil {
-		return p.ExternalProc.String()
-	}
 	return ""
 }
 
@@ -164,31 +152,17 @@ func (p *Procedure) DebugString(ctx *sql.Context) string {
 
 // Schema implements the sql.Node interface.
 func (p *Procedure) Schema(ctx *sql.Context) sql.Schema {
-	if p.ExternalProc != nil {
-		return p.ExternalProc.Schema(ctx)
-	}
 	return types.OkResultSchema
 }
 
 // Children implements the sql.Node interface.
 func (p *Procedure) Children() []sql.Node {
-	if p.ExternalProc != nil {
-		return []sql.Node{p.ExternalProc}
-	}
 	return nil
 }
 
 // WithChildren implements the sql.Node interface.
 func (p *Procedure) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
-	if len(children) == 0 {
-		return p, nil
-	}
-	if len(children) != 1 {
-		return nil, sql.ErrInvalidChildrenNumber.New(p, len(children), 1)
-	}
-	np := *p
-	np.ExternalProc = children[0]
-	return &np, nil
+	return NillaryWithChildren(p, children...)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -199,59 +173,10 @@ func (p *Procedure) CollationCoercibility(ctx *sql.Context) (collation sql.Colla
 // implementsRepresentsBlock implements the RepresentsBlock interface.
 func (p *Procedure) implementsRepresentsBlock() {}
 
-// ExtendVariadic returns a new procedure that has the variadic parameter extended to match the CALL's parameter count.
-func (p *Procedure) ExtendVariadic(ctx *sql.Context, length int) *Procedure {
-	if !p.HasVariadicParameter() {
-		return p
-	}
-	np := *p
-	body := p.ExternalProc.(*ExternalProcedure)
-	newBody := *body
-	np.ExternalProc = &newBody
-
-	newParamDefinitions := make([]ProcedureParam, length)
-	newParams := make([]*expression.ProcedureParam, length)
-	if length < len(p.Params) {
-		newParamDefinitions = p.Params[:len(p.Params)-1]
-		newParams = body.Params[:len(body.Params)-1]
-	} else {
-		for i := range p.Params {
-			newParamDefinitions[i] = p.Params[i]
-			newParams[i] = body.Params[i]
-		}
-		if length >= len(p.Params) {
-			variadicParam := p.Params[len(p.Params)-1]
-			for i := len(p.Params); i < length; i++ {
-				paramName := "A" + strconv.FormatInt(int64(i), 10)
-				newParamDefinitions[i] = ProcedureParam{
-					Direction: variadicParam.Direction,
-					Name:      paramName,
-					Type:      variadicParam.Type,
-					Variadic:  variadicParam.Variadic,
-				}
-				newParams[i] = expression.NewProcedureParam(paramName, variadicParam.Type)
-			}
-		}
-	}
-
-	newBody.ParamDefinitions = newParamDefinitions
-	newBody.Params = newParams
-	np.Params = newParamDefinitions
-	return &np
-}
-
 // HasVariadicParameter returns if the last parameter is variadic.
 func (p *Procedure) HasVariadicParameter() bool {
 	if len(p.Params) > 0 {
 		return p.Params[len(p.Params)-1].Variadic
-	}
-	return false
-}
-
-// IsExternal returns whether the stored procedure is external.
-func (p *Procedure) IsExternal() bool {
-	if _, ok := p.ExternalProc.(*ExternalProcedure); ok {
-		return true
 	}
 	return false
 }

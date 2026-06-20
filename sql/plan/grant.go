@@ -171,15 +171,6 @@ func (n *Grant) CheckAuth(ctx *sql.Context, opChecker sql.PrivilegedOperationChe
 			convertToSqlPrivilegeType(true, n.Privileges...)...))
 	} else {
 		if n.ObjectType == ObjectType_Procedure {
-
-			adminOnly := false
-			if n.Catalog != nil {
-				proc, err := n.Catalog.ExternalStoredProcedure(ctx, n.PrivilegeLevel.TableRoutine, -1)
-				if proc != nil && err == nil && proc.AdminOnly {
-					adminOnly = true
-				}
-			}
-
 			subject = sql.PrivilegeCheckSubject{
 				Database:    n.PrivilegeLevel.Database,
 				Routine:     n.PrivilegeLevel.TableRoutine,
@@ -187,10 +178,8 @@ func (n *Grant) CheckAuth(ctx *sql.Context, opChecker sql.PrivilegedOperationChe
 			}
 			operation := sql.NewPrivilegedOperation(subject, sql.PrivilegeType_GrantOption)
 
-			if !adminOnly {
-				if opChecker.UserHasPrivileges(ctx, operation) {
-					return true
-				}
+			if opChecker.UserHasPrivileges(ctx, operation) {
+				return true
 			}
 			return opChecker.RoutineAdminCheck(ctx, operation)
 		} else if n.ObjectType == ObjectType_Function {
