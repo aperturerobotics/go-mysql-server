@@ -17,7 +17,6 @@ package types
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"testing"
 	"time"
 
@@ -31,8 +30,8 @@ func TestBitCompare(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	tests := []struct {
 		typ         sql.Type
-		val1        interface{}
-		val2        interface{}
+		val1        any
+		val2        any
 		expectedCmp int
 	}{
 		{MustCreateBitType(1), nil, 0, 1},
@@ -92,8 +91,8 @@ func TestBitCreate(t *testing.T) {
 func TestBitConvert(t *testing.T) {
 	tests := []struct {
 		typ         sql.Type
-		val         interface{}
-		expectedVal interface{}
+		val         any
+		expectedVal any
 		expectedErr bool
 	}{
 		{MustCreateBitType(1), nil, nil, false},
@@ -134,7 +133,7 @@ func TestBitConvert(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, test.expectedVal, val)
 				if val != nil {
-					assert.Equal(t, test.typ.ValueType(), reflect.TypeOf(val))
+					assert.Equal(t, test.typ.ValueKind(), sql.ValueKindOf(val))
 				}
 			}
 		})

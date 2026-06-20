@@ -16,7 +16,6 @@ package sql
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 )
 
@@ -97,15 +96,35 @@ func (c *Column) Equals(c2 *Column) bool {
 			strings.EqualFold(c.Source, c2.Source) &&
 			strings.EqualFold(c.DatabaseSource, c2.DatabaseSource) &&
 			c.Nullable == c2.Nullable &&
-			reflect.DeepEqual(c.Default, c2.Default) &&
+			columnDefaultEquals(c.Default, c2.Default) &&
 			c.Type.Equals(c2.Type)
 	}
 	return c.Name == c2.Name &&
 		strings.EqualFold(c.Source, c2.Source) &&
 		strings.EqualFold(c.DatabaseSource, c2.DatabaseSource) &&
 		c.Nullable == c2.Nullable &&
-		reflect.DeepEqual(c.Default, c2.Default) &&
+		columnDefaultEquals(c.Default, c2.Default) &&
 		c.Type.Equals(c2.Type)
+}
+
+func columnDefaultEquals(a, b *ColumnDefaultValue) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.Literal != b.Literal || a.ReturnNil != b.ReturnNil || a.Parenthesized != b.Parenthesized {
+		return false
+	}
+	if a.OutType == nil || b.OutType == nil {
+		if a.OutType != b.OutType {
+			return false
+		}
+	} else if !a.OutType.Equals(b.OutType) {
+		return false
+	}
+	if a.Expr == nil || b.Expr == nil {
+		return a.Expr == b.Expr
+	}
+	return a.Expr.String() == b.Expr.String()
 }
 
 func (c *Column) DebugString(ctx *Context) string {

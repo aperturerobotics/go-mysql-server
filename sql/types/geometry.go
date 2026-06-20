@@ -18,12 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"math"
-	"reflect"
-
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
 	"gopkg.in/src-d/go-errors.v1"
+	"math"
 
 	"github.com/dolthub/go-mysql-server/sql"
 )
@@ -51,7 +49,7 @@ type GeometryValue interface {
 // UnwrapGeometry unwraps a value that may be a sql.AnyWrapper (e.g. adaptive/out-of-band storage)
 // and returns the underlying GeometryValue. If the value is already a GeometryValue, it is returned
 // directly. Returns ErrNotGeometry if the value cannot be converted.
-func UnwrapGeometry(ctx context.Context, v interface{}) (GeometryValue, error) {
+func UnwrapGeometry(ctx context.Context, v any) (GeometryValue, error) {
 	if gv, ok := v.(GeometryValue); ok {
 		return gv, nil
 	}
@@ -72,7 +70,7 @@ var _ sql.CollationCoercible = GeometryType{}
 var (
 	ErrNotGeometry = errors.NewKind("Value of type %T is not a geometry")
 
-	geometryValueType = reflect.TypeOf((*GeometryValue)(nil)).Elem()
+	geometryValueType = sql.ValueKindGeometry
 )
 
 const (
@@ -405,7 +403,7 @@ func WriteCount(buf []byte, count uint32) {
 }
 
 // Compare implements Type interface.
-func (t GeometryType) Compare(s context.Context, a interface{}, b interface{}) (int, error) {
+func (t GeometryType) Compare(s context.Context, a any, b any) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -424,7 +422,7 @@ func (t GeometryType) Compare(s context.Context, a interface{}, b interface{}) (
 }
 
 // Convert implements Type interface.
-func (t GeometryType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t GeometryType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	if v == nil {
 		return nil, sql.InRange, nil
 	}
@@ -436,7 +434,7 @@ func (t GeometryType) Convert(ctx context.Context, v interface{}) (interface{}, 
 		}
 		val = val[EWKBHeaderSize:]
 
-		var geom interface{}
+		var geom any
 		switch geomType {
 		case WKBPointID:
 			geom, _, err = DeserializePoint(val, isBig, srid)
@@ -494,7 +492,7 @@ func (t GeometryType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t GeometryType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t GeometryType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -520,12 +518,12 @@ func (t GeometryType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t GeometryType) ValueType() reflect.Type {
+func (t GeometryType) ValueKind() sql.ValueKind {
 	return geometryValueType
 }
 
 // Zero implements Type interface.
-func (t GeometryType) Zero() interface{} {
+func (t GeometryType) Zero() any {
 	// MySQL throws an error for INSERT IGNORE, UPDATE IGNORE, etc. if the geometry type cannot be parsed:
 	// ERROR 1416 (22003): Cannot get geometry object from data you send to the GEOMETRY field
 	// So, we don't implement a zero type for this function.
@@ -550,7 +548,7 @@ func (t GeometryType) SetSRID(v uint32) sql.Type {
 }
 
 // MatchSRID implements SpatialColumnType interface
-func (t GeometryType) MatchSRID(v interface{}) error {
+func (t GeometryType) MatchSRID(v any) error {
 	if !t.DefinedSRID {
 		return nil
 	}

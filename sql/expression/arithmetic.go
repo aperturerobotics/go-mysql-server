@@ -17,7 +17,6 @@ package expression
 import (
 	"fmt"
 	"math"
-	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -766,7 +765,7 @@ func (e *UnaryMinus) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 		// try getting int out of string value
 		i, iErr := strconv.ParseInt(n, 10, 64)
 		if iErr != nil {
-			return nil, sql.ErrInvalidType.New(reflect.TypeFor[string]())
+			return nil, sql.ErrInvalidType.New(sql.TypeName(""))
 		}
 		return -i, nil
 	case bool:
@@ -776,7 +775,7 @@ func (e *UnaryMinus) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 			return 0, nil
 		}
 	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(n))
+		return nil, sql.ErrInvalidType.New(sql.TypeName(n))
 	}
 }
 

@@ -16,7 +16,6 @@ package function
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 
 	"gopkg.in/src-d/go-errors.v1"
@@ -138,7 +137,7 @@ func (p *Pad) Eval(
 
 	str, _, err = types.LongText.Convert(ctx, str)
 	if err != nil {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str))
+		return nil, sql.ErrInvalidType.New(sql.TypeName(str))
 	}
 
 	length, err := p.length.Eval(ctx, row)

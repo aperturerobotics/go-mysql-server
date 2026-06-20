@@ -17,7 +17,7 @@ package types
 import (
 	"context"
 	"fmt"
-	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -46,7 +46,7 @@ var (
 	ErrDataTruncatedForColumn      = errors.NewKind("Data truncated for column '%s'")
 	ErrDataTruncatedForColumnAtRow = errors.NewKind("Data truncated for column '%s' at row %d")
 
-	enumValueType = reflect.TypeOf(uint16(0))
+	enumValueType = sql.ValueKindUint16
 )
 
 type EnumType struct {
@@ -92,10 +92,8 @@ func CreateEnumType(values []string, collation sql.CollationID) (sql.EnumType, e
 			return nil, err
 		}
 		if tinygoBuild {
-			for _, prev := range values[:i] {
-				if prev == value {
-					return nil, fmt.Errorf("duplicate entry: %v", value)
-				}
+			if slices.Contains(values[:i], value) {
+				return nil, fmt.Errorf("duplicate entry: %v", value)
 			}
 		} else {
 			if _, ok := hashedValToIndex[hashedVal]; ok {
@@ -134,7 +132,7 @@ func (t EnumType) MaxTextResponseByteLength(*sql.Context) uint32 {
 }
 
 // Compare implements Type interface.
-func (t EnumType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t EnumType) Compare(ctx context.Context, a any, b any) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -175,7 +173,7 @@ func (t EnumType) CompareValue(ctx *sql.Context, a, b sql.Value) (int, error) {
 }
 
 // Convert implements Type interface.
-func (t EnumType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t EnumType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	if v == nil {
 		return nil, sql.InRange, nil
 	}
@@ -252,7 +250,7 @@ func (t EnumType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t EnumType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t EnumType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -318,7 +316,7 @@ func (t EnumType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t EnumType) ValueType() reflect.Type {
+func (t EnumType) ValueKind() sql.ValueKind {
 	return enumValueType
 }
 
@@ -328,7 +326,7 @@ func (t EnumType) CollationCoercibility(ctx *sql.Context) (collation sql.Collati
 }
 
 // Zero implements Type interface.
-func (t EnumType) Zero() interface{} {
+func (t EnumType) Zero() any {
 	// TODO: If an ENUM column is declared NOT NULL, its default value is the first element of the list of permitted values.
 	return uint16(0)
 }

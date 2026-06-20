@@ -21,7 +21,7 @@ import (
 
 // NewBuilderForColumnDefaultResolution creates a Builder suitable for resolving column default
 // and generated expressions in a schema (e.g. UnresolvedColumnDefault placeholders). It uses a minimal
-// catalog backed only by the built-in function registry — sufficient because generated column
+// catalog backed only by the built-in function registry, sufficient because generated column
 // expressions may only reference columns of the same table and built-in SQL functions.
 func NewBuilderForColumnDefaultResolution(ctx *sql.Context, overrides sql.EngineOverrides) *Builder {
 	return New(ctx, &exprResolutionCatalog{
@@ -97,14 +97,6 @@ func (c *exprResolutionCatalog) DatabaseTableAsOf(_ *sql.Context, _ sql.Database
 func (c *exprResolutionCatalog) LockTable(_ *sql.Context, _ string) {}
 
 func (c *exprResolutionCatalog) UnlockTables(_ *sql.Context, _ uint32) error { return nil }
-
-func (c *exprResolutionCatalog) ExternalStoredProcedure(_ *sql.Context, _ string, _ int) (*sql.ExternalStoredProcedureDetails, error) {
-	return nil, nil
-}
-
-func (c *exprResolutionCatalog) ExternalStoredProcedures(_ *sql.Context, _ string) ([]sql.ExternalStoredProcedureDetails, error) {
-	return nil, nil
-}
 
 func (c *exprResolutionCatalog) GetTableStats(_ *sql.Context, _ string, _ sql.Table) ([]sql.Statistic, error) {
 	return nil, nil

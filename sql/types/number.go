@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -70,16 +69,16 @@ var (
 	// DecimalMinInt64 represents the min value an int64 can hold
 	DecimalMinInt64 = DecimalFromInt64(math.MinInt64)
 
-	numberInt8ValueType    = reflect.TypeOf(int8(0))
-	numberInt16ValueType   = reflect.TypeOf(int16(0))
-	numberInt32ValueType   = reflect.TypeOf(int32(0))
-	numberInt64ValueType   = reflect.TypeOf(int64(0))
-	numberUint8ValueType   = reflect.TypeOf(uint8(0))
-	numberUint16ValueType  = reflect.TypeOf(uint16(0))
-	numberUint32ValueType  = reflect.TypeOf(uint32(0))
-	numberUint64ValueType  = reflect.TypeOf(uint64(0))
-	numberFloat32ValueType = reflect.TypeOf(float32(0))
-	numberFloat64ValueType = reflect.TypeOf(float64(0))
+	numberInt8ValueType    = sql.ValueKindInt8
+	numberInt16ValueType   = sql.ValueKindInt16
+	numberInt32ValueType   = sql.ValueKindInt32
+	numberInt64ValueType   = sql.ValueKindInt64
+	numberUint8ValueType   = sql.ValueKindUint8
+	numberUint16ValueType  = sql.ValueKindUint16
+	numberUint32ValueType  = sql.ValueKindUint32
+	numberUint64ValueType  = sql.ValueKindUint64
+	numberFloat32ValueType = sql.ValueKindFloat32
+	numberFloat64ValueType = sql.ValueKindFloat64
 
 	numre = regexp.MustCompile(`^[ ]*[0-9]*\.?[0-9]+`)
 )
@@ -150,7 +149,7 @@ func (t NumberTypeImpl_) IsNumericType() bool {
 }
 
 // Compare implements Type interface.
-func (t NumberTypeImpl_) Compare(s context.Context, a interface{}, b interface{}) (int, error) {
+func (t NumberTypeImpl_) Compare(s context.Context, a any, b any) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -274,7 +273,7 @@ func (t NumberTypeImpl_) CompareValue(ctx *sql.Context, a, b sql.Value) (int, er
 }
 
 // Convert implements Type interface.
-func (t NumberTypeImpl_) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t NumberTypeImpl_) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	var err error
 	if v == nil {
 		return nil, sql.InRange, nil
@@ -416,7 +415,7 @@ func (t NumberTypeImpl_) Convert(ctx context.Context, v interface{}) (interface{
 	}
 }
 
-func (t NumberTypeImpl_) ConvertRound(ctx context.Context, v interface{}) (any, sql.ConvertInRange, error) {
+func (t NumberTypeImpl_) ConvertRound(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	// This operates specifically on Integer base types and when v is a string
 	if _, isStr := v.(string); !isStr {
 		return t.Convert(ctx, v)
@@ -580,7 +579,7 @@ func (t NumberTypeImpl_) Promote() sql.Type {
 	}
 }
 
-func (t NumberTypeImpl_) SQLInt8(ctx *sql.Context, dest []byte, v interface{}) ([]byte, error) {
+func (t NumberTypeImpl_) SQLInt8(ctx *sql.Context, dest []byte, v any) ([]byte, error) {
 	num, _, err := convertToInt64(t, v, false)
 	if err != nil {
 		return nil, err
@@ -594,7 +593,7 @@ func (t NumberTypeImpl_) SQLInt8(ctx *sql.Context, dest []byte, v interface{}) (
 	return dest, nil
 }
 
-func (t NumberTypeImpl_) SQLInt16(ctx *sql.Context, dest []byte, v interface{}) ([]byte, error) {
+func (t NumberTypeImpl_) SQLInt16(ctx *sql.Context, dest []byte, v any) ([]byte, error) {
 	num, _, err := convertToInt64(t, v, false)
 	if err != nil {
 		return nil, err
@@ -608,7 +607,7 @@ func (t NumberTypeImpl_) SQLInt16(ctx *sql.Context, dest []byte, v interface{}) 
 	return dest, nil
 }
 
-func (t NumberTypeImpl_) SQLInt24(ctx *sql.Context, dest []byte, v interface{}) ([]byte, error) {
+func (t NumberTypeImpl_) SQLInt24(ctx *sql.Context, dest []byte, v any) ([]byte, error) {
 	num, _, err := convertToInt64(t, v, false)
 	if err != nil {
 		return nil, err
@@ -622,7 +621,7 @@ func (t NumberTypeImpl_) SQLInt24(ctx *sql.Context, dest []byte, v interface{}) 
 	return dest, nil
 }
 
-func (t NumberTypeImpl_) SQLInt32(ctx *sql.Context, dest []byte, v interface{}) ([]byte, error) {
+func (t NumberTypeImpl_) SQLInt32(ctx *sql.Context, dest []byte, v any) ([]byte, error) {
 	num, _, err := convertToInt64(t, v, false)
 	if err != nil {
 		return nil, err
@@ -636,7 +635,7 @@ func (t NumberTypeImpl_) SQLInt32(ctx *sql.Context, dest []byte, v interface{}) 
 	return dest, nil
 }
 
-func (t NumberTypeImpl_) SQLInt64(ctx *sql.Context, dest []byte, v interface{}) ([]byte, error) {
+func (t NumberTypeImpl_) SQLInt64(ctx *sql.Context, dest []byte, v any) ([]byte, error) {
 	vt, _, err := convertToInt64(t, v, false)
 	if err != nil {
 		return nil, err
@@ -645,7 +644,7 @@ func (t NumberTypeImpl_) SQLInt64(ctx *sql.Context, dest []byte, v interface{}) 
 	return dest, nil
 }
 
-func (t NumberTypeImpl_) SQLUint8(ctx *sql.Context, dest []byte, v interface{}) ([]byte, error) {
+func (t NumberTypeImpl_) SQLUint8(ctx *sql.Context, dest []byte, v any) ([]byte, error) {
 	num, _, err := convertToUint64(t, v, false)
 	if err != nil {
 		return nil, err
@@ -658,7 +657,7 @@ func (t NumberTypeImpl_) SQLUint8(ctx *sql.Context, dest []byte, v interface{}) 
 	return dest, nil
 }
 
-func (t NumberTypeImpl_) SQLUint16(ctx *sql.Context, dest []byte, v interface{}) ([]byte, error) {
+func (t NumberTypeImpl_) SQLUint16(ctx *sql.Context, dest []byte, v any) ([]byte, error) {
 	num, _, err := convertToUint64(t, v, false)
 	if err != nil {
 		return nil, err
@@ -671,7 +670,7 @@ func (t NumberTypeImpl_) SQLUint16(ctx *sql.Context, dest []byte, v interface{})
 	return dest, nil
 }
 
-func (t NumberTypeImpl_) SQLUint24(ctx *sql.Context, dest []byte, v interface{}) ([]byte, error) {
+func (t NumberTypeImpl_) SQLUint24(ctx *sql.Context, dest []byte, v any) ([]byte, error) {
 	num, _, err := convertToUint64(t, v, false)
 	if err != nil {
 		return nil, err
@@ -684,7 +683,7 @@ func (t NumberTypeImpl_) SQLUint24(ctx *sql.Context, dest []byte, v interface{})
 	return dest, nil
 }
 
-func (t NumberTypeImpl_) SQLUint32(ctx *sql.Context, dest []byte, v interface{}) ([]byte, error) {
+func (t NumberTypeImpl_) SQLUint32(ctx *sql.Context, dest []byte, v any) ([]byte, error) {
 	num, _, err := convertToUint64(t, v, false)
 	if err != nil {
 		return nil, err
@@ -697,7 +696,7 @@ func (t NumberTypeImpl_) SQLUint32(ctx *sql.Context, dest []byte, v interface{})
 	return dest, nil
 }
 
-func (t NumberTypeImpl_) SQLUint64(ctx *sql.Context, dest []byte, v interface{}) ([]byte, error) {
+func (t NumberTypeImpl_) SQLUint64(ctx *sql.Context, dest []byte, v any) ([]byte, error) {
 	num, _, err := convertToUint64(t, v, false)
 	if err != nil {
 		return nil, err
@@ -710,7 +709,7 @@ func (t NumberTypeImpl_) SQLUint64(ctx *sql.Context, dest []byte, v interface{})
 	return dest, nil
 }
 
-func (t NumberTypeImpl_) SQLFloat64(ctx *sql.Context, dest []byte, v interface{}) ([]byte, error) {
+func (t NumberTypeImpl_) SQLFloat64(ctx *sql.Context, dest []byte, v any) ([]byte, error) {
 	num, err := convertToFloat64(t, v)
 	if err != nil && !sql.ErrTruncatedIncorrect.Is(err) {
 		return nil, err
@@ -719,7 +718,7 @@ func (t NumberTypeImpl_) SQLFloat64(ctx *sql.Context, dest []byte, v interface{}
 	return dest, nil
 }
 
-func (t NumberTypeImpl_) SQLFloat32(ctx *sql.Context, dest []byte, v interface{}) ([]byte, error) {
+func (t NumberTypeImpl_) SQLFloat32(ctx *sql.Context, dest []byte, v any) ([]byte, error) {
 	num, err := convertToFloat64(t, v)
 	if err != nil {
 		return nil, err
@@ -734,7 +733,7 @@ func (t NumberTypeImpl_) SQLFloat32(ctx *sql.Context, dest []byte, v interface{}
 }
 
 // SQL implements Type interface.
-func (t NumberTypeImpl_) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t NumberTypeImpl_) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -887,7 +886,7 @@ func (t NumberTypeImpl_) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t NumberTypeImpl_) ValueType() reflect.Type {
+func (t NumberTypeImpl_) ValueKind() sql.ValueKind {
 	switch t.baseType {
 	case sqltypes.Int8:
 		return numberInt8ValueType
@@ -1209,7 +1208,7 @@ func convertToUint64(t NumberTypeImpl_, v any, round Round) (uint64, sql.Convert
 	}
 }
 
-func convertToFloat64(t NumberTypeImpl_, v interface{}) (float64, error) {
+func convertToFloat64(t NumberTypeImpl_, v any) (float64, error) {
 	switch v := v.(type) {
 	case time.Time:
 		// TODO: This is not how datetime is converted in MySQL https://github.com/dolthub/dolt/issues/10278
@@ -1436,7 +1435,7 @@ func convertValueToFloat64(ctx *sql.Context, v sql.Value) (float64, error) {
 }
 
 // CoalesceInt converts a int8/int16/... to int
-func CoalesceInt(val interface{}) (int, bool) {
+func CoalesceInt(val any) (int, bool) {
 	switch v := val.(type) {
 	case int:
 		return v, true
@@ -1530,7 +1529,7 @@ func TruncateStringToDouble(s string) (string, bool) {
 // This function is called when convertTo type is number type only. The hex literal values are parsed into blobs as
 // binary string as default, but for numeric context, the value should be a number.
 // Byte arrays of other SQL types are not handled here.
-func ConvertHexBlobToDecimalForNumericContext(val interface{}, originType sql.Type) (interface{}, error) {
+func ConvertHexBlobToDecimalForNumericContext(val any, originType sql.Type) (any, error) {
 	if bin, isBinary := val.([]byte); isBinary && IsBlobType(originType) {
 		stringVal := hex.EncodeToString(bin)
 		decimalNum, err := strconv.ParseUint(stringVal, 16, 64)

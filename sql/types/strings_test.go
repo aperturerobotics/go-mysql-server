@@ -17,7 +17,6 @@ package types
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -34,8 +33,8 @@ func TestStringCompare(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	tests := []struct {
 		typ         sql.StringType
-		val1        interface{}
-		val2        interface{}
+		val1        any
+		val2        any
 		expectedCmp int
 	}{
 		{MustCreateBinary(sqltypes.Binary, 10), nil, 0, 1},
@@ -303,8 +302,8 @@ func TestStringConvert(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	tests := []struct {
 		typ         sql.StringType
-		val         interface{}
-		expectedVal interface{}
+		val         any
+		expectedVal any
 		expectedErr bool
 	}{
 		{MustCreateBinary(sqltypes.Binary, 3), nil, nil, false},
@@ -345,7 +344,7 @@ func TestStringConvert(t *testing.T) {
 		{MustCreateBinary(sqltypes.VarBinary, 3), []byte{01, 02, 03, 04}, nil, true},
 		{MustCreateStringWithDefaults(sqltypes.VarChar, 3), []byte("abcd"), nil, true},
 		{MustCreateStringWithDefaults(sqltypes.Char, 20), JSONDocument{Val: nil}, "null", false},
-		{MustCreateStringWithDefaults(sqltypes.Char, 20), JSONDocument{Val: map[string]interface{}{"a": 1}}, `{"a": 1}`, false},
+		{MustCreateStringWithDefaults(sqltypes.Char, 20), JSONDocument{Val: map[string]any{"a": 1}}, `{"a": 1}`, false},
 		{MustCreateStringWithDefaults(sqltypes.Char, 20), NewLazyJSONDocument([]byte(`{"a":1}`)), `{"a": 1}`, false},
 
 		{MustCreateStringWithDefaults(sqltypes.Char, 10), []byte{0x98, 0x76, 0x54}, "", false},
@@ -372,7 +371,7 @@ func TestStringConvert(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, test.expectedVal, val)
 				if val != nil {
-					assert.Equal(t, test.typ.ValueType(), reflect.TypeOf(val))
+					assert.Equal(t, test.typ.ValueKind(), sql.ValueKindOf(val))
 				}
 			}
 		})

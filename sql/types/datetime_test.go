@@ -16,7 +16,6 @@ package types
 
 import (
 	"fmt"
-	"reflect"
 	"testing"
 	"time"
 
@@ -32,8 +31,8 @@ func TestDatetimeCompare(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	tests := []struct {
 		typ         sql.Type
-		val1        interface{}
-		val2        interface{}
+		val1        any
+		val2        any
 		expectedCmp int
 	}{
 		{Date, nil, 0, 1},
@@ -153,8 +152,8 @@ func TestDatetimeConvert(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	type testcase struct {
 		typ         sql.Type
-		val         interface{}
-		expectedVal interface{}
+		val         any
+		expectedVal any
 		expectedErr bool
 	}
 	tests := []testcase{
@@ -385,7 +384,7 @@ func TestDatetimeConvert(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, test.expectedVal, val)
 				if val != nil {
-					assert.Equal(t, test.typ.ValueType(), reflect.TypeOf(val))
+					assert.Equal(t, test.typ.ValueKind(), sql.ValueKindOf(val))
 				}
 			}
 		})
@@ -427,7 +426,7 @@ func TestDatetimeOverflowUnderflow(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	tests := []struct {
 		typ         sql.DatetimeType
-		val         interface{}
+		val         any
 		expectError bool
 	}{
 		{Timestamp, "1969-12-31 23:59:59", true},

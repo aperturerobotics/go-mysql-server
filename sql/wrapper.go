@@ -50,6 +50,9 @@ type AnyWrapper interface {
 	// Hash is a value that can be compared to check if two wrapper values are equal. Equality of the hashes implies
 	// equality of the wrappers.
 	Hash() any
+
+	// ValueKind returns the Go value family returned by UnwrapAny.
+	ValueKind() ValueKind
 }
 
 // Wrapper is an interface for types that encapsulate a SQL value of a specific type.

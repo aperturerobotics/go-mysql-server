@@ -16,7 +16,6 @@ package types
 
 import (
 	"fmt"
-	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -32,8 +31,8 @@ func TestSetCompare(t *testing.T) {
 	tests := []struct {
 		vals        []string
 		collation   sql.CollationID
-		val1        interface{}
-		val2        interface{}
+		val1        any
+		val2        any
 		expectedCmp int
 	}{
 		{[]string{"one", "two"}, sql.Collation_Default, nil, 1, 1},
@@ -69,8 +68,8 @@ func TestSetCompareErrors(t *testing.T) {
 	tests := []struct {
 		vals      []string
 		collation sql.CollationID
-		val1      interface{}
-		val2      interface{}
+		val1      any
+		val2      any
 	}{
 		{[]string{"one", "two"}, sql.Collation_Default, "three", "two"},
 		{[]string{"one", "two"}, sql.Collation_Default, time.Date(2019, 12, 12, 12, 12, 12, 0, time.UTC), []byte("one")},
@@ -148,8 +147,8 @@ func TestSetConvert(t *testing.T) {
 	tests := []struct {
 		vals        []string
 		collation   sql.CollationID
-		val         interface{}
-		expectedVal interface{}
+		val         any
+		expectedVal any
 		expectedErr bool
 	}{
 		{[]string{"one", "two"}, sql.Collation_Default, nil, nil, false},
@@ -199,7 +198,7 @@ func TestSetConvert(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, 0, res)
 				if val != nil {
-					assert.Equal(t, typ.ValueType(), reflect.TypeOf(val))
+					assert.Equal(t, typ.ValueKind(), sql.ValueKindOf(val))
 				}
 			}
 		})

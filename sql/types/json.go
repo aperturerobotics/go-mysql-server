@@ -19,8 +19,6 @@ package types
 import (
 	"context"
 	"encoding/json"
-	"reflect"
-
 	"github.com/cockroachdb/apd/v3"
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
@@ -30,7 +28,7 @@ import (
 )
 
 var (
-	jsonValueType = reflect.TypeOf((*sql.JSONWrapper)(nil)).Elem()
+	jsonValueType = sql.ValueKindJSONWrapper
 
 	MaxJsonFieldByteLength = int64(1024) * int64(1024) * int64(1024)
 )
@@ -41,7 +39,7 @@ var _ sql.CollationCoercible = JsonType{}
 type JsonType struct{}
 
 // Compare implements Type interface.
-func (t JsonType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t JsonType) Compare(ctx context.Context, a any, b any) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -50,7 +48,7 @@ func (t JsonType) Compare(ctx context.Context, a interface{}, b interface{}) (in
 
 // convertJSONValue parses JSON-encoded data if the input is a string or []byte, returning the resulting JSONDocument. For
 // other types, the value is returned if it can be marshalled.
-func convertJSONValue(v interface{}) (interface{}, sql.ConvertInRange, error) {
+func convertJSONValue(v any) (any, sql.ConvertInRange, error) {
 	var data []byte
 	var charsetMaxLength int64 = 1
 	switch x := v.(type) {
@@ -73,7 +71,7 @@ func convertJSONValue(v interface{}) (interface{}, sql.ConvertInRange, error) {
 		return nil, sql.InRange, ErrLengthTooLarge.New(len(data), MaxJsonFieldByteLength)
 	}
 
-	var val interface{}
+	var val any
 	if err := json.Unmarshal(data, &val); err != nil {
 		return nil, sql.InRange, sql.ErrInvalidJson.New(err.Error())
 	}
@@ -82,7 +80,7 @@ func convertJSONValue(v interface{}) (interface{}, sql.ConvertInRange, error) {
 }
 
 // Convert implements Type interface.
-func (t JsonType) Convert(c context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t JsonType) Convert(c context.Context, v any) (any, sql.ConvertInRange, error) {
 	switch v := v.(type) {
 	case sql.JSONWrapper:
 		return v, sql.InRange, nil
@@ -141,7 +139,7 @@ func (t JsonType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t JsonType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t JsonType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -186,12 +184,12 @@ func (t JsonType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t JsonType) ValueType() reflect.Type {
+func (t JsonType) ValueKind() sql.ValueKind {
 	return jsonValueType
 }
 
 // Zero implements Type interface.
-func (t JsonType) Zero() interface{} {
+func (t JsonType) Zero() any {
 	// MySQL throws an error for INSERT IGNORE, UPDATE IGNORE, etc. when bad json is encountered:
 	// ERROR 3140 (22032): Invalid JSON text: "Invalid value." at position 0 in value for column 'table.column'.
 	return nil
@@ -203,22 +201,22 @@ func (JsonType) CollationCoercibility(ctx *sql.Context) (collation sql.Collation
 }
 
 // DeepCopyJson implements deep copy of JSON document
-func DeepCopyJson(v interface{}) interface{} {
+func DeepCopyJson(v any) any {
 	if v == nil {
 		return nil
 	}
 
 	switch v.(type) {
-	case map[string]interface{}:
-		m := v.(map[string]interface{})
-		newMap := make(map[string]interface{})
+	case map[string]any:
+		m := v.(map[string]any)
+		newMap := make(map[string]any)
 		for k, value := range m {
 			newMap[k] = DeepCopyJson(value)
 		}
 		return newMap
-	case []interface{}:
-		arr := v.([]interface{})
-		newArray := make([]interface{}, len(arr))
+	case []any:
+		arr := v.([]any)
+		newArray := make([]any, len(arr))
 		for i, doc := range arr {
 			newArray[i] = DeepCopyJson(doc)
 		}
@@ -233,7 +231,7 @@ func DeepCopyJson(v interface{}) interface{} {
 }
 
 func MustJSON(s string) JSONDocument {
-	var doc interface{}
+	var doc any
 	if err := json.Unmarshal([]byte(s), &doc); err != nil {
 		panic(err)
 	}

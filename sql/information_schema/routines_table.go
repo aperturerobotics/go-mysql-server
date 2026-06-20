@@ -136,10 +136,6 @@ func routinesRowIter(ctx *Context, c Catalog, p map[string][]*plan.Procedure) (R
 		return nil, ErrSystemVariableCodeFail.New("sql_mode", sysVal)
 	}
 
-	showExternalProcedures, err := ctx.GetSessionVariable(ctx, "show_external_procedures")
-	if err != nil {
-		return nil, err
-	}
 	privSet, _ := ctx.GetPrivilegeSet()
 	if privSet == nil {
 		privSet = mysql_db.NewPrivilegeSet()
@@ -155,11 +151,6 @@ func routinesRowIter(ctx *Context, c Catalog, p map[string][]*plan.Procedure) (R
 		}
 		dbCollation := plan.GetDatabaseCollation(ctx, db)
 		for _, procedure := range procedures {
-			// We skip external procedures if the variable to show them is set to false
-			if showExternalProcedures.(int8) == 0 && procedure.IsExternal() {
-				continue
-			}
-
 			// todo shortcircuit routineDef->procedure.CreateProcedureString?
 			// TODO: figure out how auth works in this case
 			builder := planbuilder.New(ctx, c, nil)
@@ -247,10 +238,6 @@ func routinesRowIter(ctx *Context, c Catalog, p map[string][]*plan.Procedure) (R
 func parametersRowIter(ctx *Context, c Catalog, p map[string][]*plan.Procedure) (RowIter, error) {
 	var rows []Row
 
-	showExternalProcedures, err := ctx.GetSessionVariable(ctx, "show_external_procedures")
-	if err != nil {
-		return nil, err
-	}
 	privSet, _ := ctx.GetPrivilegeSet()
 	if privSet == nil {
 		privSet = mysql_db.NewPrivilegeSet()
@@ -260,11 +247,6 @@ func parametersRowIter(ctx *Context, c Catalog, p map[string][]*plan.Procedure) 
 			continue
 		}
 		for _, procedure := range procedures {
-			// We skip external procedures if the variable to show them is set to false
-			if showExternalProcedures.(int8) == 0 && procedure.IsExternal() {
-				continue
-			}
-
 			for i, param := range procedure.Params {
 				var (
 					ordinalPos        = uint64(i + 1)

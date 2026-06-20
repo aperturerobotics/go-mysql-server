@@ -16,12 +16,10 @@ package types
 
 import (
 	"context"
-	"math"
-	"reflect"
-
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
 	"gopkg.in/src-d/go-errors.v1"
+	"math"
 
 	"github.com/dolthub/go-mysql-server/sql"
 )
@@ -40,6 +38,10 @@ type GeomColl struct {
 	SRID  uint32
 }
 
+func (g GeomColl) ValueKind() sql.ValueKind {
+	return sql.ValueKindGeomColl
+}
+
 var _ sql.Type = GeomCollType{}
 var _ sql.SpatialColumnType = GeomCollType{}
 var _ sql.CollationCoercible = GeomCollType{}
@@ -48,16 +50,16 @@ var _ GeometryValue = GeomColl{}
 var (
 	ErrNotGeomColl = errors.NewKind("value of type %T is not a point")
 
-	geomcollValueType = reflect.TypeOf(GeomColl{})
+	geomcollValueType = sql.ValueKindGeomColl
 )
 
 // Compare implements Type interface.
-func (t GeomCollType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t GeomCollType) Compare(ctx context.Context, a any, b any) (int, error) {
 	return GeometryType{}.Compare(ctx, a, b)
 }
 
 // Convert implements Type interface.
-func (t GeomCollType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t GeomCollType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	// Allow null
 	if v == nil {
 		return nil, sql.InRange, nil
@@ -115,7 +117,7 @@ func (t GeomCollType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t GeomCollType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t GeomCollType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -141,12 +143,12 @@ func (t GeomCollType) Type() query.Type {
 }
 
 // Zero implements Type interface.
-func (t GeomCollType) Zero() interface{} {
+func (t GeomCollType) Zero() any {
 	return GeomColl{}
 }
 
 // ValueType implements Type interface.
-func (t GeomCollType) ValueType() reflect.Type {
+func (t GeomCollType) ValueKind() sql.ValueKind {
 	return geomcollValueType
 }
 
@@ -168,7 +170,7 @@ func (t GeomCollType) SetSRID(v uint32) sql.Type {
 }
 
 // MatchSRID implements SpatialColumnType interface
-func (t GeomCollType) MatchSRID(v interface{}) error {
+func (t GeomCollType) MatchSRID(v any) error {
 	val, ok := v.(GeomColl)
 	if !ok {
 		return ErrNotGeomColl.New(v)

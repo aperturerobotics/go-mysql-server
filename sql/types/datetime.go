@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -153,7 +152,7 @@ var (
 	// DatetimeMaxRange is a date and a time with maximum precision and maximum range.
 	DatetimeMaxRange = MustCreateDatetimeType(sqltypes.Datetime, MaxDatetimePrecision)
 
-	datetimeValueType = reflect.TypeOf(time.Time{})
+	datetimeValueType = sql.ValueKindTime
 )
 
 type datetimeType struct {
@@ -193,7 +192,7 @@ func (t datetimeType) Precision() int {
 }
 
 // Compare implements Type interface.
-func (t datetimeType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t datetimeType) Compare(ctx context.Context, a any, b any) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -234,7 +233,7 @@ func (t datetimeType) CompareValue(ctx *sql.Context, a, b sql.Value) (int, error
 }
 
 // Convert implements Type interface.
-func (t datetimeType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t datetimeType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	if v == nil {
 		return nil, sql.InRange, nil
 	}
@@ -251,7 +250,7 @@ var precisionConversion = [7]int{
 	1, 10, 100, 1_000, 10_000, 100_000, 1_000_000,
 }
 
-func ConvertToTime(ctx context.Context, v interface{}, t datetimeType) (time.Time, error) {
+func ConvertToTime(ctx context.Context, v any, t datetimeType) (time.Time, error) {
 	if v == nil {
 		return time.Time{}, nil
 	}
@@ -300,7 +299,7 @@ func ConvertToTime(ctx context.Context, v interface{}, t datetimeType) (time.Tim
 }
 
 // ConvertWithoutRangeCheck converts the parameter to time.Time without checking the range.
-func (t datetimeType) ConvertWithoutRangeCheck(ctx context.Context, v interface{}) (time.Time, error) {
+func (t datetimeType) ConvertWithoutRangeCheck(ctx context.Context, v any) (time.Time, error) {
 	var res time.Time
 
 	var err error
@@ -475,7 +474,7 @@ func (t datetimeType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t datetimeType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t datetimeType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -582,11 +581,11 @@ func (t datetimeType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t datetimeType) ValueType() reflect.Type {
+func (t datetimeType) ValueKind() sql.ValueKind {
 	return datetimeValueType
 }
 
-func (t datetimeType) Zero() interface{} {
+func (t datetimeType) Zero() any {
 	return ZeroTime
 }
 
@@ -613,7 +612,7 @@ func (t datetimeType) MinimumTime() time.Time {
 
 // ValidateTime receives a time and returns either that time or nil if it's
 // not a valid time.
-func ValidateTime(t time.Time) interface{} {
+func ValidateTime(t time.Time) any {
 	if t.Before(datetimeMinTime) || t.After(datetimeMaxTime) {
 		return nil
 	}
@@ -622,7 +621,7 @@ func ValidateTime(t time.Time) interface{} {
 
 // ValidateTimestamp receives a time and returns either that time or nil if it's
 // not a valid timestamp.
-func ValidateTimestamp(t time.Time) interface{} {
+func ValidateTimestamp(t time.Time) any {
 	if t.Before(datetimeTypeMinTimestamp) || t.After(datetimeTypeMaxTimestamp) {
 		return nil
 	}

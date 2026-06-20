@@ -16,7 +16,6 @@ package memory
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/cockroachdb/apd/v3"
@@ -916,16 +915,18 @@ func verifyRowTypes(row sql.Row, schema sql.Schema) error {
 		for i := range schema {
 			col := schema[i]
 			rowVal := row[i]
-			var valType reflect.Type
-			if wrapper, isWrapper := rowVal.(sql.AnyWrapper); isWrapper {
-				method, _ := reflect.TypeOf(wrapper).MethodByName("Unwrap")
-				valType = method.Type.Out(0)
-			} else {
-				valType = reflect.TypeOf(rowVal)
+			if rowVal == nil {
+				continue
 			}
-			expectedType := col.Type.ValueType()
-			if valType != expectedType && rowVal != nil && !valType.AssignableTo(expectedType) {
-				return fmt.Errorf("Actual Value Type: %s, Expected Value Type: %s", valType.String(), expectedType.String())
+			var valKind sql.ValueKind
+			if wrapper, isWrapper := rowVal.(sql.AnyWrapper); isWrapper {
+				valKind = wrapper.ValueKind()
+			} else {
+				valKind = sql.ValueKindOf(rowVal)
+			}
+			expectedKind := col.Type.ValueKind()
+			if !valKind.Matches(expectedKind) {
+				return fmt.Errorf("Actual Value Type: %s, Expected Value Type: %s", valKind.String(), expectedKind.String())
 			}
 		}
 	}

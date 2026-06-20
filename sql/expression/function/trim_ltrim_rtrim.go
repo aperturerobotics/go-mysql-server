@@ -16,7 +16,6 @@ package function
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/dolthub/vitess/go/vt/sqlparser"
@@ -69,7 +68,7 @@ func (t *Trim) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Convert pat into string and unwrap automatically
 	pat, _, err = types.LongText.Convert(ctx, pat)
 	if err != nil {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(pat).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(pat))
 	}
 
 	// Handle Dolt's TextStorage wrapper that doesn't convert to plain string
@@ -92,7 +91,7 @@ func (t *Trim) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	// Convert str to text type and unwrap automatically
 	str, _, err = types.LongText.Convert(ctx, str)
 	if err != nil {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(str))
 	}
 
 	// Handle Dolt's TextStorage wrapper that doesn't convert to plain string
@@ -220,7 +219,7 @@ func (t *LeftTrim) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 
 	str, _, err = types.LongText.Convert(ctx, str)
 	if err != nil {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str))
+		return nil, sql.ErrInvalidType.New(sql.TypeName(str))
 	}
 
 	// Handle Dolt's TextStorage wrapper that doesn't convert to plain string
@@ -289,7 +288,7 @@ func (t *RightTrim) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 
 	str, _, err = types.LongText.Convert(ctx, str)
 	if err != nil {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str))
+		return nil, sql.ErrInvalidType.New(sql.TypeName(str))
 	}
 
 	// Handle Dolt's TextStorage wrapper that doesn't convert to plain string

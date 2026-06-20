@@ -15,7 +15,7 @@
 package sql
 
 import (
-	"reflect"
+	"fmt"
 	"strings"
 
 	"gopkg.in/src-d/go-errors.v1"
@@ -46,7 +46,7 @@ func (s Schema) CheckRow(ctx *Context, row Row) error {
 			continue
 		}
 
-		typ := reflect.TypeOf(v).String()
+		typ := fmt.Sprintf("%T", v)
 		return ErrUnexpectedType.New(idx, typ)
 	}
 

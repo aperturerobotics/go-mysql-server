@@ -20,7 +20,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 
 	"github.com/cockroachdb/apd/v3"
@@ -255,7 +254,7 @@ func (b *BaseBuilder) buildTableAlias(ctx *sql.Context, n *plan.TableAlias, row 
 	if tbl, ok := n.Child.(sql.Nameable); ok {
 		table = tbl.Name()
 	} else {
-		table = reflect.TypeOf(n.Child).String()
+		table = sql.TypeName(n.Child)
 	}
 
 	span, ctx := ctx.Span("sql.TableAlias",
@@ -334,10 +333,7 @@ func (b *BaseBuilder) buildVirtualColumnTable(ctx *sql.Context, n *plan.VirtualC
 }
 
 func (b *BaseBuilder) buildProcedure(ctx *sql.Context, n *plan.Procedure, row sql.Row) (sql.RowIter, error) {
-	if n.ExternalProc == nil {
-		return nil, nil
-	}
-	return b.buildNodeExec(ctx, n.ExternalProc, row)
+	return nil, nil
 }
 
 func (b *BaseBuilder) buildRecursiveTable(ctx *sql.Context, n *plan.RecursiveTable, row sql.Row) (sql.RowIter, error) {
@@ -695,62 +691,6 @@ func (b *BaseBuilder) buildInto(ctx *sql.Context, n *plan.Into, row sql.Row) (sq
 	}
 
 	return sql.RowsToRowIter(sql.Row{types.NewOkResult(1)}), nil
-}
-
-func (b *BaseBuilder) buildExternalProcedure(ctx *sql.Context, n *plan.ExternalProcedure, row sql.Row) (sql.RowIter, error) {
-	// The function's structure has been verified by the analyzer, so no need to double-check any of it here
-	funcVal := reflect.ValueOf(n.Function)
-	funcType := funcVal.Type()
-	// The first parameter is always the context, but it doesn't exist as far as the stored procedures are concerned, so
-	// we prepend it here
-	funcParams := make([]reflect.Value, len(n.Params)+1)
-	funcParams[0] = reflect.ValueOf(ctx)
-
-	for i := range n.Params {
-		paramDefinition := n.ParamDefinitions[i]
-		var funcParamType reflect.Type
-		if paramDefinition.Variadic {
-			funcParamType = funcType.In(funcType.NumIn() - 1).Elem()
-		} else {
-			funcParamType = funcType.In(i + 1)
-		}
-		// Grab the passed-in variable and convert it to the type we expect
-		exprParamVal, err := n.Params[i].Eval(ctx, nil)
-		if err != nil {
-			return nil, err
-		}
-		exprParamVal, _, err = paramDefinition.Type.Convert(ctx, exprParamVal)
-		if err != nil {
-			return nil, err
-		}
-
-		funcParams[i+1], err = n.ProcessParam(ctx, funcParamType, exprParamVal)
-		if err != nil {
-			return nil, err
-		}
-	}
-	out := funcVal.Call(funcParams)
-
-	// Again, these types are enforced in the analyzer, so it's safe to assume their types here
-	if err, ok := out[1].Interface().(error); ok { // Only evaluates to true when error is not nil
-		return nil, err
-	}
-	for i, paramDefinition := range n.ParamDefinitions {
-		if paramDefinition.Direction == plan.ProcedureParamDirection_Inout || paramDefinition.Direction == plan.ProcedureParamDirection_Out {
-			exprParam := n.Params[i]
-			funcParamVal := funcParams[i+1].Elem().Interface()
-			err := exprParam.Set(ctx, funcParamVal, exprParam.Type(ctx))
-			if err != nil {
-				return nil, err
-			}
-			_ = ctx.Session.SetStoredProcParam(exprParam.Name(), funcParamVal)
-		}
-	}
-	// It's not invalid to return a nil RowIter, as having no rows to return is expected of many stored procedures.
-	if rowIter, ok := out[0].Interface().(sql.RowIter); ok {
-		return rowIter, nil
-	}
-	return sql.RowsToRowIter(), nil
 }
 
 func (b *BaseBuilder) buildHaving(ctx *sql.Context, n *plan.Having, row sql.Row) (sql.RowIter, error) {

@@ -16,12 +16,10 @@ package types
 
 import (
 	"context"
-	"math"
-	"reflect"
-
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
 	"gopkg.in/src-d/go-errors.v1"
+	"math"
 
 	"github.com/dolthub/go-mysql-server/sql"
 )
@@ -40,6 +38,10 @@ type Polygon struct {
 	SRID  uint32
 }
 
+func (p Polygon) ValueKind() sql.ValueKind {
+	return sql.ValueKindPolygon
+}
+
 var _ sql.Type = PolygonType{}
 var _ sql.SpatialColumnType = PolygonType{}
 var _ sql.CollationCoercible = PolygonType{}
@@ -48,16 +50,16 @@ var _ GeometryValue = Polygon{}
 var (
 	ErrNotPolygon = errors.NewKind("value of type %T is not a polygon")
 
-	polygonValueType = reflect.TypeOf(Polygon{})
+	polygonValueType = sql.ValueKindPolygon
 )
 
 // Compare implements Type interface.
-func (t PolygonType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t PolygonType) Compare(ctx context.Context, a any, b any) (int, error) {
 	return GeometryType{}.Compare(ctx, a, b)
 }
 
 // Convert implements Type interface.
-func (t PolygonType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t PolygonType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	switch buf := v.(type) {
 	case nil:
 		return nil, sql.InRange, nil
@@ -104,7 +106,7 @@ func (t PolygonType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t PolygonType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t PolygonType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -130,12 +132,12 @@ func (t PolygonType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t PolygonType) ValueType() reflect.Type {
+func (t PolygonType) ValueKind() sql.ValueKind {
 	return polygonValueType
 }
 
 // Zero implements Type interface.
-func (t PolygonType) Zero() interface{} {
+func (t PolygonType) Zero() any {
 	return Polygon{Lines: []LineString{{Points: []Point{{}, {}, {}, {}}}}}
 }
 
@@ -157,7 +159,7 @@ func (t PolygonType) SetSRID(v uint32) sql.Type {
 }
 
 // MatchSRID implements SpatialColumnType interface
-func (t PolygonType) MatchSRID(v interface{}) error {
+func (t PolygonType) MatchSRID(v any) error {
 	val, ok := v.(Polygon)
 	if !ok {
 		return ErrNotPolygon.New(v)

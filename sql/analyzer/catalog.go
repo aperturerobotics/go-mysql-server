@@ -388,34 +388,6 @@ func (c *Catalog) Function(ctx *sql.Context, schema, name string) (sql.Function,
 	return c.builtInFunctions.Function(ctx, schema, name)
 }
 
-// ExternalStoredProcedure implements sql.ExternalStoredProcedureProvider
-func (c *Catalog) ExternalStoredProcedure(ctx *sql.Context, name string, numOfParams int) (*sql.ExternalStoredProcedureDetails, error) {
-	if espp, ok := c.DbProvider.(sql.ExternalStoredProcedureProvider); ok {
-		esp, err := espp.ExternalStoredProcedure(ctx, name, numOfParams)
-		if err != nil {
-			return nil, err
-		} else if esp != nil {
-			return esp, nil
-		}
-	}
-
-	return nil, nil
-}
-
-// ExternalStoredProcedures implements sql.ExternalStoredProcedureProvider
-func (c *Catalog) ExternalStoredProcedures(ctx *sql.Context, name string) ([]sql.ExternalStoredProcedureDetails, error) {
-	if espp, ok := c.DbProvider.(sql.ExternalStoredProcedureProvider); ok {
-		esps, err := espp.ExternalStoredProcedures(ctx, name)
-		if err != nil {
-			return nil, err
-		} else if esps != nil {
-			return esps, nil
-		}
-	}
-
-	return nil, nil
-}
-
 // TableFunction implements the TableFunctionProvider interface
 func (c *Catalog) TableFunction(ctx *sql.Context, name string) (sql.TableFunction, bool) {
 	if fp, ok := c.DbProvider.(sql.TableFunctionProvider); ok {

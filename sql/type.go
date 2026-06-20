@@ -17,7 +17,6 @@ package sql
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 	"unicode"
@@ -98,8 +97,8 @@ type Type interface {
 	SQL(ctx *Context, dest []byte, v any) (sqltypes.Value, error)
 	// Type returns the query.Type for the given Type.
 	Type() query.Type
-	// ValueType returns the Go type of the value returned by Convert().
-	ValueType() reflect.Type
+	// ValueKind returns the Go value family returned by Convert().
+	ValueKind() ValueKind
 	// Zero returns the golang zero value for this type
 	Zero() any
 	fmt.Stringer
@@ -231,7 +230,7 @@ func IsStringType(t Type) bool {
 // The type of the returned value is time.Time.
 type DatetimeType interface {
 	Type
-	ConvertWithoutRangeCheck(ctx context.Context, v interface{}) (time.Time, error)
+	ConvertWithoutRangeCheck(ctx context.Context, v any) (time.Time, error)
 	MaximumTime() time.Time
 	MinimumTime() time.Time
 	Precision() int
@@ -303,7 +302,7 @@ type DecimalType interface {
 	// DecimalType, because some implementors of this interface may not be decimal types in all instantiations.
 	IsDecimalType() bool
 	// ConvertToDecimal converts the given value to an *apd.Decimal if it has a compatible type.
-	ConvertToDecimal(v interface{}) (*apd.Decimal, error)
+	ConvertToDecimal(v any) (*apd.Decimal, error)
 	// BoundsCheck rounds and validates a decimal, returning the decimal,
 	// whether the value was out of range, and an error.
 	BoundsCheck(v *apd.Decimal) (*apd.Decimal, ConvertInRange, error)
@@ -351,7 +350,7 @@ type SpatialColumnType interface {
 	// SetSRID sets SRID value for spatial types.
 	SetSRID(uint32) Type
 	// MatchSRID returns nil if column type SRID matches given value SRID otherwise returns error.
-	MatchSRID(interface{}) error
+	MatchSRID(any) error
 }
 
 // SystemVariableType represents a SQL type specifically (and only) used in system variables. Assigning any non-system
@@ -359,10 +358,10 @@ type SpatialColumnType interface {
 type SystemVariableType interface {
 	Type
 	// EncodeValue returns the given value as a string for storage.
-	EncodeValue(interface{}) (string, error)
+	EncodeValue(any) (string, error)
 	// DecodeValue returns the original value given to EncodeValue from the given string. This is different from `Convert`,
 	// as the encoded value may technically be an "illegal" value according to the type rules.
-	DecodeValue(string) (interface{}, error)
+	DecodeValue(string) (any, error)
 	// UnderlyingType returns the underlying type that this system variable type is based on.
 	UnderlyingType() Type
 }

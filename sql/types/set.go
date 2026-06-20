@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
-	"reflect"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -39,7 +38,7 @@ const (
 )
 
 var (
-	setValueType = reflect.TypeOf(uint64(0))
+	setValueType = sql.ValueKindUint64
 )
 
 type SetType struct {
@@ -114,7 +113,7 @@ func MustCreateSetType(values []string, collation sql.CollationID) sql.SetType {
 }
 
 // Compare implements Type interface.
-func (t SetType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t SetType) Compare(ctx context.Context, a any, b any) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -163,7 +162,7 @@ func (t SetType) CompareValue(ctx *sql.Context, a, b sql.Value) (int, error) {
 
 // Convert implements Type interface.
 // Returns the string representing the given value if applicable.
-func (t SetType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t SetType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	if v == nil {
 		return nil, sql.InRange, nil
 	}
@@ -230,7 +229,7 @@ func (t SetType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t SetType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t SetType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -302,12 +301,12 @@ func (t SetType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t SetType) ValueType() reflect.Type {
+func (t SetType) ValueKind() sql.ValueKind {
 	return setValueType
 }
 
 // Zero implements Type interface.
-func (t SetType) Zero() interface{} {
+func (t SetType) Zero() any {
 	return uint64(0)
 }
 
@@ -340,7 +339,7 @@ func (t SetType) BitsToString(v uint64) (string, error) {
 func (t SetType) Values() []string {
 	bitEdge := 64 - bits.LeadingZeros64(t.allValuesBitField())
 	valArray := make([]string, bitEdge)
-	for i := 0; i < bitEdge; i++ {
+	for i := range bitEdge {
 		bit := uint64(1 << uint64(i))
 		valArray[i] = t.bitToVal[bit]
 	}
@@ -388,7 +387,7 @@ func (t SetType) convertBitFieldToString(bitField uint64) (string, error) {
 	if bitEdge > len(t.bitToVal) {
 		return "", sql.ErrTooLargeForSet.New(bitField)
 	}
-	for i := 0; i < bitEdge; i++ {
+	for i := range bitEdge {
 		bit := uint64(1 << uint64(i))
 		if bit&bitField != 0 {
 			val, ok := t.bitToVal[bit]
@@ -464,7 +463,7 @@ func (t SetType) emptyStringBitField() (bitField uint64, ok bool) {
 	return bitField, ok
 }
 
-func isEmptyString(val interface{}) bool {
+func isEmptyString(val any) bool {
 	switch v := val.(type) {
 	case string:
 		return v == ""

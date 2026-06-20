@@ -98,7 +98,7 @@ func (pc *ProcedureCache) Register(dbName string, procedure *Procedure) error {
 	if procMap, ok := pc.dbToProcedureMap[dbName]; ok {
 		if procedures, ok := procMap[strings.ToLower(procedure.Name)]; ok {
 			if _, ok := procedures[paramLen]; ok {
-				return sql.ErrExternalProcedureAmbiguousOverload.New(procedure.Name, paramLen)
+				return sql.ErrStoredProcedureAlreadyExists.New(procedure.Name)
 			}
 			procedures[paramLen] = procedure
 		} else {

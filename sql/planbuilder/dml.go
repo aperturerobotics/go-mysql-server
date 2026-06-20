@@ -752,7 +752,7 @@ func (b *Builder) buildInto(inScope *scope, into *ast.Into) {
 			}
 			col, ok := inScope.proc.GetVar(val.String())
 			if !ok {
-				err := sql.ErrExternalProcedureMissingContextParam.New(val.String())
+				err := sql.ErrUndeclaredVariable.New(val.String())
 				b.handleErr(err)
 			}
 			vars[i] = col.scalarGf()

@@ -156,8 +156,6 @@ func (b *BaseBuilder) buildNodeExecNoAnalyze(ctx *sql.Context, n sql.Node, row s
 		return b.buildHaving(ctx, n, row)
 	case *plan.Signal:
 		return b.buildSignal(ctx, n, row)
-	case *plan.ExternalProcedure:
-		return b.buildExternalProcedure(ctx, n, row)
 	case *plan.Into:
 		return b.buildInto(ctx, n, row)
 	case *plan.LockTables:

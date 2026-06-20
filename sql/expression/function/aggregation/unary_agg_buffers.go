@@ -3,7 +3,6 @@ package aggregation
 import (
 	"fmt"
 	"math"
-	"reflect"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/cockroachdb/apd/v3"
@@ -611,7 +610,7 @@ func (m *maxBuffer) Update(ctx *sql.Context, row sql.Row) error {
 		return err
 	}
 
-	if reflect.TypeOf(v) == nil {
+	if v == nil {
 		return nil
 	}
 
@@ -657,7 +656,7 @@ func (m *minBuffer) Update(ctx *sql.Context, row sql.Row) error {
 		return err
 	}
 
-	if reflect.TypeOf(v) == nil {
+	if v == nil {
 		return nil
 	}
 

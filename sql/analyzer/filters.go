@@ -15,7 +15,7 @@
 package analyzer
 
 import (
-	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -153,11 +153,8 @@ func subtractExprSet(all, toSubtract []sql.Expression) []sql.Expression {
 
 	for _, e := range all {
 		var found bool
-		for _, s := range toSubtract {
-			if reflect.DeepEqual(e, s) {
-				found = true
-				break
-			}
+		if slices.Contains(toSubtract, e) {
+			found = true
 		}
 
 		if !found {

@@ -60,7 +60,7 @@ type JSONBytes interface {
 	GetBytes(ctx context.Context) ([]byte, error)
 }
 
-func MarshallJsonValue(value interface{}) ([]byte, error) {
+func MarshallJsonValue(value any) ([]byte, error) {
 	buffer := &bytes.Buffer{}
 	encoder := json.NewEncoder(buffer)
 	// Prevents special characters like <, >, or & from being escaped.
@@ -87,8 +87,8 @@ func MarshallJson(ctx context.Context, jsonWrapper sql.JSONWrapper) ([]byte, err
 	return MarshallJsonValue(val)
 }
 
-type JsonObject = map[string]interface{}
-type JsonArray = []interface{}
+type JsonObject = map[string]any
+type JsonArray = []any
 
 type SearchableJSON interface {
 	sql.JSONWrapper
@@ -97,7 +97,7 @@ type SearchableJSON interface {
 
 type ComparableJSON interface {
 	sql.JSONWrapper
-	Compare(ctx context.Context, other interface{}) (int, error)
+	Compare(ctx context.Context, other any) (int, error)
 	JsonType(ctx context.Context) (string, error)
 }
 
@@ -124,14 +124,19 @@ type MutableJSON interface {
 }
 
 type JSONDocument struct {
-	Val interface{}
+	Val any
 }
 
 var _ sql.JSONWrapper = JSONDocument{}
+var _ sql.ValueKindProvider = JSONDocument{}
 var _ MutableJSON = JSONDocument{}
 var _ SearchableJSON = JSONDocument{}
 
-func (doc JSONDocument) ToInterface(context.Context) (interface{}, error) {
+func (doc JSONDocument) ValueKind() sql.ValueKind {
+	return sql.ValueKindJSONDocument
+}
+
+func (doc JSONDocument) ToInterface(context.Context) (any, error) {
 	return doc.Val, nil
 }
 
@@ -167,11 +172,12 @@ func (doc JSONDocument) Clone(context.Context) sql.JSONWrapper {
 // LazyJSONDocument is an implementation of sql.JSONWrapper that wraps a JSON string and defers deserializing
 // it unless needed. This is more efficient for queries that interact with JSON values but don't care about their structure.
 type LazyJSONDocument struct {
-	interfaceFunc func() (interface{}, error)
+	interfaceFunc func() (any, error)
 	Bytes         []byte
 }
 
 var _ sql.JSONWrapper = &LazyJSONDocument{}
+var _ sql.ValueKindProvider = &LazyJSONDocument{}
 var _ JSONBytes = &LazyJSONDocument{}
 var _ fmt.Stringer = &LazyJSONDocument{}
 var _ driver.Valuer = &LazyJSONDocument{}
@@ -179,8 +185,8 @@ var _ driver.Valuer = &LazyJSONDocument{}
 func NewLazyJSONDocument(bytes []byte) sql.JSONWrapper {
 	return &LazyJSONDocument{
 		Bytes: bytes,
-		interfaceFunc: sync.OnceValues(func() (interface{}, error) {
-			var val interface{}
+		interfaceFunc: sync.OnceValues(func() (any, error) {
+			var val any
 			err := json.Unmarshal(bytes, &val)
 			if err != nil {
 				return nil, err
@@ -190,12 +196,16 @@ func NewLazyJSONDocument(bytes []byte) sql.JSONWrapper {
 	}
 }
 
+func (j *LazyJSONDocument) ValueKind() sql.ValueKind {
+	return sql.ValueKindJSONWrapper
+}
+
 // Clone implements sql.JSONWrapper.
 func (j *LazyJSONDocument) Clone(context.Context) sql.JSONWrapper {
 	return NewLazyJSONDocument(j.Bytes)
 }
 
-func (j *LazyJSONDocument) ToInterface(context.Context) (interface{}, error) {
+func (j *LazyJSONDocument) ToInterface(context.Context) (any, error) {
 	return j.interfaceFunc()
 }
 
@@ -238,7 +248,7 @@ func LookupJSONValue(ctx context.Context, j sql.JSONWrapper, path string) (sql.J
 	return lookupJson(r, path)
 }
 
-func lookupJson(j interface{}, path string) (SearchableJSON, error) {
+func lookupJson(j any, path string) (SearchableJSON, error) {
 	// Lookup(obj) throws an error if obj is nil. We want lookups on a json null
 	// to always result in sql NULL, except in the case of the identity lookup
 	// $.
@@ -320,7 +330,7 @@ func ConcatenateJSONValues(ctx *sql.Context, vals ...sql.JSONWrapper) (sql.JSONW
 	return JSONDocument{Val: arr}, nil
 }
 
-func ContainsJSON(a, b interface{}) (bool, error) {
+func ContainsJSON(a, b any) (bool, error) {
 	if a == nil {
 		return b == nil, nil
 	}
@@ -341,7 +351,7 @@ func ContainsJSON(a, b interface{}) (bool, error) {
 	}
 }
 
-func containsJSONBool(a bool, b interface{}) (bool, error) {
+func containsJSONBool(a bool, b any) (bool, error) {
 	switch b := b.(type) {
 	case bool:
 		return a == b, nil
@@ -361,7 +371,7 @@ func containsJSONBool(a bool, b interface{}) (bool, error) {
 //	select json_contains('[1, [1, 2, 3], 10]', '[1, 10]'); => true
 //	select json_contains('[1, [1, 2, 3, 10]]', '[1, 10]'); => true
 //	select json_contains('[1, [1, 2, 3], [10]]', '[1, [10]]'); => true
-func containsJSONArray(a JsonArray, b interface{}) (bool, error) {
+func containsJSONArray(a JsonArray, b any) (bool, error) {
 	if _, ok := b.(JsonArray); ok {
 		for _, bb := range b.(JsonArray) {
 			contains, err := containsJSONArray(a, bb)
@@ -404,7 +414,7 @@ func containsJSONArray(a JsonArray, b interface{}) (bool, error) {
 //	select json_contains('{"a": [1, [2, 3], 4], "b": {"c": "foo", "d": true}}', '{"a": [2, 4]}'); => true
 //	select json_contains('{"a": [1, [2, 3], 4], "b": {"c": "foo", "d": true}}', '[2]'); => false
 //	select json_contains('{"a": [1, [2, 3], 4], "b": {"c": "foo", "d": true}}', '2'); => false
-func containsJSONObject(a JsonObject, b interface{}) (bool, error) {
+func containsJSONObject(a JsonObject, b any) (bool, error) {
 	_, isMap := b.(JsonObject)
 	if !isMap {
 		// If b is a scalar or an array, json_contains always returns false when
@@ -429,7 +439,7 @@ func containsJSONObject(a JsonObject, b interface{}) (bool, error) {
 	return true, nil
 }
 
-func containsJSONString(a string, b interface{}) (bool, error) {
+func containsJSONString(a string, b any) (bool, error) {
 	switch b := b.(type) {
 	case string:
 		return a == b, nil
@@ -438,7 +448,7 @@ func containsJSONString(a string, b interface{}) (bool, error) {
 	}
 }
 
-func containsJSONNumber(a float64, b interface{}) (bool, error) {
+func containsJSONNumber(a float64, b any) (bool, error) {
 	switch b := b.(type) {
 	case float64:
 		return a == b, nil
@@ -512,7 +522,7 @@ func containsJSONNumber(a float64, b interface{}) (bool, error) {
 //     For comparison of any JSON value to SQL NULL, the result is UNKNOWN.
 //
 // https://dev.mysql.com/doc/refman/8.0/en/json.html#json-comparison
-func CompareJSON(ctx context.Context, a, b interface{}) (int, error) {
+func CompareJSON(ctx context.Context, a, b any) (int, error) {
 	var err error
 	if hasNulls, res := CompareNulls(b, a); hasNulls {
 		return res, nil
@@ -578,7 +588,7 @@ func CompareJSON(ctx context.Context, a, b interface{}) (int, error) {
 	}
 }
 
-func compareJSONBool(a bool, b interface{}) (int, error) {
+func compareJSONBool(a bool, b any) (int, error) {
 	switch b := b.(type) {
 	case bool:
 		// The JSON false literal is less than the JSON true literal.
@@ -599,7 +609,7 @@ func compareJSONBool(a bool, b interface{}) (int, error) {
 	}
 }
 
-func compareJSONArray(ctx context.Context, a JsonArray, b interface{}) (int, error) {
+func compareJSONArray(ctx context.Context, a JsonArray, b any) (int, error) {
 	switch b := b.(type) {
 	case bool:
 		// a is lower precedence
@@ -636,7 +646,7 @@ func compareJSONArray(ctx context.Context, a JsonArray, b interface{}) (int, err
 	}
 }
 
-func compareJSONObject(ctx context.Context, a JsonObject, b interface{}) (int, error) {
+func compareJSONObject(ctx context.Context, a JsonObject, b any) (int, error) {
 	switch b := b.(type) {
 	case
 		bool,
@@ -650,10 +660,7 @@ func compareJSONObject(ctx context.Context, a JsonObject, b interface{}) (int, e
 		// order by comparing keys in sorted order, comparing values for matching any matching keys.
 		aKeys := slices.Sorted(maps.Keys(a))
 		bKeys := slices.Sorted(maps.Keys(b))
-		minLen := len(aKeys)
-		if len(bKeys) < minLen {
-			minLen = len(bKeys)
-		}
+		minLen := min(len(bKeys), len(aKeys))
 		for i := 0; i < minLen; i++ {
 			if c := strings.Compare(aKeys[i], bKeys[i]); c != 0 {
 				// The object with the lexically first key not present in the other object is the greater object, which means
@@ -682,7 +689,7 @@ func compareJSONObject(ctx context.Context, a JsonObject, b interface{}) (int, e
 	}
 }
 
-func compareJSONString(a string, b interface{}) (int, error) {
+func compareJSONString(a string, b any) (int, error) {
 	switch b := b.(type) {
 	case
 		bool,
@@ -700,7 +707,7 @@ func compareJSONString(a string, b interface{}) (int, error) {
 	}
 }
 
-func compareJSONNumber(a float64, b interface{}) (int, error) {
+func compareJSONNumber(a float64, b any) (int, error) {
 	switch b := b.(type) {
 	case
 		bool,
@@ -803,7 +810,7 @@ func (doc JSONDocument) unwrapAndExecute(ctx context.Context, path string, val s
 	}
 
 	var err error
-	var unmarshalled interface{}
+	var unmarshalled any
 	if val != nil {
 		unmarshalled, err = val.ToInterface(ctx)
 		if err != nil {
@@ -844,7 +851,7 @@ type parseErr struct {
 //
 // Currently, our implementation focuses specifically on the mutation operations, so '*','**', and range index paths are
 // not supported.
-func walkPathAndUpdate(path string, doc interface{}, val interface{}, mode int, cursor *int) (interface{}, bool, *parseErr) {
+func walkPathAndUpdate(path string, doc any, val any, mode int, cursor *int) (any, bool, *parseErr) {
 	if path == "" {
 		// End of Path is kind of a special snowflake for each type and mode.
 		switch mode {
@@ -905,7 +912,7 @@ func walkPathAndUpdate(path string, doc interface{}, val interface{}, mode int, 
 
 // updateObject Take a JsonObject and update the value at the given path. If we are not at the end of the path,
 // the object is looked up and the walkPathAndUpdate function is called recursively.
-func updateObject(path string, doc JsonObject, val interface{}, mode int, cursor *int) (interface{}, bool, *parseErr) {
+func updateObject(path string, doc JsonObject, val any, mode int, cursor *int) (any, bool, *parseErr) {
 	name, remainingPath, err := parseNameAfterDot(path, cursor)
 	if err != nil {
 		return nil, false, err
@@ -1015,7 +1022,7 @@ func parseNameAfterDot(path string, cursor *int) (name string, remainingPath str
 // updateArray will update an array element appropriately when the path element is an array. This includes parsing
 // the special indexes. If there are more elements in the path after this element look up, the update will be performed
 // by the walkPathAndUpdate function.
-func updateArray(indexString string, remaining string, arr JsonArray, val interface{}, mode int, cursor *int) (interface{}, bool, *parseErr) {
+func updateArray(indexString string, remaining string, arr JsonArray, val any, mode int, cursor *int) (any, bool, *parseErr) {
 	index, err := parseIndex(indexString, len(arr)-1, cursor)
 	if err != nil {
 		return nil, false, err
@@ -1068,7 +1075,7 @@ func updateArray(indexString string, remaining string, arr JsonArray, val interf
 // is a little nutty, but we try to match it as closely as possible. In particular, each mode has a different behavior,
 // and the behavior defies logic. This is  mimicking MySQL because it's not dangerous, and there may be some crazy
 // use case which expects this behavior.
-func updateObjectTreatAsArray(indexString string, doc interface{}, val interface{}, mode int, cursor *int) (interface{}, bool, *parseErr) {
+func updateObjectTreatAsArray(indexString string, doc any, val any, mode int, cursor *int) (any, bool, *parseErr) {
 	parsedIndex, err := parseIndex(indexString, 0, cursor)
 	if err != nil {
 		return nil, false, err
@@ -1183,7 +1190,7 @@ func NewJSONIter(json JsonObject) JSONIter {
 	}
 }
 
-func (iter *JSONIter) Next() (key string, value interface{}, err error) {
+func (iter *JSONIter) Next() (key string, value any, err error) {
 	if iter.idx >= len(iter.keys) {
 		return "", nil, io.EOF
 	}

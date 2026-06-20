@@ -14,11 +14,7 @@
 
 package plan
 
-import (
-	"reflect"
-
-	"github.com/dolthub/go-mysql-server/sql"
-)
+import "github.com/dolthub/go-mysql-server/sql"
 
 type Releaser struct {
 	Child   sql.Node
@@ -62,7 +58,7 @@ func (r *Releaser) String() string {
 
 func (r *Releaser) Equal(n sql.Node) bool {
 	if r2, ok := n.(*Releaser); ok {
-		return reflect.DeepEqual(r.Child, r2.Child)
+		return r.Child.String() == r2.Child.String()
 	}
 	return false
 }

@@ -14,7 +14,11 @@
 
 package test
 
-import "context"
+import (
+	"context"
+
+	"github.com/dolthub/go-mysql-server/sql"
+)
 
 // MockStringWrapper is a StringWrapper used for testing purposes
 type MockStringWrapper struct {
@@ -29,7 +33,7 @@ func (m MockStringWrapper) Unwrap(ctx context.Context) (string, error) {
 	return m.val, nil
 }
 
-func (m MockStringWrapper) UnwrapAny(ctx context.Context) (interface{}, error) {
+func (m MockStringWrapper) UnwrapAny(ctx context.Context) (any, error) {
 	return m.val, nil
 }
 
@@ -41,10 +45,14 @@ func (m MockStringWrapper) MaxByteLength() int64 {
 	return int64(len(m.val))
 }
 
-func (m MockStringWrapper) Compare(ctx context.Context, other interface{}) (int, bool, error) {
+func (m MockStringWrapper) Compare(ctx context.Context, other any) (int, bool, error) {
 	return 0, false, nil
 }
 
-func (m MockStringWrapper) Hash() interface{} {
+func (m MockStringWrapper) Hash() any {
 	return m.val
+}
+
+func (m MockStringWrapper) ValueKind() sql.ValueKind {
+	return sql.ValueKindString
 }

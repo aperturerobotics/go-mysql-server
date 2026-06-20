@@ -16,12 +16,10 @@ package types
 
 import (
 	"context"
-	"math"
-	"reflect"
-
 	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/dolthub/vitess/go/vt/proto/query"
 	"gopkg.in/src-d/go-errors.v1"
+	"math"
 
 	"github.com/dolthub/go-mysql-server/sql"
 )
@@ -40,10 +38,14 @@ type MultiPolygon struct {
 	SRID     uint32
 }
 
+func (p MultiPolygon) ValueKind() sql.ValueKind {
+	return sql.ValueKindMultiPolygon
+}
+
 var (
 	ErrNotMultiPolygon = errors.NewKind("value of type %T is not a multipolygon")
 
-	multipolygonValueType = reflect.TypeOf(MultiPolygon{})
+	multipolygonValueType = sql.ValueKindMultiPolygon
 )
 
 var _ sql.Type = MultiPolygonType{}
@@ -52,12 +54,12 @@ var _ sql.CollationCoercible = MultiPolygonType{}
 var _ GeometryValue = MultiPolygon{}
 
 // Compare implements Type interface.
-func (t MultiPolygonType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t MultiPolygonType) Compare(ctx context.Context, a any, b any) (int, error) {
 	return GeometryType{}.Compare(ctx, a, b)
 }
 
 // Convert implements Type interface.
-func (t MultiPolygonType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t MultiPolygonType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	switch buf := v.(type) {
 	case nil:
 		return nil, sql.InRange, nil
@@ -102,7 +104,7 @@ func (t MultiPolygonType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t MultiPolygonType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t MultiPolygonType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -128,12 +130,12 @@ func (t MultiPolygonType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t MultiPolygonType) ValueType() reflect.Type {
+func (t MultiPolygonType) ValueKind() sql.ValueKind {
 	return multipolygonValueType
 }
 
 // Zero implements Type interface.
-func (t MultiPolygonType) Zero() interface{} {
+func (t MultiPolygonType) Zero() any {
 	return MultiPolygon{Polygons: []Polygon{PolygonType{}.Zero().(Polygon)}}
 }
 
@@ -155,7 +157,7 @@ func (t MultiPolygonType) SetSRID(v uint32) sql.Type {
 }
 
 // MatchSRID implements SpatialColumnType interface
-func (t MultiPolygonType) MatchSRID(v interface{}) error {
+func (t MultiPolygonType) MatchSRID(v any) error {
 	val, ok := v.(MultiPolygon)
 	if !ok {
 		return ErrNotMultiPolygon.New(v)

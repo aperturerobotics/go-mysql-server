@@ -16,8 +16,6 @@ package json
 
 import (
 	"fmt"
-	"reflect"
-
 	"github.com/dolthub/go-mysql-server/internal/strings"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
@@ -100,7 +98,7 @@ func (js *JSONQuote) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 	}
 	str, ok := ex.(string)
 	if !ok {
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(ex).String())
+		return nil, sql.ErrInvalidType.New(sql.TypeName(ex))
 	}
 
 	return strings.Quote(str), nil

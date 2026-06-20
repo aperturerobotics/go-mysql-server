@@ -16,7 +16,6 @@ package types
 
 import (
 	"context"
-	"reflect"
 	"strconv"
 
 	"github.com/cockroachdb/apd/v3"
@@ -26,7 +25,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 )
 
-var systemDoubleValueType = reflect.TypeOf(float64(0))
+var systemDoubleValueType = sql.ValueKindFloat64
 
 // systemDoubleType is an internal double type ONLY for system variables.
 type systemDoubleType struct {
@@ -45,7 +44,7 @@ func NewSystemDoubleType(varName string, lowerbound, upperbound float64) sql.Sys
 }
 
 // Compare implements Type interface.
-func (t systemDoubleType) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t systemDoubleType) Compare(ctx context.Context, a any, b any) (int, error) {
 	as, _, err := t.Convert(ctx, a)
 	if err != nil {
 		return 0, err
@@ -67,7 +66,7 @@ func (t systemDoubleType) Compare(ctx context.Context, a interface{}, b interfac
 }
 
 // Convert implements Type interface.
-func (t systemDoubleType) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t systemDoubleType) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	// String nor nil values are accepted
 	switch value := v.(type) {
 	case int:
@@ -128,7 +127,7 @@ func (t systemDoubleType) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t systemDoubleType) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t systemDoubleType) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -156,12 +155,12 @@ func (t systemDoubleType) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t systemDoubleType) ValueType() reflect.Type {
+func (t systemDoubleType) ValueKind() sql.ValueKind {
 	return systemDoubleValueType
 }
 
 // Zero implements Type interface.
-func (t systemDoubleType) Zero() interface{} {
+func (t systemDoubleType) Zero() any {
 	return float64(0)
 }
 
@@ -186,7 +185,7 @@ func (systemDoubleType) CollationCoercibility(ctx *sql.Context) (collation sql.C
 }
 
 // EncodeValue implements SystemVariableType interface.
-func (t systemDoubleType) EncodeValue(val interface{}) (string, error) {
+func (t systemDoubleType) EncodeValue(val any) (string, error) {
 	expectedVal, ok := val.(float64)
 	if !ok {
 		return "", sql.ErrSystemVariableCodeFail.New(val, t.String())
@@ -195,7 +194,7 @@ func (t systemDoubleType) EncodeValue(val interface{}) (string, error) {
 }
 
 // DecodeValue implements SystemVariableType interface.
-func (t systemDoubleType) DecodeValue(val string) (interface{}, error) {
+func (t systemDoubleType) DecodeValue(val string) (any, error) {
 	parsedVal, err := strconv.ParseFloat(val, 64)
 	if err != nil {
 		return nil, err

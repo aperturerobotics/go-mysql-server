@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -112,8 +111,8 @@ func TestDecimalCompare(t *testing.T) {
 	tests := []struct {
 		precision   uint8
 		scale       uint8
-		val1        interface{}
-		val2        interface{}
+		val1        any
+		val2        any
 		expectedCmp int
 	}{
 		{1, 0, nil, 0, 1},
@@ -290,8 +289,8 @@ func TestDecimalConvert(t *testing.T) {
 	tests := []struct {
 		precision   uint8
 		scale       uint8
-		val         interface{}
-		expectedVal interface{}
+		val         any
+		expectedVal any
 		expectedErr bool
 	}{
 		{1, 0, nil, nil, false},
@@ -363,7 +362,7 @@ func TestDecimalConvert(t *testing.T) {
 					expectedVal, _, err := apd.NewFromString(test.expectedVal.(string))
 					require.NoError(t, err)
 					assert.True(t, expectedVal.Cmp(val.(*apd.Decimal)) == 0)
-					assert.Equal(t, typ.ValueType(), reflect.TypeOf(val))
+					assert.Equal(t, typ.ValueKind(), sql.ValueKindOf(val))
 				}
 			}
 		})

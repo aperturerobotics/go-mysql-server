@@ -164,16 +164,6 @@ func (c *Catalog) TableFunction(ctx *sql.Context, name string) (sql.TableFunctio
 	panic("implement me")
 }
 
-func (c *Catalog) ExternalStoredProcedure(ctx *sql.Context, name string, numOfParams int) (*sql.ExternalStoredProcedureDetails, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (c *Catalog) ExternalStoredProcedures(ctx *sql.Context, name string) ([]sql.ExternalStoredProcedureDetails, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
 func (c *Catalog) GetTableStats(ctx *sql.Context, db string, table sql.Table) ([]sql.Statistic, error) {
 	//TODO implement me
 	panic("implement me")

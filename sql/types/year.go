@@ -16,7 +16,6 @@ package types
 
 import (
 	"context"
-	"reflect"
 	"strconv"
 	"time"
 
@@ -34,13 +33,13 @@ var (
 
 	ErrConvertingToYear = errors.NewKind("value %v is not a valid Year")
 
-	yearValueType = reflect.TypeOf(int16(0))
+	yearValueType = sql.ValueKindInt16
 )
 
 type YearType_ struct{}
 
 // Compare implements Type interface.
-func (t YearType_) Compare(ctx context.Context, a interface{}, b interface{}) (int, error) {
+func (t YearType_) Compare(ctx context.Context, a any, b any) (int, error) {
 	if hasNulls, res := CompareNulls(a, b); hasNulls {
 		return res, nil
 	}
@@ -89,7 +88,7 @@ func (t YearType_) CompareValue(ctx *sql.Context, a, b sql.Value) (int, error) {
 }
 
 // Convert implements Type interface.
-func (t YearType_) Convert(ctx context.Context, v interface{}) (interface{}, sql.ConvertInRange, error) {
+func (t YearType_) Convert(ctx context.Context, v any) (any, sql.ConvertInRange, error) {
 	if v == nil {
 		return nil, sql.InRange, nil
 	}
@@ -173,7 +172,7 @@ func (t YearType_) Promote() sql.Type {
 }
 
 // SQL implements Type interface.
-func (t YearType_) SQL(ctx *sql.Context, dest []byte, v interface{}) (sqltypes.Value, error) {
+func (t YearType_) SQL(ctx *sql.Context, dest []byte, v any) (sqltypes.Value, error) {
 	if v == nil {
 		return sqltypes.NULL, nil
 	}
@@ -211,12 +210,12 @@ func (t YearType_) Type() query.Type {
 }
 
 // ValueType implements Type interface.
-func (t YearType_) ValueType() reflect.Type {
+func (t YearType_) ValueKind() sql.ValueKind {
 	return yearValueType
 }
 
 // Zero implements Type interface.
-func (t YearType_) Zero() interface{} {
+func (t YearType_) Zero() any {
 	return int16(0)
 }
 

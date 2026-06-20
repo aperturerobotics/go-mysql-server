@@ -15,8 +15,7 @@
 package memory
 
 import (
-	"bytes"
-	"encoding/gob"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -873,23 +872,36 @@ type IndexValue struct {
 }
 
 func DecodeIndexValue(data []byte) (*IndexValue, error) {
-	dec := gob.NewDecoder(bytes.NewReader(data))
-	var value IndexValue
-	if err := dec.Decode(&value); err != nil {
-		return nil, err
+	if len(data) < 16 {
+		return nil, io.ErrUnexpectedEOF
+	}
+	keyLen := binary.BigEndian.Uint64(data[:8])
+	if keyLen > uint64(len(data)-16) {
+		return nil, io.ErrUnexpectedEOF
+	}
+	keyEnd := 8 + int(keyLen)
+	pos64 := int64(binary.BigEndian.Uint64(data[keyEnd : keyEnd+8]))
+	if strconv.IntSize == 32 && (pos64 < -1<<31 || pos64 > 1<<31-1) {
+		return nil, fmt.Errorf("index value position out of range: %d", pos64)
+	}
+	value := IndexValue{
+		Key: string(data[8:keyEnd]),
+		Pos: int(pos64),
 	}
 
 	return &value, nil
 }
 
 func EncodeIndexValue(value *IndexValue) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	if err := enc.Encode(value); err != nil {
-		return nil, err
+	if value == nil {
+		return nil, fmt.Errorf("nil index value")
 	}
-
-	return buf.Bytes(), nil
+	key := []byte(value.Key)
+	data := make([]byte, 16+len(key))
+	binary.BigEndian.PutUint64(data[:8], uint64(len(key)))
+	copy(data[8:], key)
+	binary.BigEndian.PutUint64(data[8+len(key):], uint64(int64(value.Pos)))
+	return data, nil
 }
 
 func (t *Table) Inserter(ctx *sql.Context) sql.RowInserter {
