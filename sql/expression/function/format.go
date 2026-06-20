@@ -19,10 +19,6 @@ import (
 	"math"
 	"strings"
 
-	"golang.org/x/text/language"
-	"golang.org/x/text/message"
-	"golang.org/x/text/number"
-
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
@@ -100,16 +96,15 @@ func (f *Format) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 		return nil, nil
 	}
 
-	locale := language.English
+	var localeStr string
 	if f.Locale != nil {
 		loc, lErr := f.Locale.Eval(ctx, row)
 		if lErr != nil {
 			return nil, lErr
 		}
 		if loc != nil {
-			locale, err = language.Parse(loc.(string))
-			if err != nil {
-				locale = language.English
+			if s, ok := loc.(string); ok {
+				localeStr = s
 			}
 		}
 	}
@@ -168,20 +163,7 @@ func (f *Format) Eval(ctx *sql.Context, row sql.Row) (any, error) {
 		}
 	}
 
-	p := message.NewPrinter(locale)
-	formattedWhole := p.Sprintf("%v", number.Decimal(whole))
-	if numDecimalPlaces == 0 {
-		return fmt.Sprintf("%s%s", negative, formattedWhole), nil
-	}
-
-	decimalChar := p.Sprintf("%v", number.Decimal(1.5))
-	if len(fractionStr) < int(numDecimalPlaces) {
-		rp := int(numDecimalPlaces) - len(fractionStr)
-		fractionStr += strings.Repeat("0", rp)
-	}
-
-	result := fmt.Sprintf("%s%s%s%s", negative, formattedWhole, decimalChar[1:2], fractionStr)
-	return result, nil
+	return formatGrouped(localeStr, negative, whole, fractionStr, int(numDecimalPlaces)), nil
 }
 
 // Resolved implements the Expression interface.

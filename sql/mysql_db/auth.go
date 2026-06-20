@@ -1,4 +1,4 @@
-//go:build !tinygo
+//go:build !tinygo && !js
 
 // Copyright 2024 Dolthub, Inc.
 //
