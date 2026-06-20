@@ -268,7 +268,8 @@ func (t DecimalType_) ConvertToDecimal(v any) (*apd.Decimal, error) {
 	case *big.Rat:
 		return t.ConvertToDecimal(new(big.Float).SetRat(value))
 	case *apd.Decimal:
-		newVal := new(*value)
+		valCopy := *value
+		newVal := &valCopy
 		if t.definesColumn && value.Exponent != int32(t.scale) {
 			var err error
 			newVal, err = sql.DecimalRound(value, int32(t.scale))
@@ -289,7 +290,8 @@ func (t DecimalType_) ConvertToDecimal(v any) (*apd.Decimal, error) {
 }
 
 func (t DecimalType_) BoundsCheck(v *apd.Decimal) (*apd.Decimal, sql.ConvertInRange, error) {
-	newVal := new(*v)
+	vCopy := *v
+	newVal := &vCopy
 	if -v.Exponent > int32(t.scale) {
 		// TODO : add 'Data truncated' warning
 		var err error
@@ -634,7 +636,8 @@ func DecimalTruncate(val *apd.Decimal, scale int32) *apd.Decimal {
 		}
 		ctx := sql.DecimalCtx.WithPrecision(uint32(p))
 		ctx.Rounding = apd.RoundDown
-		newVal := new(*val)
+		valCopy := *val
+		newVal := &valCopy
 		_, err := ctx.Quantize(newVal, val, -scale)
 		if err != nil {
 			panic(err)

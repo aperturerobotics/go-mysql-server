@@ -5,8 +5,6 @@ package mysql
 import (
 	"context"
 	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
@@ -127,10 +125,6 @@ func (c *Conn) TLSEnabled() bool {
 	return false
 }
 
-func (c *Conn) GetTLSClientCerts() []*x509.Certificate {
-	return nil
-}
-
 func (c *Conn) IsUnixSocket() bool {
 	return false
 }
@@ -196,8 +190,12 @@ type ListenerConfig struct {
 }
 
 type Listener struct {
-	ServerVersion          string
-	TLSConfig              *tls.Config
+	ServerVersion string
+	// TLSConfig holds a *tls.Config for the native server. The browser build
+	// types it as any so this package avoids importing crypto/tls (which pulls
+	// crypto/x509 -> encoding/asn1 -> reflect); the browser embedded engine
+	// never serves the MySQL wire protocol, so the value is never read here.
+	TLSConfig              any
 	RequireSecureTransport bool
 	listener               net.Listener
 }
