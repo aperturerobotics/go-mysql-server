@@ -184,30 +184,6 @@ func expressionsEquivalent(a, b sql.Expression) bool {
 	return true
 }
 
-// operatorOf returns a comparable representation of e's Operator()-equivalent value, if it has
-// one, along with true. The fast path is a plain type assertion that covers all of
-// GMS's own expression types, e.g. Arithmetic's `Operator() string`. Reflection is only used
-// as a fallback, for expression types that don't satisfy
-// that interface, to also support integrators whose polymorphic expression types implement an
-// Operator()-equivalent method with a different declared return type (e.g. doltgresql's
-// BinaryOperator.Operator() returns its own framework.Operator, not string).
-//
-// The returned string is only meaningful as a comparison key between two values known to come from
-// the same concrete Operator() return type (operatorOf's only caller guarantees this via
-// its prior reflect.TypeOf(a) != reflect.TypeOf(b) check). Comparing stringified operators across
-// different underlying types is not safe in general, so operatorOf must not be used to
-// compare expressions of different concrete types.
-func operatorOf(e sql.Expression) (string, bool) {
-	if o, ok := e.(interface{ Operator() string }); ok {
-		return o.Operator(), true
-	}
-	m := reflect.ValueOf(e).MethodByName("Operator")
-	if !m.IsValid() || m.Type().NumIn() != 0 || m.Type().NumOut() != 1 {
-		return "", false
-	}
-	return fmt.Sprint(m.Call(nil)[0].Interface()), true
-}
-
 // resolveTableSchema returns tableNode's schema with any UnresolvedColumnDefault expressions
 // in hidden system columns resolved to real expression trees. If no unresolved expressions are
 // present, the original schema slice is returned unchanged (no allocation).

@@ -12,7 +12,7 @@ func newStatsProvider() sql.StatsProvider {
 	return liteStatsProvider{}
 }
 
-func (liteStatsProvider) GetTableStats(*sql.Context, string, sql.Table) ([]sql.Statistic, error) {
+func (liteStatsProvider) GetTableStats(*sql.Context, string, string, sql.Table) ([]sql.Statistic, error) {
 	return nil, nil
 }
 
@@ -32,15 +32,15 @@ func (liteStatsProvider) DropStats(*sql.Context, sql.StatQualifier, []string) er
 	return nil
 }
 
-func (liteStatsProvider) DropDbStats(*sql.Context, string, bool) error {
+func (liteStatsProvider) DropDbStats(*sql.Context, string, string, bool) error {
 	return nil
 }
 
-func (liteStatsProvider) RowCount(*sql.Context, string, sql.Table) (uint64, error) {
+func (liteStatsProvider) RowCount(*sql.Context, string, string, sql.Table) (uint64, error) {
 	return 0, nil
 }
 
-func (liteStatsProvider) DataLength(*sql.Context, string, sql.Table) (uint64, error) {
+func (liteStatsProvider) DataLength(*sql.Context, string, string, sql.Table) (uint64, error) {
 	return 0, nil
 }
 

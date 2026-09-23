@@ -50,6 +50,11 @@ func (w ErrorWrapper[T]) assertInterfaces() {
 	var _ sql.Wrapper[T] = w
 }
 
+// ValueKind returns the wrapped value's kind without unwrapping it.
+func (w ErrorWrapper[T]) ValueKind() sql.ValueKind {
+	return sql.ValueKindFor[T]()
+}
+
 func (w ErrorWrapper[T]) Unwrap(ctx context.Context) (result T, err error) {
 	return result, fmt.Errorf("unwrap failed")
 }

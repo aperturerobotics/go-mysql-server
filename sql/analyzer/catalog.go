@@ -384,6 +384,24 @@ func (c *Catalog) Function(ctx *sql.Context, schema, name string) (sql.Function,
 	return c.builtInFunctions.Function(ctx, schema, name)
 }
 
+// ExternalStoredProcedure returns a built-in procedure from the provider.
+func (c *Catalog) ExternalStoredProcedure(ctx *sql.Context, name string, numOfParams int) (*sql.ExternalStoredProcedureDetails, error) {
+	provider, ok := c.DbProvider.(sql.ExternalStoredProcedureProvider)
+	if !ok {
+		return nil, nil
+	}
+	return provider.ExternalStoredProcedure(ctx, name, numOfParams)
+}
+
+// ExternalStoredProcedures returns the provider's built-in procedure variants.
+func (c *Catalog) ExternalStoredProcedures(ctx *sql.Context, name string) ([]sql.ExternalStoredProcedureDetails, error) {
+	provider, ok := c.DbProvider.(sql.ExternalStoredProcedureProvider)
+	if !ok {
+		return nil, nil
+	}
+	return provider.ExternalStoredProcedures(ctx, name)
+}
+
 // TableFunction implements the TableFunctionProvider interface
 func (c *Catalog) TableFunction(ctx *sql.Context, name string) (sql.TableFunction, bool) {
 	if fp, ok := c.DbProvider.(sql.TableFunctionProvider); ok {

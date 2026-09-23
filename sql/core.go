@@ -246,6 +246,12 @@ type Closer interface {
 	Close(*Context) error
 }
 
+// ExternalStoredProcedureProvider exposes built-in stored procedures.
+type ExternalStoredProcedureProvider interface {
+	ExternalStoredProcedure(*Context, string, int) (*ExternalStoredProcedureDetails, error)
+	ExternalStoredProcedures(*Context, string) ([]ExternalStoredProcedureDetails, error)
+}
+
 type TransactionCharacteristic int
 
 const (
@@ -475,7 +481,7 @@ func EvaluateCondition(ctx *Context, cond Expression, row Row) (any, error) {
 // EvaluateConditionValue evaluates a condition, which is an ValueExpression whose value
 // will be nil or coerced boolean.
 func EvaluateConditionValue(ctx *Context, cond ValueExpression, row ValueRow) (bool, error) {
-	defer trace2.StartRegion(ctx, "EvaluateCondition").End()
+	defer startTraceRegion(ctx, "EvaluateCondition").End()
 
 	v, err := cond.EvalValue(ctx, row)
 	if err != nil {

@@ -13,6 +13,8 @@ env:
 
 jobs:
   setup:
+    # These consumers track DoltHub's Type API and main branch.
+    if: github.repository == 'dolthub/go-mysql-server'
     runs-on: ubuntu-latest
     outputs:
       skip: ${{ steps.setup_gms.outputs.skip }}

@@ -72,8 +72,9 @@ const (
 
 // Procedure is a stored procedure that may be executed using the CALL statement.
 type Procedure struct {
-	CreatedAt  time.Time
-	ModifiedAt time.Time
+	CreatedAt    time.Time
+	ModifiedAt   time.Time
+	ExternalProc sql.Node
 
 	ValidationError error
 
@@ -132,16 +133,25 @@ func NewProcedure(
 
 // Resolved implements the sql.Node interface.
 func (p *Procedure) Resolved() bool {
+	if p.ExternalProc != nil {
+		return p.ExternalProc.Resolved()
+	}
 	return true
 }
 
 // IsReadOnly implements the sql.Node interface.
 func (p *Procedure) IsReadOnly() bool {
+	if p.ExternalProc != nil {
+		return p.ExternalProc.IsReadOnly()
+	}
 	return false
 }
 
 // String implements the sql.Node interface.
 func (p *Procedure) String() string {
+	if p.ExternalProc != nil {
+		return p.ExternalProc.String()
+	}
 	return ""
 }
 
@@ -152,17 +162,31 @@ func (p *Procedure) DebugString(ctx *sql.Context) string {
 
 // Schema implements the sql.Node interface.
 func (p *Procedure) Schema(ctx *sql.Context) sql.Schema {
+	if p.ExternalProc != nil {
+		return p.ExternalProc.Schema(ctx)
+	}
 	return types.OkResultSchema
 }
 
 // Children implements the sql.Node interface.
 func (p *Procedure) Children() []sql.Node {
+	if p.ExternalProc != nil {
+		return []sql.Node{p.ExternalProc}
+	}
 	return nil
 }
 
 // WithChildren implements the sql.Node interface.
 func (p *Procedure) WithChildren(ctx *sql.Context, children ...sql.Node) (sql.Node, error) {
-	return NillaryWithChildren(p, children...)
+	if len(children) == 0 {
+		return p, nil
+	}
+	if len(children) != 1 {
+		return nil, sql.ErrInvalidChildrenNumber.New(p, len(children), 1)
+	}
+	np := *p
+	np.ExternalProc = children[0]
+	return &np, nil
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

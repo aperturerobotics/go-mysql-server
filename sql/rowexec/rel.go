@@ -334,7 +334,10 @@ func (b *BaseBuilder) buildVirtualColumnTable(ctx *sql.Context, n *plan.VirtualC
 }
 
 func (b *BaseBuilder) buildProcedure(ctx *sql.Context, n *plan.Procedure, row sql.Row) (sql.RowIter, error) {
-	return nil, nil
+	if n.ExternalProc == nil {
+		return nil, nil
+	}
+	return b.buildNodeExec(ctx, n.ExternalProc, row)
 }
 
 func (b *BaseBuilder) buildRecursiveTable(ctx *sql.Context, n *plan.RecursiveTable, row sql.Row) (sql.RowIter, error) {

@@ -1,4 +1,4 @@
-//go:build gms_pure_go
+//go:build !cgo || js || purego || gms_pure_go || !gms_icu_regex
 
 package regex
 
