@@ -19,12 +19,16 @@ import (
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
 // DualTableName is empty string because no table with empty name can be created
 const DualTableName = ""
 
-var dualTableSchema = sql.Schema{}
+// The optimizer reserves one column for DUAL, including tableless subqueries.
+var dualTableSchema = sql.Schema{
+	{Name: "", Source: DualTableName, Type: types.LongText, Nullable: false},
+}
 
 type dualTable struct{}
 
@@ -54,6 +58,12 @@ func (dualTable) String() string { return "dual" }
 
 func (dualTable) Schema(*sql.Context) sql.Schema { return dualTableSchema }
 
+// RowCount gives the optimizer the exact cardinality of the singleton table.
+func (dualTable) RowCount(*sql.Context) (uint64, bool, error) { return 1, true, nil }
+
+// DataLength reports the one-byte DUAL value.
+func (dualTable) DataLength(*sql.Context) (uint64, error) { return 1, nil }
+
 func (dualTable) Collation() sql.CollationID { return sql.Collation_Default }
 
 func (dualTable) Partitions(*sql.Context) (sql.PartitionIter, error) {
@@ -76,6 +86,7 @@ func (i *dualPartitionIter) Next(*sql.Context) (sql.Partition, error) {
 	if i.done {
 		return nil, io.EOF
 	}
+
 	i.done = true
 	return dualPartition{}, nil
 }
@@ -90,10 +101,11 @@ func (i *dualRowIter) Next(*sql.Context) (sql.Row, error) {
 	if i.done {
 		return nil, io.EOF
 	}
+
 	i.done = true
-	return sql.Row{}, nil
+	return sql.Row{"x"}, nil
 }
 
 func (*dualRowIter) Close(*sql.Context) error { return nil }
 
-var _ sql.Table = dualTable{}
+var _ sql.StatisticsTable = dualTable{}

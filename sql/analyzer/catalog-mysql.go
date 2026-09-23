@@ -1,3 +1,5 @@
+//go:build tinygo || (js && sql_lite)
+
 package analyzer
 
 type catalogMySQLDb interface {

@@ -18,6 +18,7 @@ package planbuilder
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql/mysql"
@@ -378,18 +379,38 @@ func (h defaultAuthorizationHandler) call(ctx *sql.Context, state defaultAuthori
 	}
 	dbName := h.authDatabaseName(ctx, auth.TargetNames[0])
 	procName := auth.TargetNames[1]
-	if err := h.authCheckDatabaseTableNames(ctx, state, dbName, ""); err != nil {
+	paramCount, err := strconv.Atoi(auth.TargetNames[2])
+	if err != nil {
+		return false, fmt.Errorf("CALL auth encountered error:\n%s", err.Error())
+	}
+	if err = h.authCheckDatabaseTableNames(ctx, state, dbName, ""); err != nil {
 		return false, err
 	}
 
-	subject := sql.PrivilegeCheckSubject{
-		Database: dbName,
-	}
-	if state.db.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Execute)) {
-		return true, nil
+	// Procedure permissions checking is performed in the same way MySQL does it, with an exception where
+	// procedures which are marked as AdminOnly. These procedures are only accessible to users with explicit Execute
+	// permissions on the procedure in question.
+
+	adminOnly := false
+	if h.cat != nil {
+		proc, err := h.cat.ExternalStoredProcedure(ctx, procName, paramCount)
+		// Not finding the procedure isn't great - but that's going to surface with a better error later in the
+		// query execution. For the permission check, we'll proceed as though the procedure exists, and is not AdminOnly.
+		if proc != nil && err == nil && proc.AdminOnly {
+			adminOnly = true
+		}
 	}
 
-	subject = sql.PrivilegeCheckSubject{
+	if !adminOnly {
+		subject := sql.PrivilegeCheckSubject{
+			Database: dbName,
+		}
+		if state.db.UserHasPrivileges(ctx, sql.NewPrivilegedOperation(subject, sql.PrivilegeType_Execute)) {
+			return true, nil
+		}
+	}
+
+	subject := sql.PrivilegeCheckSubject{
 		Database:    dbName,
 		Routine:     procName,
 		IsProcedure: true,

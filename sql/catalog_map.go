@@ -32,6 +32,16 @@ func (t MapCatalog) TableFunction(ctx *Context, name string) (TableFunction, boo
 	return nil, false
 }
 
+func (t MapCatalog) ExternalStoredProcedure(ctx *Context, name string, numOfParams int) (*ExternalStoredProcedureDetails, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (t MapCatalog) ExternalStoredProcedures(ctx *Context, name string) ([]ExternalStoredProcedureDetails, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (t MapCatalog) AllDatabases(ctx *Context) []Database {
 	//TODO implement me
 	panic("implement me")

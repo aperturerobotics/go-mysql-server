@@ -17,7 +17,6 @@ package types
 import (
 	"fmt"
 	"math"
-	"reflect"
 	"testing"
 	"time"
 
@@ -390,7 +389,7 @@ func TestDatetimeConvert(t *testing.T) {
 			}
 			assert.Equal(t, test.expectedVal, val)
 			if val != nil {
-				assert.Equal(t, test.typ.ValueType(), reflect.TypeOf(val))
+				assert.Equal(t, test.typ.ValueKind(), sql.ValueKindOf(val))
 			}
 		})
 	}

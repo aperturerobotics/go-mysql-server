@@ -1,5 +1,8 @@
 name: Test Server Engine
-on: [pull_request]
+on:
+  pull_request:
+  push:
+    branches: [aperture]
 
 concurrency:
   group: server-engine-test-${{ github.event.pull_request.number || github.ref }}
@@ -16,12 +19,12 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Test using Server Engine
-        run: go test ./...
+        run: go test -timeout=2m -tags=gms_icu_regex ./...
         env:
           CI_TEST: "true"
           SERVER_ENGINE_TEST: "true"
       - name: Test using Server Engine
-        run: go test -race ./...
+        run: bash .github/workflows/scripts/test-race.sh
         env:
           CI_TEST: "true"
           SERVER_ENGINE_TEST: "true"

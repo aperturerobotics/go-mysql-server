@@ -5,6 +5,8 @@ package function
 import (
 	"strconv"
 	"strings"
+
+	"github.com/dolthub/go-mysql-server/sql"
 )
 
 // numFormat describes the grouping and separator style for a locale.
@@ -46,7 +48,8 @@ var localeFormats = map[string]numFormat{
 // formatGrouped renders the whole and fractional parts of a FORMAT() result
 // using a reflect-free locale table. An empty or unrecognized locale uses the
 // en_US default.
-func formatGrouped(localeStr, negative string, whole int64, fractionStr string, numDecimalPlaces int) string {
+func formatGrouped(ctx *sql.Context, localeValue any, negative string, whole int64, fractionStr string, numDecimalPlaces int) (string, error) {
+	localeStr, _ := localeValue.(string)
 	nf, ok := localeFormats[localeStr]
 	if !ok {
 		nf = enUS
@@ -60,13 +63,13 @@ func formatGrouped(localeStr, negative string, whole int64, fractionStr string, 
 	}
 	formattedWhole := sign + groupDigits(strconv.FormatInt(u, 10), nf.group, nf.indian)
 	if numDecimalPlaces == 0 {
-		return negative + formattedWhole
+		return negative + formattedWhole, nil
 	}
 
 	if len(fractionStr) < numDecimalPlaces {
 		fractionStr += strings.Repeat("0", numDecimalPlaces-len(fractionStr))
 	}
-	return negative + formattedWhole + nf.decimal + fractionStr
+	return negative + formattedWhole + nf.decimal + fractionStr, nil
 }
 
 // groupDigits inserts sep into an unsigned base-10 digit string. Western

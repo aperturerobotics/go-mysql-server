@@ -54,6 +54,11 @@ type JSONDocument struct {
 	Val interface{}
 }
 
+// JsonUnmarshal rejects JSON parsing in the lite type profile.
+func JsonUnmarshal([]byte, *interface{}) error {
+	return sql.ErrUnsupportedFeature.New("json")
+}
+
 func (JsonType) Compare(context.Context, interface{}, interface{}) (int, error) {
 	return 0, sql.ErrUnsupportedFeature.New("json")
 }

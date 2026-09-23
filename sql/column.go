@@ -67,6 +67,9 @@ type Column struct {
 	DatabaseSource string
 	// Comment contains the string comment for this column.
 	Comment string
+	// Extra preserves explicit metadata supplied by a schema provider.
+	// When nonempty, it overrides the derived information_schema EXTRA value.
+	Extra string
 	// PrimaryKey is true if the column is part of the primary key for its table.
 	PrimaryKey bool
 	// Nullable is true if the column can contain NULL values, or false
@@ -201,6 +204,9 @@ func (c *Column) String() string {
 func FormatColumnExtra(c *Column) string {
 	if c == nil {
 		return ""
+	}
+	if c.Extra != "" {
+		return c.Extra
 	}
 	// EXTRA formats auto_increment and on update in lowercase, unlike
 	// SHOW CREATE TABLE:

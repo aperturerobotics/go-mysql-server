@@ -18,6 +18,7 @@ type Catalog interface {
 	DatabaseProvider
 	FunctionProvider
 	TableFunctionProvider
+	ExternalStoredProcedureProvider
 	StatsProvider
 
 	// CreateDatabase creates a new database, or returns an error if the operation isn't supported or fails.

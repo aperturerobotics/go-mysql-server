@@ -5,9 +5,8 @@ package rowexec
 import (
 	"time"
 
-	"github.com/dolthub/go-mysql-server/sql/mysql"
-
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/mysql"
 	"github.com/dolthub/go-mysql-server/sql/mysql_db"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/types"
@@ -40,6 +39,7 @@ func (b *BaseBuilder) buildAlterUserImpl(ctx *sql.Context, a *plan.AlterUser) (s
 
 	plugin := previousUserEntry.Plugin
 	authString := previousUserEntry.AuthString
+	identity := previousUserEntry.Identity
 	if user.Auth1 != nil {
 		plugin = user.Auth1.Plugin()
 		var err error
@@ -47,7 +47,9 @@ func (b *BaseBuilder) buildAlterUserImpl(ctx *sql.Context, a *plan.AlterUser) (s
 		if err != nil {
 			return nil, err
 		}
+		identity = user.Identity
 	}
+
 	if plugin != string(mysql.MysqlNativePassword) && plugin != string(mysql.CachingSha2Password) {
 		if err := mysqlDb.VerifyPlugin(plugin); err != nil {
 			return nil, sql.ErrUserAlterFailure.New(err)
@@ -56,6 +58,7 @@ func (b *BaseBuilder) buildAlterUserImpl(ctx *sql.Context, a *plan.AlterUser) (s
 
 	previousUserEntry.Plugin = plugin
 	previousUserEntry.AuthString = authString
+	previousUserEntry.Identity = identity
 	previousUserEntry.PasswordLastChanged = time.Now().UTC()
 	editor.PutUser(previousUserEntry)
 

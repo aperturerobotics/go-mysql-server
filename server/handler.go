@@ -27,7 +27,6 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/mysql"
 	"github.com/dolthub/go-mysql-server/sql/otel/attribute"
 	otel "github.com/dolthub/go-mysql-server/sql/otel/trace"
-	"github.com/dolthub/vitess/go/netutil"
 	"github.com/dolthub/vitess/go/sqltypes"
 	querypb "github.com/dolthub/vitess/go/vt/proto/query"
 	"github.com/dolthub/vitess/go/vt/sqlparser"

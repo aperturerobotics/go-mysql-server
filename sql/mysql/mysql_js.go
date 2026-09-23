@@ -57,11 +57,13 @@ const (
 	ERBase64DecodeError                             = 1575
 	ERNoFormatDescriptionEventBeforeBinlogStatement = 1609
 	EROnlyFDAndRBREventsAllowedInBinlogStatement    = 1730
+	ERDataOutOfRange                                = 1690
 
 	SSUnknownSQLState   = "HY000"
 	SSAccessDeniedError = "28000"
 	SSLockDeadlock      = "40001"
 	SSClientError       = "42000"
+	SSDataOutOfRange    = "22003"
 
 	CharacterSetUtf8   = 33
 	CharacterSetBinary = 63

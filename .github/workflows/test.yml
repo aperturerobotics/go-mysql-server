@@ -1,5 +1,8 @@
 name: Test
-on: [pull_request]
+on:
+  pull_request:
+  push:
+    branches: [aperture]
 
 concurrency:
   group: test-${{ github.event.pull_request.number || github.ref }}
@@ -34,17 +37,33 @@ jobs:
         pacboy: icu:p toolchain:p pkg-config:p
     - name: Test
       if: ${{ matrix.platform == 'macos-latest' }}
-      run: go test ./...
+      run: go test -timeout=2m -tags=gms_icu_regex ./...
       env:
         CI_TEST: "true"
     - name: Test
       if: ${{ matrix.platform == 'windows-latest' }}
       shell: msys2 {0}
-      run: go.exe test ./...
+      run: go.exe test -timeout=2m -tags=gms_icu_regex ./...
       env:
         CI_TEST: "true"
     - name: Test
       if: ${{ matrix.platform == 'ubuntu-latest' }}
-      run: go test -race ./...
+      run: bash .github/workflows/scripts/test-race.sh
       env:
         CI_TEST: "true"
+
+  pure-go:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+    - name: Install Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+    - name: Build default and lite profiles
+      run: |
+        go build ./...
+        go build -tags=sql_lite,gms_pure_go ./...
+    - name: Test default regex and formatting
+      run: go test -timeout=2m ./sql/expression/function -run '^(TestFormat|TestRegexpLikeWithoutFlags)$'
