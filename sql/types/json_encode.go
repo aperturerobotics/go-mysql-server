@@ -337,6 +337,10 @@ func writeMarshalledValue(writer io.Writer, val any) error {
 		}
 		writer.Write(bytes)
 		return nil
+	case sql.Row:
+		return writeMarshalledSlice(writer, val)
+	case []sql.Row:
+		return writeMarshalledSlice(writer, val)
 	case []string:
 		return writeMarshalledSlice(writer, val)
 	case []int:

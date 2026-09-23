@@ -428,6 +428,9 @@ func (c CollationID) WorksWithCharacterSet(cs CharacterSetID) bool {
 }
 
 func (c CollationID) String() string { return c.Name() }
+func (c CollationID) IsBinary() bool {
+	return c == Collation_binary || strings.HasSuffix(c.Name(), "_bin")
+}
 func (c CollationID) IsDefault() string {
 	if c == c.CharacterSet().DefaultCollation() {
 		return "Yes"

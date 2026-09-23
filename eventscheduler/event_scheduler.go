@@ -81,7 +81,7 @@ func InitEventScheduler(
 
 	// Ensure the event_scheduler superuser exists so that the event scheduler can read
 	// events from all databases.
-	if mySQLDb, ok := a.Catalog.MySQLDb.(*mysql_db.MySQLDb); ok {
+	if mySQLDb, ok := any(a.Catalog.MySQLDb).(*mysql_db.MySQLDb); ok {
 		initializeEventSchedulerSuperUser(mySQLDb)
 	}
 

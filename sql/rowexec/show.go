@@ -264,6 +264,19 @@ func (b *BaseBuilder) buildShowCreateProcedure(ctx *sql.Context, n *plan.ShowCre
 		return nil, err
 	}
 
+	if n.ExternalStoredProcedure != nil {
+		// If an external stored procedure has been plugged in by the analyzer, use that
+		fakeCreateProcedureStmt := n.ExternalStoredProcedure.FakeCreateProcedureStmt()
+		return sql.RowsToRowIter(sql.Row{
+			n.ExternalStoredProcedure.Name, // Procedure
+			"",                             // sql_mode
+			fakeCreateProcedureStmt,        // Create Procedure
+			characterSetClient,             // character_set_client
+			collationConnection,            // collation_connection
+			collationServer,                // Database Collation
+		}), nil
+	}
+
 	procedureDb, ok := n.Database().(sql.StoredProcedureDatabase)
 	if !ok {
 		return nil, sql.ErrStoredProceduresNotSupported.New(n.Database().Name())

@@ -28,6 +28,7 @@ const (
 	ERCantDropFieldOrKey                            = vitessmysql.ERCantDropFieldOrKey
 	ERDbCreateExists                                = vitessmysql.ERDbCreateExists
 	ERDbDropExists                                  = vitessmysql.ERDbDropExists
+	ERDataOutOfRange                                = vitessmysql.ERDataOutOfRange
 	ERDupEntry                                      = vitessmysql.ERDupEntry
 	ERFieldSpecifiedTwice                           = vitessmysql.ERFieldSpecifiedTwice
 	ERInvalidCharacterString                        = vitessmysql.ERInvalidCharacterString
@@ -53,6 +54,7 @@ const (
 
 	SSAccessDeniedError = vitessmysql.SSAccessDeniedError
 	SSClientError       = vitessmysql.SSClientError
+	SSDataOutOfRange    = vitessmysql.SSDataOutOfRange
 	SSLockDeadlock      = vitessmysql.SSLockDeadlock
 
 	AuthRejected     = vitessmysql.AuthRejected
@@ -70,6 +72,7 @@ type (
 	CacheState            = vitessmysql.CacheState
 	CachingStorage        = vitessmysql.CachingStorage
 	Conn                  = vitessmysql.Conn
+	ConnParams            = vitessmysql.ConnParams
 	ExtendedHandler       = vitessmysql.ExtendedHandler
 	GTIDSet               = vitessmysql.GTIDSet
 	Getter                = vitessmysql.Getter
@@ -86,6 +89,7 @@ type (
 )
 
 var (
+	Connect                                  = vitessmysql.Connect
 	DeserializeCachingSha2PasswordAuthString = vitessmysql.DeserializeCachingSha2PasswordAuthString
 	NewListenerWithConfig                    = vitessmysql.NewListenerWithConfig
 	NewMariadbBinlogEvent                    = vitessmysql.NewMariadbBinlogEvent
