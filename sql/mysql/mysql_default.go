@@ -31,6 +31,7 @@ const (
 	ERDataOutOfRange                                = vitessmysql.ERDataOutOfRange
 	ERDupEntry                                      = vitessmysql.ERDupEntry
 	ERFieldSpecifiedTwice                           = vitessmysql.ERFieldSpecifiedTwice
+	ERInvalidGroupFuncUse                           = vitessmysql.ERInvalidGroupFuncUse
 	ERInvalidCharacterString                        = vitessmysql.ERInvalidCharacterString
 	ERKeyColumnDoesNotExist                         = vitessmysql.ERKeyColumnDoesNotExist
 	ERLockDeadlock                                  = vitessmysql.ERLockDeadlock
@@ -47,11 +48,13 @@ const (
 	ERTruncatedWrongValue                           = vitessmysql.ERTruncatedWrongValue
 	ERTruncatedWrongValueForField                   = vitessmysql.ERTruncatedWrongValueForField
 	ERUnknownError                                  = vitessmysql.ERUnknownError
+	ERWarnDataOutOfRange                            = vitessmysql.ERWarnDataOutOfRange
 	ERWrongAutoKey                                  = vitessmysql.ERWrongAutoKey
 	ERWrongDbName                                   = vitessmysql.ERWrongDbName
 	ERWrongSubKey                                   = vitessmysql.ERWrongSubKey
 	ErNoReferencedRow2                              = vitessmysql.ErNoReferencedRow2
 
+	SSUnknownSQLState   = vitessmysql.SSUnknownSQLState
 	SSAccessDeniedError = vitessmysql.SSAccessDeniedError
 	SSClientError       = vitessmysql.SSClientError
 	SSDataOutOfRange    = vitessmysql.SSDataOutOfRange
