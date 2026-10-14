@@ -43,12 +43,14 @@ const (
 	ERWrongDbName                                   = 1102
 	ERUnknownError                                  = 1105
 	ERFieldSpecifiedTwice                           = 1110
+	ERInvalidGroupFuncUse                           = 1111
 	ERMixOfGroupFuncAndFields                       = 1140
 	ERNoSuchTable                                   = 1146
 	ERBlobKeyWithoutLength                          = 1170
 	ERNotSupportedYet                               = 1235
 	EROperandColumns                                = 1241
 	ERSubqueryNo1Row                                = 1242
+	ERWarnDataOutOfRange                            = 1264
 	ERTruncatedWrongValue                           = 1292
 	ERInvalidCharacterString                        = 1300
 	ERTruncatedWrongValueForField                   = 1366
