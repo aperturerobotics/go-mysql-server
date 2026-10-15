@@ -45,6 +45,6 @@ func TestLiteralDefaultsMatchParser(t *testing.T) {
 	}
 	for _, c := range cases {
 		parsed := planbuilder.MustStringToColumnDefaultValue(ctx, c.sql, c.typ, false)
-		require.Equal(t, parsed, c.want, "default %s of %s", c.sql, c.typ)
+		require.Equal(t, c.want, parsed, "default %s of %s", c.sql, c.typ)
 	}
 }
