@@ -81,6 +81,22 @@ func TestQuery(t *testing.T) {
 	}
 }
 
+func TestColumnTypeDatabaseTypeName(t *testing.T) {
+	mtb, _ := personMemTable("db", "person")
+	db := sqlOpen(t, mtb, t.Name())
+
+	rows, err := db.Query("SELECT id, name, phone_numbers, created_at, 1.5, CAST(1 AS SIGNED) FROM db.person")
+	require.NoError(t, err)
+	defer rows.Close()
+	cols, err := rows.ColumnTypes()
+	require.NoError(t, err)
+	var names []string
+	for _, col := range cols {
+		names = append(names, col.DatabaseTypeName())
+	}
+	assert.Equal(t, []string{"UNSIGNED BIGINT", "TEXT", "JSON", "TIMESTAMP", "DECIMAL", "BIGINT"}, names)
+}
+
 func TestExec(t *testing.T) {
 	mtb, records := personMemTable("db", "person")
 	db := sqlOpen(t, mtb, t.Name())
