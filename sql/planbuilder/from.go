@@ -161,6 +161,16 @@ func (b *Builder) buildJoin(inScope *scope, te *ast.JoinTableExpr) (outScope *sc
 	default:
 		b.handleErr(fmt.Errorf("unknown join type: %s", te.Join))
 	}
+	switch {
+	case op.IsLeftOuter():
+		outScope.nullExtend(rightScope)
+	case op.IsRightOuter():
+		outScope.nullExtend(leftScope)
+	case op.IsFullOuter():
+		outScope.nullExtend(leftScope)
+		outScope.nullExtend(rightScope)
+	}
+
 	var err error
 	outScope.node, err = b.f.buildJoin(b.ctx, leftScope.node, rightScope.node, op, filter)
 	if err != nil {
@@ -269,8 +279,10 @@ func (b *Builder) buildUsingJoin(inScope, leftScope, rightScope *scope, te *ast.
 	case ast.JoinStr, ast.NaturalJoinStr:
 		outScope.node = plan.NewInnerJoin(b.ctx, leftScope.node, rightScope.node, filter)
 	case ast.LeftJoinStr, ast.NaturalLeftJoinStr:
+		outScope.nullExtend(right)
 		outScope.node = plan.NewLeftOuterJoin(b.ctx, leftScope.node, rightScope.node, filter)
 	case ast.RightJoinStr, ast.NaturalRightJoinStr:
+		outScope.nullExtend(right)
 		outScope.node = plan.NewLeftOuterJoin(b.ctx, rightScope.node, leftScope.node, filter)
 	default:
 		b.handleErr(fmt.Errorf("unknown using join type: %s", te.Join))
