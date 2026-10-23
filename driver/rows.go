@@ -43,6 +43,50 @@ func (r *Rows) Columns() []string {
 	return names
 }
 
+// ColumnTypeDatabaseTypeName returns the MySQL type name of a column, in the
+// form MySQL's own database/sql driver reports it, such as "BIGINT",
+// "UNSIGNED INT", "DATETIME" or "JSON", without length or precision.
+func (r *Rows) ColumnTypeDatabaseTypeName(index int) string {
+	if name, ok := columnTypeNames[r.cols[index].Type.Type()]; ok {
+		return name
+	}
+	return ""
+}
+
+// columnTypeNames maps each wire type to its MySQL type name.
+var columnTypeNames = map[query.Type]string{
+	query.Type_INT8:      "TINYINT",
+	query.Type_UINT8:     "UNSIGNED TINYINT",
+	query.Type_INT16:     "SMALLINT",
+	query.Type_UINT16:    "UNSIGNED SMALLINT",
+	query.Type_INT24:     "MEDIUMINT",
+	query.Type_UINT24:    "UNSIGNED MEDIUMINT",
+	query.Type_INT32:     "INT",
+	query.Type_UINT32:    "UNSIGNED INT",
+	query.Type_INT64:     "BIGINT",
+	query.Type_UINT64:    "UNSIGNED BIGINT",
+	query.Type_FLOAT32:   "FLOAT",
+	query.Type_FLOAT64:   "DOUBLE",
+	query.Type_DECIMAL:   "DECIMAL",
+	query.Type_YEAR:      "YEAR",
+	query.Type_DATE:      "DATE",
+	query.Type_TIME:      "TIME",
+	query.Type_DATETIME:  "DATETIME",
+	query.Type_TIMESTAMP: "TIMESTAMP",
+	query.Type_CHAR:      "CHAR",
+	query.Type_VARCHAR:   "VARCHAR",
+	query.Type_TEXT:      "TEXT",
+	query.Type_BINARY:    "BINARY",
+	query.Type_VARBINARY: "VARBINARY",
+	query.Type_BLOB:      "BLOB",
+	query.Type_BIT:       "BIT",
+	query.Type_ENUM:      "ENUM",
+	query.Type_SET:       "SET",
+	query.Type_GEOMETRY:  "GEOMETRY",
+	query.Type_JSON:      "JSON",
+	query.Type_NULL_TYPE: "NULL",
+}
+
 // Close closes the rows iterator.
 func (r *Rows) Close() error {
 	return r.rows.Close(r.ctx)
@@ -154,3 +198,5 @@ func (r *Rows) convert(col int, v driver.Value) any {
 	}
 	return v
 }
+
+var _ driver.RowsColumnTypeDatabaseTypeName = (*Rows)(nil)
