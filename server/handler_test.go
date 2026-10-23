@@ -384,6 +384,7 @@ func TestHandlerComPrepare(t *testing.T) {
 		name        string
 		statement   string
 		expected    []*query.Field
+		params      []query.Type
 		expectedErr *mysql.SQLError
 	}
 
@@ -392,16 +393,19 @@ func TestHandlerComPrepare(t *testing.T) {
 			name:      "insert statement returns nil schema",
 			statement: "insert into test (c1) values (?)",
 			expected:  nil,
+			params:    []query.Type{query.Type_INT32},
 		},
 		{
 			name:      "update statement returns nil schema",
 			statement: "update test set c1 = ?",
 			expected:  nil,
+			params:    []query.Type{query.Type_INT32},
 		},
 		{
 			name:      "delete statement returns nil schema",
 			statement: "delete from test where c1 = ?",
 			expected:  nil,
+			params:    []query.Type{query.Type_INT32},
 		},
 		{
 			name:      "select statement returns non-nil schema",
@@ -409,6 +413,15 @@ func TestHandlerComPrepare(t *testing.T) {
 			expected: []*query.Field{
 				{Name: "c1", OrgName: "c1", Table: "test", OrgTable: "test", Database: "test", Type: query.Type_INT32, Charset: uint32(sql.CharacterSet_utf8mb4), ColumnLength: 11, Flags: uint32(query.MySqlFlag_NOT_NULL_FLAG)},
 			},
+			params: []query.Type{query.Type_INT32},
+		},
+		{
+			name:      "outer join side is nullable and a cast types its parameter",
+			statement: "select b.c1 from test a left join test b on a.c1 = b.c1 where a.c1 = cast(? as signed)",
+			expected: []*query.Field{
+				{Name: "c1", OrgName: "c1", Table: "b", OrgTable: "b", Database: "test", Type: query.Type_INT32, Charset: uint32(sql.CharacterSet_utf8mb4), ColumnLength: 11},
+			},
+			params: []query.Type{query.Type_INT64},
 		},
 		{
 			name:        "errors are cast to SQLError",
@@ -418,10 +431,16 @@ func TestHandlerComPrepare(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			handler.ComInitDB(dummyConn, "test")
-			schema, err := handler.ComPrepare(context.Background(), dummyConn, test.statement, samplePrepareData)
+			prepare := &mysql.PrepareData{StatementID: 42, ParamsCount: 1}
+			schema, err := handler.ComPrepare(context.Background(), dummyConn, test.statement, prepare)
 			if test.expectedErr == nil {
 				require.NoError(t, err)
 				require.Equal(t, test.expected, schema)
+				var params []query.Type
+				for _, f := range prepare.ParamFields {
+					params = append(params, f.GetType())
+				}
+				require.Equal(t, test.params, params)
 			} else {
 				require.NotNil(t, err)
 				sqlErr, isSqlError := err.(*mysql.SQLError)

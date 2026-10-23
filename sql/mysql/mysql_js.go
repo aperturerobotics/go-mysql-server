@@ -142,6 +142,7 @@ type PrepareData struct {
 	PrepareStmt string
 	ParamsCount uint16
 	ParamsType  []int32
+	ParamFields []*querypb.Field
 	ColumnNames []string
 	BindVars    map[string]*querypb.BindVariable
 }

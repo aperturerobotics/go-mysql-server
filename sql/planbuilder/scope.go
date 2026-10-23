@@ -643,6 +643,16 @@ func (s *scope) addColumn(col scopeColumn) {
 	return
 }
 
+// nullExtend marks the columns that side contributes to this scope as
+// nullable: the null-extended side of an outer join.
+func (s *scope) nullExtend(side *scope) {
+	for i := range s.cols {
+		if side.colset.Contains(sql.ColumnId(s.cols[i].id)) {
+			s.cols[i].nullable = true
+		}
+	}
+}
+
 // newColumn adds the column to the current scope and assigns a
 // new columnId for referencing. newColumn builds a new expression
 // reference, whereas addColumn only adds a preexisting expression

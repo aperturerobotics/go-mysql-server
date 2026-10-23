@@ -21,6 +21,8 @@ import (
 	"io"
 	"regexp"
 	"runtime/trace"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,9 +39,11 @@ import (
 	"github.com/dolthub/go-mysql-server/errguard"
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/analyzer"
+	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/iters"
 	"github.com/dolthub/go-mysql-server/sql/plan"
 	"github.com/dolthub/go-mysql-server/sql/rowexec"
+	"github.com/dolthub/go-mysql-server/sql/transform"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
@@ -155,12 +159,75 @@ func (h *Handler) ComPrepare(ctx context.Context, c *mysql.Conn, query string, p
 		return nil, err
 	}
 
+	// Describe the parameters for every statement, including those with an OK result.
+	prepare.ParamFields = paramFields(sqlCtx, analyzed, prepare.ParamsCount)
+
 	// A nil result signals to the handler that the query is not a SELECT statement.
 	if nodeReturnsOkResultSchema(analyzed) || types.IsOkResultSchema(analyzed.Schema(sqlCtx)) {
 		return nil, nil
 	}
 
 	return schemaToFields(sqlCtx, analyzed.Schema(sqlCtx)), nil
+}
+
+// paramFields describes each parameter of a prepared statement by the type the
+// planner inferred for it: the column it is compared with or assigned to, or
+// the type it is cast to. A parameter without an inferred type stays nil, and
+// the prepare response sends it as VARBINARY.
+func paramFields(ctx *sql.Context, n sql.Node, count uint16) []*querypb.Field {
+	// A statement without parameters has nothing to describe.
+	if count == 0 {
+		return nil
+	}
+
+	// Record the first known type for each parameter, by its vN bindvar name.
+	sch := make(sql.Schema, count)
+	record := func(name string, typ sql.Type) {
+		i, err := strconv.Atoi(strings.TrimPrefix(name, "v"))
+		if err != nil || i < 1 || i > len(sch) || sch[i-1] != nil || types.IsDeferredType(typ) {
+			return
+		}
+		sch[i-1] = &sql.Column{Name: "?", Type: typ, Nullable: true}
+	}
+	var inspect func(n sql.Node)
+	inspectExpr := func(ctx *sql.Context, e sql.Expression) bool {
+		switch e := e.(type) {
+		case *expression.BindVar:
+			record(e.Name, e.Typ)
+		case *expression.Convert:
+			// The cast is visited before its child, so its type wins.
+			if bv, ok := e.Child.(*expression.BindVar); ok {
+				record(bv.Name, e.Type(ctx))
+			}
+		case *plan.Subquery:
+			inspect(e.Query)
+		}
+		return true
+	}
+	inspect = func(n sql.Node) {
+		transform.InspectWithOpaque(ctx, n, func(ctx *sql.Context, n sql.Node) bool {
+			if ex, ok := n.(sql.Expressioner); ok {
+				for _, e := range ex.Expressions() {
+					sql.Inspect(ctx, e, inspectExpr)
+				}
+			}
+			// An insert's source is not one of its children.
+			if ii, ok := n.(*plan.InsertInto); ok {
+				inspect(ii.Source)
+			}
+			return true
+		})
+	}
+	inspect(n)
+
+	// Convert each typed parameter to its wire field.
+	fields := make([]*querypb.Field, count)
+	for i, c := range sch {
+		if c != nil {
+			fields[i] = schemaToFields(ctx, sql.Schema{c})[0]
+		}
+	}
+	return fields
 }
 
 // These nodes will eventually return an OK result, but their intermediate forms here return a different schema
