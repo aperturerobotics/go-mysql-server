@@ -17,7 +17,6 @@ package driver
 import (
 	"database/sql/driver"
 
-	"github.com/cockroachdb/apd/v3"
 	"github.com/dolthub/vitess/go/vt/proto/query"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -140,37 +139,19 @@ again:
 }
 
 // convert returns v as one of the value types database/sql accepts from a
-// driver. An ENUM or SET, which the engine holds as its index or bits, and a
-// DECIMAL become the text MySQL sends for them.
+// driver. An ENUM, SET, DECIMAL or TIME, which the engine holds as an index,
+// bits, *apd.Decimal or microseconds, becomes the text MySQL sends for it.
 func (r *Rows) convert(col int, v driver.Value) any {
 	switch r.cols[col].Type.Type() {
 	case query.Type_NULL_TYPE:
 		return nil
 
-	case query.Type_ENUM:
-		if idx, ok := v.(uint16); ok {
-			if typ, ok := r.cols[col].Type.(sql.EnumType); ok {
-				if text, ok := typ.At(int(idx)); ok {
-					return text
-				}
-			}
+	case query.Type_ENUM, query.Type_SET, query.Type_DECIMAL, query.Type_TIME:
+		if v == nil {
+			return nil
 		}
-
-	case query.Type_SET:
-		if bits, ok := v.(uint64); ok {
-			if typ, ok := r.cols[col].Type.(sql.SetType); ok {
-				if text, err := typ.BitsToString(bits); err == nil {
-					return text
-				}
-			}
-		}
-
-	case query.Type_DECIMAL:
-		if d, ok := v.(*apd.Decimal); ok {
-			if typ, ok := r.cols[col].Type.(types.DecimalType_); ok {
-				return typ.DecimalValueStringFixed(d)
-			}
-			return d.Text('f')
+		if text, err := r.cols[col].Type.SQL(r.ctx, nil, v); err == nil {
+			return text.ToString()
 		}
 
 	case query.Type_INT8, query.Type_INT16, query.Type_INT24, query.Type_INT32, query.Type_INT64,
