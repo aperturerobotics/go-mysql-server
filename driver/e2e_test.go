@@ -81,7 +81,7 @@ func TestQuery(t *testing.T) {
 	}
 }
 
-func TestColumnTypeDatabaseTypeName(t *testing.T) {
+func TestColumnTypes(t *testing.T) {
 	mtb, _ := personMemTable("db", "person")
 	db := sqlOpen(t, mtb, t.Name())
 
@@ -95,6 +95,35 @@ func TestColumnTypeDatabaseTypeName(t *testing.T) {
 		names = append(names, col.DatabaseTypeName())
 	}
 	assert.Equal(t, []string{"UNSIGNED BIGINT", "TEXT", "JSON", "TIMESTAMP", "DECIMAL", "BIGINT"}, names)
+
+	// An enum or set reads back as its text, and a column with a scale reports it.
+	_, err = db.Exec("CREATE TABLE db.kinds (role ENUM('admin','member') NOT NULL, tags SET('a','b'), at DATETIME(3), price DECIMAL(10,2))")
+	require.NoError(t, err)
+	_, err = db.Exec("INSERT INTO db.kinds VALUES ('member', 'a,b', '2026-10-23 08:24:40.5', 1.25)")
+	require.NoError(t, err)
+	rows, err = db.Query("SELECT role, tags, at, price FROM db.kinds")
+	require.NoError(t, err)
+	defer rows.Close()
+	cols, err = rows.ColumnTypes()
+	require.NoError(t, err)
+	var scales []int64
+	for _, col := range cols {
+		_, scale, ok := col.DecimalSize()
+		if !ok {
+			scale = -1
+		}
+		scales = append(scales, scale)
+	}
+	assert.Equal(t, []int64{-1, -1, 3, 2}, scales)
+	require.True(t, rows.Next())
+	var role, tags string
+	var at time.Time
+	var price string
+	require.NoError(t, rows.Scan(&role, &tags, &at, &price))
+	assert.Equal(t, "member", role)
+	assert.Equal(t, "a,b", tags)
+	assert.Equal(t, 500*time.Millisecond, time.Duration(at.Nanosecond()))
+	assert.Equal(t, "1.25", price)
 }
 
 func TestExec(t *testing.T) {

@@ -56,30 +56,30 @@ func NewProject(ctx *sql.Context, expressions []sql.Expression, child sql.Node) 
 	}
 }
 
-// findDefault finds the matching GetField in the node's Schema and fills the default value in the column.
-func findDefault(ctx *sql.Context, node sql.Node, gf *expression.GetField) *sql.ColumnDefaultValue {
+// findSource returns the column of the node's Schema that gf reads, looking
+// through filters, groupings and joins to the table that produces it, or nil.
+func findSource(ctx *sql.Context, node sql.Node, gf *expression.GetField) *sql.Column {
+	// Descend to the table node that produces the column ids.
 	colSet := sql.NewColSet()
 	switch n := node.(type) {
 	case TableIdNode:
 		colSet = n.Columns()
 	case *GroupBy:
-		return findDefault(ctx, n.Child, gf)
+		return findSource(ctx, n.Child, gf)
 	case *HashLookup:
-		return findDefault(ctx, n.Child, gf)
+		return findSource(ctx, n.Child, gf)
 	case *Filter:
-		return findDefault(ctx, n.Child, gf)
+		return findSource(ctx, n.Child, gf)
 	case *JoinNode:
-		if defVal := findDefault(ctx, n.Left(), gf); defVal != nil {
-			return defVal
+		if col := findSource(ctx, n.Left(), gf); col != nil {
+			return col
 		}
-		if defVal := findDefault(ctx, n.Right(), gf); defVal != nil {
-			return defVal
-		}
-		return nil
+		return findSource(ctx, n.Right(), gf)
 	default:
 		return nil
 	}
 
+	// The table's columns have consecutive ids, so gf's position is its offset.
 	if !colSet.Contains(gf.Id()) {
 		return nil
 	}
@@ -88,12 +88,13 @@ func findDefault(ctx *sql.Context, node sql.Node, gf *expression.GetField) *sql.
 		return nil
 	}
 
+	// Read the column at that position, if the schema has it.
 	sch := node.Schema(ctx)
 	idx := gf.Id() - firstColId
 	if idx < 0 || int(idx) >= len(sch) {
 		return nil
 	}
-	return sch[idx].Default
+	return sch[idx]
 }
 
 func unwrapGetField(expr sql.Expression) *expression.GetField {
@@ -133,7 +134,10 @@ func (p *Project) Schema(ctx *sql.Context) sql.Schema {
 		for i, expr := range p.Projections {
 			p.sch[i] = transform.ExpressionToColumn(ctx, expr, AliasSubqueryString(ctx, expr))
 			if gf := unwrapGetField(expr); gf != nil {
-				p.sch[i].Default = findDefault(ctx, p.Child, gf)
+				if src := findSource(ctx, p.Child, gf); src != nil {
+					p.sch[i].Default = src.Default
+					p.sch[i].OriginTable, p.sch[i].OriginName = src.Origin()
+				}
 			}
 		}
 	}

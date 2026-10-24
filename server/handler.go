@@ -1298,11 +1298,12 @@ func schemaToFields(ctx *sql.Context, s sql.Schema) []*querypb.Field {
 			flags = flags | querypb.MySqlFlag_UNSIGNED_FLAG
 		}
 
+		orgTable, orgName := c.Origin()
 		fields[i] = &querypb.Field{
 			Name:         c.Name,
-			OrgName:      c.Name,
+			OrgName:      orgName,
 			Table:        c.Source,
-			OrgTable:     c.Source,
+			OrgTable:     orgTable,
 			Database:     c.DatabaseSource,
 			Type:         c.Type.Type(),
 			Charset:      charset,

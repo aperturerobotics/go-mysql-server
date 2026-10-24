@@ -65,6 +65,12 @@ type Column struct {
 	Source string
 	// DatabaseSource is the name of the database this column came from.
 	DatabaseSource string
+	// OriginTable and OriginName are the base table and column that a result
+	// column reads, when Source or Name is an alias for them. MySQL reports
+	// them to clients as a field's org_table and org_name. Use Origin to read
+	// them.
+	OriginTable string
+	OriginName  string
 	// Comment contains the string comment for this column.
 	Comment string
 	// Extra preserves explicit metadata supplied by a schema provider.
@@ -108,6 +114,19 @@ func (c *Column) Check(ctx *Context, v interface{}) bool {
 }
 
 // Equals checks whether two columns are equal.
+// Origin returns the base table and column this column reads: OriginTable and
+// OriginName where an alias set them, and Source and Name otherwise.
+func (c *Column) Origin() (table, name string) {
+	table, name = c.OriginTable, c.OriginName
+	if table == "" {
+		table = c.Source
+	}
+	if name == "" {
+		name = c.Name
+	}
+	return table, name
+}
+
 func (c *Column) Equals(c2 *Column) bool {
 	if c.Source != "" {
 		return strings.EqualFold(c.Name, c2.Name) &&

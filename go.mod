@@ -43,4 +43,4 @@ require (
 
 go 1.26.2
 
-replace github.com/dolthub/vitess => github.com/aperturerobotics/vitess v0.0.0-20261023075545-a866921b7d09
+replace github.com/dolthub/vitess => github.com/aperturerobotics/vitess v0.0.0-20261024012120-fd4d1ea7517a

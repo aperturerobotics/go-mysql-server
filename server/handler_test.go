@@ -419,7 +419,15 @@ func TestHandlerComPrepare(t *testing.T) {
 			name:      "outer join side is nullable and a cast types its parameter",
 			statement: "select b.c1 from test a left join test b on a.c1 = b.c1 where a.c1 = cast(? as signed)",
 			expected: []*query.Field{
-				{Name: "c1", OrgName: "c1", Table: "b", OrgTable: "b", Database: "test", Type: query.Type_INT32, Charset: uint32(sql.CharacterSet_utf8mb4), ColumnLength: 11},
+				{Name: "c1", OrgName: "c1", Table: "b", OrgTable: "test", Database: "test", Type: query.Type_INT32, Charset: uint32(sql.CharacterSet_utf8mb4), ColumnLength: 11},
+			},
+			params: []query.Type{query.Type_INT64},
+		},
+		{
+			name:      "an alias reports its base table and column, and a cast on a key lookup types its parameter",
+			statement: "select a.c1 as k from test a where c1 = cast(? as signed)",
+			expected: []*query.Field{
+				{Name: "k", OrgName: "c1", OrgTable: "test", Type: query.Type_INT32, Charset: uint32(sql.CharacterSet_utf8mb4), ColumnLength: 11, Flags: uint32(query.MySqlFlag_NOT_NULL_FLAG)},
 			},
 			params: []query.Type{query.Type_INT64},
 		},
