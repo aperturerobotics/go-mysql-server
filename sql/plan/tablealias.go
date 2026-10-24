@@ -98,6 +98,7 @@ func (t *TableAlias) Schema(ctx *sql.Context) sql.Schema {
 		t.sch = make(sql.Schema, len(childSchema))
 		for i, col := range childSchema {
 			newCol := *col
+			newCol.OriginTable, newCol.OriginName = col.Origin()
 			newCol.Source = t.name
 			if len(t.columns) > 0 {
 				newCol.Name = t.columns[i]

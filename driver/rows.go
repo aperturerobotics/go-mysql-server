@@ -17,6 +17,7 @@ package driver
 import (
 	"database/sql/driver"
 
+	"github.com/cockroachdb/apd/v3"
 	"github.com/dolthub/vitess/go/vt/proto/query"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -87,6 +88,22 @@ var columnTypeNames = map[query.Type]string{
 	query.Type_NULL_TYPE: "NULL",
 }
 
+// ColumnTypePrecisionScale returns a column's precision and scale as MySQL's
+// own database/sql driver reports them: the digits and the digits after the
+// point of a DECIMAL, and the fractional second digits, as both, of a
+// DATETIME, TIMESTAMP or TIME. Other columns report false.
+func (r *Rows) ColumnTypePrecisionScale(index int) (precision, scale int64, ok bool) {
+	switch typ := r.cols[index].Type.(type) {
+	case sql.DecimalType:
+		return int64(typ.Precision()), int64(typ.Scale()), true
+	case sql.DatetimeType:
+		return int64(typ.Precision()), int64(typ.Precision()), true
+	case types.TimeType:
+		return int64(typ.Precision()), int64(typ.Precision()), true
+	}
+	return 0, 0, false
+}
+
 // Close closes the rows iterator.
 func (r *Rows) Close() error {
 	return r.rows.Close(r.ctx)
@@ -122,10 +139,39 @@ again:
 	return nil
 }
 
+// convert returns v as one of the value types database/sql accepts from a
+// driver. An ENUM or SET, which the engine holds as its index or bits, and a
+// DECIMAL become the text MySQL sends for them.
 func (r *Rows) convert(col int, v driver.Value) any {
 	switch r.cols[col].Type.Type() {
 	case query.Type_NULL_TYPE:
 		return nil
+
+	case query.Type_ENUM:
+		if idx, ok := v.(uint16); ok {
+			if typ, ok := r.cols[col].Type.(sql.EnumType); ok {
+				if text, ok := typ.At(int(idx)); ok {
+					return text
+				}
+			}
+		}
+
+	case query.Type_SET:
+		if bits, ok := v.(uint64); ok {
+			if typ, ok := r.cols[col].Type.(sql.SetType); ok {
+				if text, err := typ.BitsToString(bits); err == nil {
+					return text
+				}
+			}
+		}
+
+	case query.Type_DECIMAL:
+		if d, ok := v.(*apd.Decimal); ok {
+			if typ, ok := r.cols[col].Type.(types.DecimalType_); ok {
+				return typ.DecimalValueStringFixed(d)
+			}
+			return d.Text('f')
+		}
 
 	case query.Type_INT8, query.Type_INT16, query.Type_INT24, query.Type_INT32, query.Type_INT64,
 		query.Type_UINT8, query.Type_UINT16, query.Type_UINT24, query.Type_UINT32, query.Type_UINT64,
@@ -199,4 +245,7 @@ func (r *Rows) convert(col int, v driver.Value) any {
 	return v
 }
 
-var _ driver.RowsColumnTypeDatabaseTypeName = (*Rows)(nil)
+var (
+	_ driver.RowsColumnTypeDatabaseTypeName = (*Rows)(nil)
+	_ driver.RowsColumnTypePrecisionScale   = (*Rows)(nil)
+)
