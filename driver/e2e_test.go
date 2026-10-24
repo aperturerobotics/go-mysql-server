@@ -96,12 +96,12 @@ func TestColumnTypes(t *testing.T) {
 	}
 	assert.Equal(t, []string{"UNSIGNED BIGINT", "TEXT", "JSON", "TIMESTAMP", "DECIMAL", "BIGINT"}, names)
 
-	// An enum or set reads back as its text, and a column with a scale reports it.
-	_, err = db.Exec("CREATE TABLE db.kinds (role ENUM('admin','member') NOT NULL, tags SET('a','b'), at DATETIME(3), price DECIMAL(10,2))")
+	// An enum, set, decimal or time reads back as MySQL's text, and a column with a scale reports it.
+	_, err = db.Exec("CREATE TABLE db.kinds (role ENUM('admin','member') NOT NULL, tags SET('a','b'), at DATETIME(3), price DECIMAL(10,2), span TIME(3))")
 	require.NoError(t, err)
-	_, err = db.Exec("INSERT INTO db.kinds VALUES ('member', 'a,b', '2026-10-23 08:24:40.5', 1.25)")
+	_, err = db.Exec("INSERT INTO db.kinds VALUES ('member', 'a,b', '2026-10-23 08:24:40.5', 1.25, '-01:02:03.5')")
 	require.NoError(t, err)
-	rows, err = db.Query("SELECT role, tags, at, price FROM db.kinds")
+	rows, err = db.Query("SELECT role, tags, at, price, span FROM db.kinds")
 	require.NoError(t, err)
 	defer rows.Close()
 	cols, err = rows.ColumnTypes()
@@ -114,16 +114,17 @@ func TestColumnTypes(t *testing.T) {
 		}
 		scales = append(scales, scale)
 	}
-	assert.Equal(t, []int64{-1, -1, 3, 2}, scales)
+	assert.Equal(t, []int64{-1, -1, 3, 2, 3}, scales)
 	require.True(t, rows.Next())
 	var role, tags string
 	var at time.Time
-	var price string
-	require.NoError(t, rows.Scan(&role, &tags, &at, &price))
+	var price, span string
+	require.NoError(t, rows.Scan(&role, &tags, &at, &price, &span))
 	assert.Equal(t, "member", role)
 	assert.Equal(t, "a,b", tags)
 	assert.Equal(t, 500*time.Millisecond, time.Duration(at.Nanosecond()))
 	assert.Equal(t, "1.25", price)
+	assert.Equal(t, "-01:02:03.500", span)
 }
 
 func TestExec(t *testing.T) {
