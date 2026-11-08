@@ -19,6 +19,7 @@ const (
 	CapabilityClientFoundRows = vitessmysql.CapabilityClientFoundRows
 
 	ERAccessDeniedError                             = vitessmysql.ERAccessDeniedError
+	ERSpecifiedAccessDenied                         = vitessmysql.ERSpecifiedAccessDenied
 	ERBadDb                                         = vitessmysql.ERBadDb
 	ERBadFieldError                                 = vitessmysql.ERBadFieldError
 	ERBadNullError                                  = vitessmysql.ERBadNullError

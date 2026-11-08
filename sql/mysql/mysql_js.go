@@ -28,6 +28,7 @@ const (
 	ERDbDropExists                                  = 1008
 	ERDbCreateExists                                = 1007
 	ERAccessDeniedError                             = 1045
+	ERSpecifiedAccessDenied                         = 1227
 	ERBadNullError                                  = 1048
 	ERBadDb                                         = 1049
 	ERBadTable                                      = 1051

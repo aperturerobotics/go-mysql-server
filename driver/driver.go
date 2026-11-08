@@ -53,6 +53,9 @@ const (
 
 // Options for the driver.
 type Options struct {
+	// EngineVariables supplies the variable bundle shared by this driver's engines.
+	// A nil bundle gives each engine independent default variable state.
+	EngineVariables *sql.EngineVariables
 	// JSON indicates how JSON row values should be scanned
 	JSON ScanKind
 }
@@ -163,7 +166,7 @@ func (d *Driver) OpenConnector(dsn string) (driver.Connector, error) {
 	db, ok := d.dbs[serverName]
 	if !ok {
 		anlz := analyzer.NewDefault(pro)
-		engine := sqle.New(anlz, nil)
+		engine := sqle.New(anlz, &sqle.Config{EngineVariables: options.EngineVariables})
 		db = &dbConn{engine: engine}
 		d.dbs[serverName] = db
 	}
