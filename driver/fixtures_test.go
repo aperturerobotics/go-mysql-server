@@ -14,8 +14,9 @@ type memTable struct {
 	catalog *memory.DbProvider
 }
 
+// NewSession preserves the driver-assigned ID and engine variable ownership.
 func (f *memTable) NewSession(ctx context.Context, id uint32, conn *driver.Connector) (sql.Session, error) {
-	return memory.NewSession(sql.NewBaseSessionWithVariables(conn.EngineVariables()), f.catalog), nil
+	return memory.NewSession(sql.NewBaseSessionWithClientServerWithVariables(conn.Server(), sql.Client{}, id, conn.EngineVariables()), f.catalog), nil
 }
 
 var _ driver.Provider = (*memTable)(nil)

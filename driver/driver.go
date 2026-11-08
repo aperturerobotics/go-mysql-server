@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/url"
 	"sync"
+	"sync/atomic"
 
 	sqle "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/sql"
@@ -53,8 +54,13 @@ const (
 
 // Options for the driver.
 type Options struct {
+	// Engine is an existing engine to borrow instead of constructing one per DSN.
+	// Its catalog must resolve each connection's context. The caller closes it
+	// after every borrowing driver and connection has finished.
+	Engine *sqle.Engine
 	// EngineVariables supplies the variable bundle shared by this driver's engines.
-	// A nil bundle gives each engine independent default variable state.
+	// A nil bundle gives each new engine independent default variable state.
+	// A borrowed Engine already owns its variables and ignores this option.
 	EngineVariables *sql.EngineVariables
 	// JSON indicates how JSON row values should be scanned
 	JSON ScanKind
@@ -126,6 +132,7 @@ func (d *Driver) Open(name string) (driver.Conn, error) {
 
 // OpenConnector calls the driver factory and returns a new connector.
 func (d *Driver) OpenConnector(dsn string) (driver.Connector, error) {
+	// Normalize this connector's scan options and DSN.
 	options := d.options // copy
 	if options == nil {
 		options = &Options{}
@@ -153,6 +160,7 @@ func (d *Driver) OpenConnector(dsn string) (driver.Connector, error) {
 		dsn = dsnURI.String()
 	}
 
+	// Resolve the catalog and connection-local session builder.
 	serverName, pro, err := d.provider.Resolve(dsn, options)
 	if err != nil {
 		return nil, err
@@ -162,16 +170,21 @@ func (d *Driver) OpenConnector(dsn string) (driver.Connector, error) {
 		d.sessions = NewDefaultSessionBuilder(pro)
 	}
 
+	// Own a new engine or borrow the caller's engine for this server.
 	d.mu.Lock()
 	db, ok := d.dbs[serverName]
 	if !ok {
-		anlz := analyzer.NewDefault(pro)
-		engine := sqle.New(anlz, &sqle.Config{EngineVariables: options.EngineVariables})
-		db = &dbConn{engine: engine}
+		engine := options.Engine
+		if engine == nil {
+			anlz := analyzer.NewDefault(pro)
+			engine = sqle.New(anlz, &sqle.Config{EngineVariables: options.EngineVariables})
+		}
+		db = &dbConn{engine: engine, borrowed: options.Engine != nil}
 		d.dbs[serverName] = db
 	}
 	d.mu.Unlock()
 
+	// Keep the connection bound to its selected driver and engine.
 	return &Connector{
 		driver:     d,
 		options:    options,
@@ -193,29 +206,30 @@ func (d *Driver) Close() error {
 	return firstErr
 }
 
+// driverConnectionIDs and driverProcessIDs keep identities distinct when several
+// drivers borrow the same engine. Allocating an identity costs one atomic add.
+var (
+	driverConnectionIDs atomic.Uint32
+	driverProcessIDs    atomic.Uint64
+)
+
+// dbConn owns or borrows the engine used by one resolved server.
 type dbConn struct {
-	engine *sqle.Engine
-
-	mu     sync.Mutex
-	connID uint32
-	procID uint64
+	engine   *sqle.Engine
+	borrowed bool
 }
 
-func (c *dbConn) nextConnectionID() uint32 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.connID++
-	return c.connID
-}
+// nextConnectionID allocates a driver session identity across borrowed engines.
+func (c *dbConn) nextConnectionID() uint32 { return driverConnectionIDs.Add(1) }
 
-func (c *dbConn) nextProcessID() uint64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.procID++
-	return c.procID
-}
+// nextProcessID allocates an execution identity across borrowed engines.
+func (c *dbConn) nextProcessID() uint64 { return driverProcessIDs.Add(1) }
 
+// close releases only an engine this driver constructed.
 func (c *dbConn) close() error {
+	if c.borrowed {
+		return nil
+	}
 	return c.engine.Close()
 }
 
