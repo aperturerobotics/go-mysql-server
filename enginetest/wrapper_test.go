@@ -217,6 +217,9 @@ type outOfRowBlobWrapper struct {
 
 var _ sql.BytesWrapper = outOfRowBlobWrapper{}
 
+// ValueKind reports the stored bytes without unwrapping an out-of-row value.
+func (w outOfRowBlobWrapper) ValueKind() sql.ValueKind { return sql.ValueKindFor[[]byte]() }
+
 // Unwrap returns the bytes stored out-of-band. Consumers must call it before
 // reading the value.
 func (w outOfRowBlobWrapper) Unwrap(ctx context.Context) ([]byte, error) {
